@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations  # https://stackoverflow.com/a/33533514/1535127
 import datetime
 from difflib import restore
 import aw_client
@@ -84,24 +85,24 @@ class Interval:
         description = self.name
         if not description and len(self.events) > 0:
             description = f"{len(self.events)} events, last={event_to_str(self.events[-1])}"
-        print(f"{self.start_time}..{self.end_time}: {description}\n")
+        print(f"{self.start_time:%H:%M:%S}..{self.end_time:%H:%M:%S}: {description}")
 
     def print_intervals(self, from_first=True):
-        start = self
+        interval = self
         if from_first:
-            while start := self.prev:
-                pass
-        if start:
-            start.print_interval()
-        while interval := start.next:
+            while interval.prev:
+                interval = interval.prev
+        if interval:
             interval.print_interval()
+            while interval := interval.next:
+                interval.print_interval()
 
     def new_after(self, event: Event) -> Interval:
         """
         Creates new Interval from specified event and inserts it after current.
         :return: Just created interval.
         """
-        interval = Interval(event.start, event.end, self)
+        interval = Interval(event.timestamp, event.timestamp + event.duration, self)
         interval.events.append(event)
         if self.next:
             self.next.prev = interval
@@ -145,25 +146,27 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
     #   0.25 = Skype conversations in durations A, B, C
     cur_interval: Interval = None
 
-    # 1) Iterate few "aw-watcher-afk" buckets to find out "not_afk" intervals as a main intervals to determine
+    # 1) Find out first "aw-watcher-afk" bucket to find out "not_afk" intervals as a main intervals to determine
     # activity by (we still need in "afk" cases for '"not_afk": True').
-    # Evict previous "afk"-s (consider case when 1 PC reports "afk" while you are working on the 2 PC).
-    for bucket_id in buckets.keys():
-        if bucket_id.startswith("aw-watcher-afk"):
-            events: List[Event] = awc.get_events(bucket_id, start=start_time, end=end_time)
-            for event in events:
-                if not cur_interval:  # TODO merge from few PC-s
-                    cur_interval = Interval(event.start, event.end)
-                    cur_interval.events.append(event)
+    bucket_id = next((x for x in buckets.keys() if x.startswith("aw-watcher-afk")), None)
+    if bucket_id:
+        events: List[Event] = awc.get_events(bucket_id, start=start_time, end=end_time)
+        for event in events:
+            if not cur_interval:
+                cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
+                cur_interval.events.append(event)
+            else:
+                interval_to_put_after = cur_interval.find_closest_interval_before(event.timestamp)
+                if interval_to_put_after:
+                    interval_to_put_after.new_after(event)
                 else:
-                    interval_to_put_after = cur_interval.find_closest_interval_before(event.start)
-                    if interval_to_put_after:
-                        interval_to_put_after.new_after(event)
-                    else:
-                        interval = Interval(event.start, event.end, None, cur_interval)
-                    interval.events.append(event)
-                    cur_interval.prev = interval
-                    cur_interval = interval
+                    interval = Interval(event.timestamp, event.timestamp + event.duration, None, cur_interval)
+                interval.events.append(event)
+                cur_interval.prev = interval
+                cur_interval = interval
+    else:
+        print(f"No AFK bucket found. Stopping here - no more events expected.")
+        return None
     if cur_interval:
         print("By AFK found:")
         cur_interval.print_intervals()
@@ -179,7 +182,7 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
             if cur_interval:
                 interval = cur_interval.new_after(event)  # Events are sorted here.
             else:
-                interval = Interval(event.start, event.end)
+                interval = Interval(event.timestamp, event.timestamp + event.duration)
                 interval.events.append(event)
             cur_interval = interval
         print("With stopwatch found:")
