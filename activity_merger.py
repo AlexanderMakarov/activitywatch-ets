@@ -7,58 +7,10 @@ import socket
 from typing import Any, List, Dict, Tuple
 from aw_transform.filter_period_intersect import _intersecting_eventpairs
 from aw_core.models import Event
+import re
 
 
-MIN_DURATION_MINUTES = 15  # 0.25 hours
-RULES = {
-    # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
-    # data={app: str, title: str}.
-    "aw-watcher-window": {
-        "_key": "app",
-        "zoom": {"not_afk": True},
-        "Slack": {"subrules": {  # Allows make rules for different keys.
-            "title": {
-                "*.screen share": {"regex": True, "not_afk": True}  # BTW it is not the only case.
-            },
-        }},
-        "Skype": {"not_afk": True},  # Skype doesn't provide info that it is a meeting.
-        "unknown": {},  # Means that window manager was unable to gather data. Discord,
-        "flameshot": {},  # Screenshot tool.
-        "jetbrains-idea": {},  # IDE.
-        "Double Commander": {},  # File manager.
-        "smplayer": {},  # Video player.
-        "FeatherPad": {},  # Text editor.
-    },
-    # Passive watcher, always provides value, even if user AFK.
-    # But "change value" event most probably shows activity (excluding web pages which change title periodically).
-    # data={url: str, title: str, audible: bool, incognito: bool, tabCount: int}.
-    "aw-watcher-web": {
-        "_key": "url",
-        "https://vimbox.skyeng.ru/.*": {"regex": True, "not_afk": True, "ignore": True},
-        "https://gitlab.akvelon.net:9443/.*": {"regex": True},
-        "https://akvelon.atlassian.net/wiki/.*": {"regex": True},
-        "https://gitlab.intapp.com/.*": {"regex": True},
-        "https://wiki.intapp.com/wiki/.*": {"regex": True},
-    },
-    # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
-    # data={file: str, projectPath: str, language: str, editor: const, editorVersion: const, eventType: const}
-    "aw-watcher-idea": {
-        "_key": "file",
-    }
-}
-
-# "aw-stopwatch" - active watcher, it is managed by user intentionally so most priority.
-# Make sense measure duration per unique label from "running=true" to "running=false".
-# data={label: str, running: bool}
-# "aw-watcher-afk" - active watcher, it doesn't show "active" when user is not.
-# But is doesn't catch mic on meetings so may produce wrong AFK status.
-# Data contains the only 'status' key with "afk" and "not-afk" values. Make sense extract 100% activities in
-# periods from "not-afk" to "afk" and in remained intervals if other watchers shows "meeting".
-# data={status: [afk, not-afk]}
-
-
-def sort_bucket_by_rules(bucket: List[Event], intervals: List[Any]):
-    pass
+local_timezone = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
 
 
 def event_to_str(event):
@@ -72,42 +24,35 @@ class Interval:
     Linked list node with start and end time.
     """
 
-    def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev = None,
-                 next = None) -> None:
+    def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev=None,
+                 next=None) -> None:
         self.start_time = start_time
         self.end_time = end_time
         self.prev = prev
         self.next = next
-        self.events = []  # Note that events need to add in a custom way, they often inherits from base Interval.
+        # Note that events need to add in a custom way, they often inherits from base Interval.
+        self.events = []
         self.name = None  # Depends from Interval purpose.
 
     def print_interval(self):
         description = self.name
         if not description and len(self.events) > 0:
             description = f"{len(self.events)} events, last={event_to_str(self.events[-1])}"
-        print(f"{self.start_time:%H:%M:%S}..{self.end_time:%H:%M:%S}: {description}")
+        print(f"{self.start_time.astimezone(local_timezone):%H:%M:%S}"
+              f"..{self.end_time.astimezone(local_timezone):%H:%M:%S}: {description}")
 
-    def print_intervals(self, from_first=True):
+    def get_earliest(self):
         interval = self
-        if from_first:
-            while interval.prev:
-                interval = interval.prev
+        while interval.prev:
+            interval = interval.prev
+        return interval
+
+    def print_intervals(self, from_earliest=True):
+        interval = self.get_earliest() if from_earliest else self
         if interval:
             interval.print_interval()
             while interval := interval.next:
                 interval.print_interval()
-
-    def new_after(self, event: Event) -> Interval:
-        """
-        Creates new Interval from specified event and inserts it after current.
-        :return: Just created interval.
-        """
-        interval = Interval(event.timestamp, event.timestamp + event.duration, self)
-        interval.events.append(event)
-        if self.next:
-            self.next.prev = interval
-        self.next = interval
-        return interval
 
     def find_closest_interval_before(self, date: datetime.datetime):
         result = self
@@ -121,6 +66,91 @@ class Interval:
                 if tmp.end_time < date:
                     return tmp
         return None  # Date is before first interval in the list.
+
+    def new_after(self, event: Event) -> Interval:
+        """
+        Creates new Interval from specified event and inserts it after current.
+        :return: Just created interval.
+        """
+        interval = Interval(
+            event.timestamp, event.timestamp + event.duration, self)
+        interval.events.append(event)
+        if self.next:
+            self.next.prev = interval
+        self.next = interval
+        return interval
+
+    def _merge_with_next(self):
+        self.end_time = self.next.end_time
+        self.events.extend(self.next.events)
+        self.next = self.next.next
+
+    def merge_all_adjacent_with_same_name(self):
+        interval = self.get_earliest()
+        while interval.next:
+            if interval.end_time == interval.next.start_time and interval.name == interval.next.name:
+                interval._merge_with_next()
+            interval = interval.next
+
+
+class Rule:
+    def __init__(self, not_afk: bool = False, subrules: RulesHandler = None,
+                 ignore: bool = False) -> None:
+        """
+        Constuctor.
+        :param not_afk: Flag to convert "afk" state to "not_afk".
+        :param subrules: Applies rules for different key in 'data' of event.
+        :param ignore: Flag to ignore this activity for reports.
+        """
+        self.not_afk = not_afk
+        self.subrules = subrules
+        self.ignore = ignore
+
+
+class RulesHandler:
+    def __init__(self, key: str, rules: Dict[str, Rule]) -> None:
+        self.key = key
+        self.rules = dict((re.compile(k), v) for k, v in rules.items)
+
+    def get_event_name(self, event):
+        return event.data[self.key]
+
+
+# Min duration one activity events sum to show.
+MIN_DURATION_MINUTES = 15  # 0.25 hours
+# Keys matches bucket names start. If there will be few buckets with ID starting from key then all will be handled.
+RULES = {
+    # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
+    # data={app: str, title: str}.
+    "aw-watcher-window": RulesHandler("app", {
+        "zoom": Rule(not_afk=True),
+        "Slack": Rule(subrules=RulesHandler("title", {
+            # BTW it is not the only case.
+            "*.screen share": Rule(not_afk=True),
+        })),
+        # Skype doesn't provide info that it is a meeting.
+        "Skype": Rule(not_afk=True),
+        "unknown": Rule(),  # Means that window manager was unable to gather data. Discord,
+        "flameshot": Rule(),  # Screenshot tool.
+        "jetbrains-idea": Rule(),  # IDE.
+        "Double Commander": Rule(),  # File manager.
+        "smplayer": Rule(),  # Video player.
+        "FeatherPad": Rule(),  # Text editor.
+    }),
+    # Passive watcher, always provides value, even if user AFK.
+    # But "change value" event most probably shows activity (excluding web pages which change title periodically).
+    # data={url: str, title: str, audible: bool, incognito: bool, tabCount: int}.
+    "aw-watcher-web": RulesHandler("url", {
+        "https://vimbox.skyeng.ru/.*": Rule(not_afk=True, ignore=True),
+        "https://gitlab.akvelon.net:9443/.*": Rule(),
+        "https://akvelon.atlassian.net/wiki/.*": Rule(),
+        "https://gitlab.intapp.com/.*": Rule(),
+        "https://wiki.intapp.com/wiki/.*": Rule(),
+    }),
+    # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
+    # data={file: str, projectPath: str, language: str, editor: const, editorVersion: const, eventType: const}
+    "aw-watcher-idea": RulesHandler("file", Rule()),
+}
 
 
 def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.datetime, buckets, rules) -> Interval:
@@ -148,41 +178,61 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
 
     # 1) Find out first "aw-watcher-afk" bucket to find out "not_afk" intervals as a main intervals to determine
     # activity by (we still need in "afk" cases for '"not_afk": True').
-    bucket_id = next((x for x in buckets.keys() if x.startswith("aw-watcher-afk")), None)
+    # "aw-watcher-afk" - active watcher, it doesn't show "active" when user is not.
+    # But is doesn't catch mic on meetings so may produce wrong AFK status.
+    # Data contains the only 'status' key with "afk" and "not-afk" values. Make sense extract 100% activities in
+    # periods from "not-afk" to "afk" and in remained intervals if other watchers shows "meeting".
+    # data={status: [afk, not-afk]}
+    bucket_id = next(
+        (x for x in buckets.keys() if x.startswith("aw-watcher-afk")), None)
     if bucket_id:
-        events: List[Event] = awc.get_events(bucket_id, start=start_time, end=end_time)
+        events: List[Event] = awc.get_events(
+            bucket_id, start=start_time, end=end_time)
         for event in events:
             if not cur_interval:
-                cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
+                cur_interval = Interval(
+                    event.timestamp, event.timestamp + event.duration)
+                cur_interval.name = event.data['status']
                 cur_interval.events.append(event)
             else:
-                interval_to_put_after = cur_interval.find_closest_interval_before(event.timestamp)
+                interval_to_put_after = cur_interval.find_closest_interval_before(
+                    event.timestamp)
                 if interval_to_put_after:
                     interval_to_put_after.new_after(event)
                 else:
-                    interval = Interval(event.timestamp, event.timestamp + event.duration, None, cur_interval)
+                    interval = Interval(
+                        event.timestamp, event.timestamp + event.duration, None, cur_interval)
                 interval.events.append(event)
+                interval.name = event.data['status']
                 cur_interval.prev = interval
                 cur_interval = interval
     else:
         print(f"No AFK bucket found. Stopping here - no more events expected.")
         return None
     if cur_interval:
+        cur_interval.merge_all_adjacent_with_same_name()  # Remove duplicates.
         print("By AFK found:")
         cur_interval.print_intervals()
     else:
-        print(f"No AFK events found in {start_time}..{end_time}. Stopping here - no more events expected.")
+        print(
+            f"No AFK events found in {start_time}..{end_time}. Stopping here - no more events expected.")
         return None
 
     # 2) "aw-stopwatch" events are highest priority. Just create intervals. Note that it may be an empty bucket.
     # Create intervals above of previous intervals because stopwatch intervals are highest priority.
-    events: List[Event] = awc.get_events("aw-stopwatch", start=start_time, end=end_time)
+    # "aw-stopwatch" - active watcher, it is managed by user intentionally so most priority.
+    # Make sense measure duration per unique label from "running=true" to "running=false".
+    # data={label: str, running: bool}
+    events: List[Event] = awc.get_events(
+        "aw-stopwatch", start=start_time, end=end_time)
     if events:
         for event in events:  # TODO change
             if cur_interval:
-                interval = cur_interval.new_after(event)  # Events are sorted here.
+                # Events are sorted here.
+                interval = cur_interval.new_after(event)
             else:
-                interval = Interval(event.timestamp, event.timestamp + event.duration)
+                interval = Interval(
+                    event.timestamp, event.timestamp + event.duration)
                 interval.events.append(event)
             cur_interval = interval
         print("With stopwatch found:")
@@ -194,8 +244,9 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
     for bucket_id in buckets.keys():
         rule = next((x for x in rules.keys() if bucket_id.startswith), None)
         if rule is None:
-            print(f"Skipping {bucket_id} bucket as not supported in RULES.")
-            bucket_rules = next((x for x in RULES.keys() if bucket_id.startswith(x)), None)
+            print(f"Skipping '{bucket_id}' bucket as not described in RULES.")
+            bucket_rules = next(
+                (x for x in RULES.keys() if bucket_id.startswith(x)), None)
             if bucket_rules:
                 pass
 
@@ -217,7 +268,8 @@ def main():
     awc = aw_client.ActivityWatchClient("activity_merger")
     buckets = awc.get_buckets()
     print(f"Buckets: {buckets.keys()}")
-    report_from_buckets(awc, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, RULES)
+    report_from_buckets(awc, datetime.datetime(2022, 2, 11),
+                        datetime.datetime(2022, 2, 12), buckets, RULES)
 
 
 if __name__ == '__main__':
