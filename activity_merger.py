@@ -42,12 +42,12 @@ class Interval:
         self.events = []
         self.name = None  # Depends from Interval purpose.
 
-    def print_interval(self):
+    def __repr__(self):
         description = self.name
         if not description and len(self.events) > 0:
             description = f"{len(self.events)} events, last={event_data_to_str(self.events[-1])}"
-        print(f"{self.start_time.astimezone(local_timezone):%H:%M:%S}"
-              f"..{self.end_time.astimezone(local_timezone):%H:%M:%S}: {description}")
+        return f"{self.start_time.astimezone(local_timezone):%H:%M:%S}"\
+               f"..{self.end_time.astimezone(local_timezone):%H:%M:%S}: {description}"
 
     def get_earliest(self) -> Interval:
         interval = self
@@ -55,18 +55,24 @@ class Interval:
             interval = interval.prev
         return interval
 
-    def print_intervals(self, from_earliest=True):
+    def intervals_to_strings(self, from_earliest=True):
         interval = self.get_earliest() if from_earliest else self
+        result = []
         if interval:
-            interval.print_interval()
+            result.append(str(interval))
             while interval := interval.next:
-                interval.print_interval()
+                result.append(str(interval))
+        return result
 
-    def is_match_start_time(self, time: datetime.datetime, tolerance_sec: datetime.timedelta) -> bool:
-        return abs(self.start_time - time) <= tolerance_sec
+    def is_match_start_time(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
+        return abs(self.start_time - time) <= tolerance
 
-    def is_match_end_time(self, time: datetime.datetime, tolerance_sec: datetime.timedelta) -> bool:
-        return abs(self.end_time - time) <= tolerance_sec
+    def is_match_end_time(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
+        return abs(self.end_time - time) <= tolerance
+
+    def is_inside(self, time: datetime.datetime, duration: datetime.timedelta,
+                             tolerance: datetime.timedelta) -> bool:
+        return self.start_time - tolerance <= time and self.end_time + tolerance >= time
 
     def find_closest(self, date: datetime.datetime, by_end_time: bool) -> Interval:
         """
@@ -102,6 +108,13 @@ class Interval:
         return interval
 
     def separate_from_start(self, event) -> Interval:
+        """
+        Separates current `Interval` to 2, with earliest part based on the given event.
+        I.e. from [0<-self->3] makes [0<-new->1][1<-self->3].
+        Doesn't upadate/set names for both intervals.
+        :param event: `Event` to split current interval with.
+        :return: Just created interval.
+        """
         interval = Interval(event.timestamp, event.timestamp + event.duration, self.prev, self)
         interval.events.extend(self.events)
         interval.events.append(event)
@@ -110,6 +123,13 @@ class Interval:
         return interval
 
     def separate_from_end(self, event) -> Interval:
+        """
+        Separates current `Interval` to 2, with latest part based on the given event.
+        I.e. from [0<-self->3] makes [0<-self->2][2<-new->3].
+        Doesn't upadate/set names for both intervals.
+        :param event: `Event` to split current interval with.
+        :return: Just created interval.
+        """
         interval = Interval(event.timestamp, event.timestamp + event.duration, self, self.next)
         interval.events.extend(self.events)
         interval.events.append(event)
@@ -149,7 +169,7 @@ class RulesHandler:
         self.key = key
         self.rules = dict((re.compile(k), v) for k, v in rules.items())
 
-    def __str__(self) -> str:
+    def __repr__(self) -> str:
         return f"RulesHandler(key={self.key}, rules_len={len(self.rules)})"
 
     def get_event_name(self, event) -> Any:
@@ -166,11 +186,10 @@ class RulesHandler:
         # Metrics to measure each bucket importance.
         metrics = {
             'cnt_match_interval': 0,
+            'cnt_inside_interval': 0,
             'cnt_split_one_interval': 0,
             'cnt_split_few_intervals': 0,
         }
-        # Better start from earliest interval because events are sorted usually.
-        cur_interval = cur_interval.get_earliest()
         for event in events:
             # Find previous interval to merge into.
             interval = cur_interval.find_closest(event.timestamp, by_end_time=False)
@@ -178,32 +197,42 @@ class RulesHandler:
                 print(f"  Skipping event {event_to_str(event)} happened out of 'afk' watcher "
                       "- computer didn't work this time.")
                 continue
-            # There are 3 cases during merging events by time (with tolerance):
+            # There are following cases during merging events by time (with tolerance):
             # 1) Event matches previous interval. Rare case.
             #    Just add it to the interval and change its name.
             # 2) Event matches only start_time or end_time of the interval.
             #    Separate interval on 2 in this case.
-            # 3) Event covers 2 or more intervals, often partially.
-            #    Mix of 2 cases above.
+            # 3) Event is placed inside interval.
+            #    Separate interval on 3 - before, new, after.
+            # 4) Event covers 2 or more intervals, often partially.
+            #    Separate intervals which event covers partially, add event to intervals covered complentely.
             if interval.is_match_start_time(event.timestamp, tolerance):
                 if interval.is_match_end_time(event.timestamp + event.duration, tolerance):
                     interval.events.append(event)
                     metrics['cnt_match_interval'] += 1
+                    # TODO update name
                 else:
                     interval = interval.separate_from_start(event)
+                    # TODO update name
                     metrics['cnt_split_one_interval'] += 1
             elif interval.is_match_end_time(event.timestamp + event.duration, tolerance):
                 interval = interval.separate_from_end(event)
+                # TODO update name
                 metrics['cnt_split_one_interval'] += 1
+            elif interval.is_inside(event.timestamp, event.duration, tolerance):
+                # TODO too few such events.
+                interval1 = interval.separate_from_start(event)
+                interval3 = interval.separate_from_end(event)
+                # TODO update names for all 3
+                metrics['cnt_inside_interval'] += 1
             else:
-                pass  # TODO implement
+                # TODO implement
                 metrics['cnt_split_few_intervals'] += 1
-            # Update 'name' of new event(s)
         return metrics
 
 
-def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.datetime, buckets: List[str],
-                        rules: Dict[str, RulesHandler], tolerance: datetime.timedelta) -> Interval:
+def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime.datetime, end_time: datetime.datetime,
+                       buckets: List[str], rules: Dict[str, RulesHandler], tolerance: datetime.timedelta) -> Interval:
     """
     Gets events from specified buckets, prints report by them and returns linked list of `Interval`-s.
     :param awc: ActivityWatch client to use.
@@ -236,8 +265,7 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
     # data={status: [afk, not-afk]}
     bucket_id = next((x for x in buckets.keys() if x.startswith("aw-watcher-afk")), None)
     if bucket_id:
-        events: List[Event] = awc.get_events(
-            bucket_id, start=start_time, end=end_time)
+        events: List[Event] = awc.get_events(bucket_id, start=start_time, end=end_time)
         for event in events:
             if not cur_interval:
                 cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
@@ -258,8 +286,8 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
         return None
     if cur_interval:
         cur_interval.merge_all_adjacent_with_same_name()  # Remove duplicates.
-        print("By AFK found:")
-        cur_interval.print_intervals()
+        intervals_in_strings = cur_interval.intervals_to_strings()
+        print(f"By AFK found {len(intervals_in_strings)}:\n" + "\n".join(intervals_in_strings))
     else:
         print(f"No AFK events found in {start_time}..{end_time}. Stopping here - no more events expected.")
         return None
@@ -279,8 +307,8 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
                 interval = Interval(event.timestamp, event.timestamp + event.duration)
                 interval.events.append(event)
             cur_interval = interval
-        print("With stopwatch found:")
-        cur_interval.print_intervals()
+        intervals_in_strings = cur_interval.intervals_to_strings()
+        print(f"With stopwatch found {len(intervals_in_strings)}:\n" + "\n".join(intervals_in_strings))
     else:
         print("No stopwatch events found.")
 
@@ -298,7 +326,10 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
                     print(f"Handling '{bucket_id}' {len(events)} events with {rules_handler}")
                     metrics = rules_handler.apply_events(events, cur_interval, tolerance)
                     metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
-                    print("Result:\n  " + "\n  ".join(metrics_strings))
+                    intervals_in_strings = cur_interval.intervals_to_strings()
+                    print(f"In result got {len(intervals_in_strings)} intervals. Details:\n  "
+                          + "\n  ".join(metrics_strings))
+                    print(f"")
                 else:
                     print(f"'{bucket_id}' bucket doesn't have events in {start_time}..{end_time}.")
 
@@ -330,7 +361,7 @@ RULES = {
         "Skype": Rule(not_afk=True),
         "unknown": Rule(),  # Means that window manager was unable to gather data. Discord,
         "flameshot": Rule(),  # Screenshot tool.
-        "jetbrains-idea": Rule(),  # IDE.
+        "jetbrains-idea": Rule(),  # IDE. TODO ~2 seconds after "afk" watcher events -> are not counted!
         "Double Commander": Rule(),  # File manager.
         "smplayer": Rule(),  # Video player.
         "FeatherPad": Rule(),  # Text editor.
@@ -361,7 +392,7 @@ def main():
     buckets = awc.get_buckets()
     print(f"Buckets: {buckets.keys()}")
     report_from_buckets(awc, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, RULES,
-                        datetime.timedelta(EVENTS_COMPARE_TOLERANCE_SEC))
+                        datetime.timedelta(0, EVENTS_COMPARE_TOLERANCE_SEC, 0))
 
 
 if __name__ == '__main__':
