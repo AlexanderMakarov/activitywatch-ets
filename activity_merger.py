@@ -15,10 +15,16 @@ from numpy import number
 local_timezone = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
 
 
-def event_to_str(event):
+def event_data_to_str(event):
     if not event:
         return 'null'
     return str(event.data)
+
+
+def event_to_str(event):
+    return f"{event.timestamp.astimezone(local_timezone):%H:%M:%S}"\
+           f"..{(event.timestamp + event.duration).astimezone(local_timezone):%H:%M:%S}("\
+           f"{event_data_to_str(event)})"
 
 
 class Interval:
@@ -39,7 +45,7 @@ class Interval:
     def print_interval(self):
         description = self.name
         if not description and len(self.events) > 0:
-            description = f"{len(self.events)} events, last={event_to_str(self.events[-1])}"
+            description = f"{len(self.events)} events, last={event_data_to_str(self.events[-1])}"
         print(f"{self.start_time.astimezone(local_timezone):%H:%M:%S}"
               f"..{self.end_time.astimezone(local_timezone):%H:%M:%S}: {description}")
 
@@ -56,10 +62,10 @@ class Interval:
             while interval := interval.next:
                 interval.print_interval()
 
-    def is_match_start_time(self, time: datetime.datetime, tolerance_sec: float) -> bool:
+    def is_match_start_time(self, time: datetime.datetime, tolerance_sec: datetime.timedelta) -> bool:
         return abs(self.start_time - time) <= tolerance_sec
 
-    def is_match_end_time(self, time: datetime.datetime, tolerance_sec: float) -> bool:
+    def is_match_end_time(self, time: datetime.datetime, tolerance_sec: datetime.timedelta) -> bool:
         return abs(self.end_time - time) <= tolerance_sec
 
     def find_closest(self, date: datetime.datetime, by_end_time: bool) -> Interval:
@@ -84,7 +90,8 @@ class Interval:
 
     def new_after(self, event: Event) -> Interval:
         """
-        Creates new Interval from specified event and inserts it after current.
+        Creates new `Interval` from specified event and inserts it after current.
+        :param event: Event which causes new interval creation.
         :return: Just created interval.
         """
         interval = Interval(event.timestamp, event.timestamp + event.duration, self)
@@ -142,17 +149,33 @@ class RulesHandler:
         self.key = key
         self.rules = dict((re.compile(k), v) for k, v in rules.items())
 
+    def __str__(self) -> str:
+        return f"RulesHandler(key={self.key}, rules_len={len(self.rules)})"
+
     def get_event_name(self, event) -> Any:
         return event.data[self.key]
 
-    def apply_events(events: List[Event], cur_interval: Interval, tolerance_sec: float = 1.0):
+    def apply_events(self, events: List[Event], cur_interval: Interval, tolerance: datetime.timedelta) -> Dict[str, int]:
+        """
+        Applies events to the specified linked list of intervals.
+        :param events: List of events to apply.
+        :param cur_interval: Node of linked list to apply events onto. Out parameter.
+        :param tolerance: Tolerance to match events boundaries to intervals.
+        :return: Dictionary of metrics obtained on applying events.
+        """
+        # Metrics to measure each bucket importance.
+        metrics = {
+            'cnt_match_interval': 0,
+            'cnt_split_one_interval': 0,
+            'cnt_split_few_intervals': 0,
+        }
         # Better start from earliest interval because events are sorted usually.
         cur_interval = cur_interval.get_earliest()
         for event in events:
             # Find previous interval to merge into.
             interval = cur_interval.find_closest(event.timestamp, by_end_time=False)
             if not interval:
-                print(f"  Skipping {event_to_str(event)} event happened out of 'afk' watcher "
+                print(f"  Skipping event {event_to_str(event)} happened out of 'afk' watcher "
                       "- computer didn't work this time.")
                 continue
             # There are 3 cases during merging events by time (with tolerance):
@@ -162,19 +185,25 @@ class RulesHandler:
             #    Separate interval on 2 in this case.
             # 3) Event covers 2 or more intervals, often partially.
             #    Mix of 2 cases above.
-            if interval.is_match_start_time(event.timestamp, tolerance_sec):
-                if interval.is_match_end_time(event.timestamp + event.duration, tolerance_sec):
+            if interval.is_match_start_time(event.timestamp, tolerance):
+                if interval.is_match_end_time(event.timestamp + event.duration, tolerance):
                     interval.events.append(event)
+                    metrics['cnt_match_interval'] += 1
                 else:
                     interval = interval.separate_from_start(event)
-            elif interval.is_match_end_time(event.timestamp + event.duration, tolerance_sec):
+                    metrics['cnt_split_one_interval'] += 1
+            elif interval.is_match_end_time(event.timestamp + event.duration, tolerance):
                 interval = interval.separate_from_end(event)
+                metrics['cnt_split_one_interval'] += 1
             else:
                 pass  # TODO implement
-            # Update 'name' on new event(s)
+                metrics['cnt_split_few_intervals'] += 1
+            # Update 'name' of new event(s)
+        return metrics
 
 
-def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.datetime, buckets, rules) -> Interval:
+def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.datetime, buckets: List[str],
+                        rules: Dict[str, RulesHandler], tolerance: datetime.timedelta) -> Interval:
     """
     Gets events from specified buckets, prints report by them and returns linked list of `Interval`-s.
     :param awc: ActivityWatch client to use.
@@ -182,6 +211,7 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
     :param end_time: End time for the report.
     :param buckets: List of buckets to report events from.
     :param rules: User-specific map of rules to make report with.
+    :param tolerance: Tolerance to match events boundaries to intervals.
     :return: Last touched `Interval` from linked list built from events.
     """
 
@@ -266,9 +296,11 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
                 events = awc.get_events(bucket_id, start=start_time, end=end_time)
                 if events:
                     print(f"Handling '{bucket_id}' {len(events)} events with {rules_handler}")
-                    rules_handler.apply_events(events, cur_interval)  # TODO pass tolerance
+                    metrics = rules_handler.apply_events(events, cur_interval, tolerance)
+                    metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
+                    print("Result:\n  " + "\n  ".join(metrics_strings))
                 else:
-                    print(f"'{bucket_id} bucket doesn't have events in {start_time}..{end_time}.")
+                    print(f"'{bucket_id}' bucket doesn't have events in {start_time}..{end_time}.")
 
     # B: It is simple "aw-watcher-afk" data with not_afk.
     total_not_afk: float = 0.0
@@ -281,6 +313,8 @@ def report_from_buckets(awc, start_time: datetime.datetime, end_time: datetime.d
 
 # Min duration one activity events sum to show.
 MIN_DURATION_SEC = 15 * 60  # 0.25 hours
+# Which tolerance to use when comparing events. Mostly from different watchers.
+EVENTS_COMPARE_TOLERANCE_SEC = 1
 # Keys matches bucket names start. If there will be few buckets with ID starting from key then all will be handled.
 # If few keys match the same bucket then only first RulesHandler will be applied to the bucket events.
 RULES = {
@@ -326,8 +360,8 @@ def main():
     awc = aw_client.ActivityWatchClient("activity_merger")
     buckets = awc.get_buckets()
     print(f"Buckets: {buckets.keys()}")
-    report_from_buckets(awc, datetime.datetime(2022, 2, 11),
-                        datetime.datetime(2022, 2, 12), buckets, RULES)
+    report_from_buckets(awc, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, RULES,
+                        datetime.timedelta(EVENTS_COMPARE_TOLERANCE_SEC))
 
 
 if __name__ == '__main__':
