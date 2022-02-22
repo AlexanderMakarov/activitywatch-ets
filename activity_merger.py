@@ -9,7 +9,8 @@ from aw_transform.filter_period_intersect import _intersecting_eventpairs
 from aw_core.models import Event
 import re
 
-from numpy import number
+from numpy import number, void
+from tomlkit import integer
 
 
 local_timezone = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
@@ -39,7 +40,7 @@ class Interval:
         self.prev = prev
         self.next = next
         # Note that events need to add in a custom way, they often inherits from base Interval.
-        self.events = []
+        self.events = []  # TODO need to flag when event appear first time.
         self.name = None  # Depends from Interval purpose.
 
     def __repr__(self):
@@ -70,67 +71,75 @@ class Interval:
     def is_match_end_time(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
         return abs(self.end_time - time) <= tolerance
 
-    def is_inside(self, time: datetime.datetime, duration: datetime.timedelta,
-                             tolerance: datetime.timedelta) -> bool:
+    def is_time_inside(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
         return self.start_time - tolerance <= time and self.end_time + tolerance >= time
 
-    def find_closest(self, date: datetime.datetime, by_end_time: bool) -> Interval:
+    def is_event_inside(self, event: Event, tolerance: datetime.timedelta) -> bool:
+        return self.start_time - tolerance <= event.timestamp\
+               and self.end_time + tolerance >= event.timestamp + event.duration
+
+    def is_time_after_and_not_adjucent(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
+        return self.end_time + tolerance < time
+
+    def find_closest(self, date: datetime.datetime, tolerance: datetime.timedelta, by_end_time: bool) -> Interval:
         """
-        Finds interval with either `end_time` or `start_time` <= specified time.
+        Finds interval with selectively `end_time` or `start_time` <= (earlier) specified time.
         :param date: Time to search interval before.
         :param by_end_time: Flag to search interval `end_time`. Otherwise searches by `start_time`.
         :return: Interval before or `None` if all intervals are after specified time.
         """
-        interval = self
-        # First check if interval later or before.
-        if (interval.start_time if by_end_time else interval.end_time) < date:
+        interval = self  # TODO broken - doesn't work with by_end_time=False
+        # First check if interval is later.
+        if (interval.start_time if by_end_time else interval.end_time) - tolerance < date:
             while tmp := interval.next:
-                if (tmp.start_time if by_end_time else tmp.end_time) >= date:
+                if (tmp.start_time if by_end_time else tmp.end_time) + tolerance >= date:
                     return interval
                 interval = tmp  # Shift to interval later as possible result.
+            return interval
         else:  # Search closest in intervals before.
             while tmp := interval.prev:
-                if (tmp.start_time if by_end_time else tmp.end_time) < date:
+                if (tmp.start_time if by_end_time else tmp.end_time) - tolerance < date:
                     return tmp
         return None  # Date is before first interval in the list.
 
     def new_after(self, event: Event) -> Interval:
         """
         Creates new `Interval` from specified event and inserts it after current.
+        Doesn't use event start time.
         :param event: Event which causes new interval creation.
         :return: Just created interval.
         """
-        interval = Interval(event.timestamp, event.timestamp + event.duration, self)
+        interval = Interval(self.end_time, event.timestamp + event.duration, self)
         interval.events.append(event)
         if self.next:
             self.next.prev = interval
         self.next = interval
         return interval
 
-    def separate_from_start(self, event) -> Interval:
+    def separate_new_from_start(self, event: Event) -> Interval:
         """
         Separates current `Interval` to 2, with earliest part based on the given event.
         I.e. from [0<-self->3] makes [0<-new->1][1<-self->3].
-        Doesn't upadate/set names for both intervals.
+        Doesn't upadate/set names for both intervals. Doesn't use event start time.
         :param event: `Event` to split current interval with.
         :return: Just created interval.
         """
-        interval = Interval(event.timestamp, event.timestamp + event.duration, self.prev, self)
+        interval = Interval(self.start_time, event.timestamp + event.duration, self.prev, self)
         interval.events.extend(self.events)
         interval.events.append(event)
         self.start_time = interval.end_time
         self.prev = interval
         return interval
 
-    def separate_from_end(self, event) -> Interval:
+    def separate_new_from_end(self, event) -> Interval:
         """
         Separates current `Interval` to 2, with latest part based on the given event.
         I.e. from [0<-self->3] makes [0<-self->2][2<-new->3].
-        Doesn't upadate/set names for both intervals.
+        Doesn't upadate/set names for both intervals. Doesn't use event end time.
         :param event: `Event` to split current interval with.
         :return: Just created interval.
         """
-        interval = Interval(event.timestamp, event.timestamp + event.duration, self, self.next)
+        interval = Interval(event.timestamp, self.end_time, self, self.next)
         interval.events.extend(self.events)
         interval.events.append(event)
         self.end_time = interval.start_time
@@ -175,7 +184,24 @@ class RulesHandler:
     def get_event_name(self, event) -> Any:
         return event.data[self.key]
 
-    def apply_events(self, events: List[Event], cur_interval: Interval, tolerance: datetime.timedelta) -> Dict[str, int]:
+    def _apply_event_recursively(self, event: Event, interval: Interval, tolerance: datetime.timedelta) -> Interval:
+        # Event is started before interval here for sure.
+        # Check event ends inside this interval. If yes then stop recursion.
+        if interval.is_time_inside(event.timestamp + event.duration, tolerance):
+            interval = interval.separate_new_from_start(event)
+            # TODO update name
+            return interval
+        else:
+            interval.events.append(event)  # Event covers current interval completely.
+            # TODO update name
+            if not interval.next:
+                interval = interval.new_after(event)
+                # TODO set name
+                return interval
+            return self._apply_event_recursively(event, interval.next, tolerance)
+
+    def apply_events(self, events: List[Event], cur_interval: Interval, tolerance: datetime.timedelta
+                    ) -> Dict[str, int]:
         """
         Applies events to the specified linked list of intervals.
         :param events: List of events to apply.
@@ -185,6 +211,7 @@ class RulesHandler:
         """
         # Metrics to measure each bucket importance.
         metrics = {
+            'cnt_skipped': 0,
             'cnt_match_interval': 0,
             'cnt_inside_interval': 0,
             'cnt_split_one_interval': 0,
@@ -192,10 +219,16 @@ class RulesHandler:
         }
         for event in events:
             # Find previous interval to merge into.
-            interval = cur_interval.find_closest(event.timestamp, by_end_time=False)
+            interval = cur_interval.find_closest(event.timestamp, tolerance, by_end_time=False)
             if not interval:
-                print(f"  Skipping event {event_to_str(event)} happened out of 'afk' watcher "
+                print(f"  Skipping event {event_to_str(event)} happened before of 'afk' watcher "
                       "- computer didn't work this time.")
+                metrics['cnt_skipped'] += 1
+                continue
+            if interval.is_time_after_and_not_adjucent(event.timestamp, tolerance):
+                print(f"  Skipping event {event_to_str(event)} happened after of 'afk' watcher "
+                      "- computer didn't work this time.")
+                metrics['cnt_skipped'] += 1
                 continue
             # There are following cases during merging events by time (with tolerance):
             # 1) Event matches previous interval. Rare case.
@@ -212,21 +245,26 @@ class RulesHandler:
                     metrics['cnt_match_interval'] += 1
                     # TODO update name
                 else:
-                    interval = interval.separate_from_start(event)
+                    interval = interval.separate_new_from_start(event)
                     # TODO update name
                     metrics['cnt_split_one_interval'] += 1
             elif interval.is_match_end_time(event.timestamp + event.duration, tolerance):
-                interval = interval.separate_from_end(event)
+                interval = interval.separate_new_from_end(event)
                 # TODO update name
                 metrics['cnt_split_one_interval'] += 1
-            elif interval.is_inside(event.timestamp, event.duration, tolerance):
+            elif interval.is_event_inside(event, tolerance):
                 # TODO too few such events.
-                interval1 = interval.separate_from_start(event)
-                interval3 = interval.separate_from_end(event)
+                interval1 = interval.separate_new_from_start(event)
+                interval3 = interval.separate_new_from_end(event)
                 # TODO update names for all 3
                 metrics['cnt_inside_interval'] += 1
             else:
-                # TODO implement
+                interval = interval.separate_new_from_end(event)
+                if interval.next:
+                    interval = self._apply_event_recursively(event, interval, tolerance)
+                else:
+                    interval = interval.new_after(event)
+                    # TODO set name
                 metrics['cnt_split_few_intervals'] += 1
         return metrics
 
@@ -272,7 +310,7 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                 cur_interval.name = event.data['status']
                 cur_interval.events.append(event)
             else:
-                interval_to_put_after = cur_interval.find_closest(event.timestamp, by_end_time=True)
+                interval_to_put_after = cur_interval.find_closest(event.timestamp, tolerance, by_end_time=True)
                 if interval_to_put_after:
                     interval_to_put_after.new_after(event)
                 else:
@@ -329,16 +367,17 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                     intervals_in_strings = cur_interval.intervals_to_strings()
                     print(f"In result got {len(intervals_in_strings)} intervals. Details:\n  "
                           + "\n  ".join(metrics_strings))
-                    print(f"")
                 else:
                     print(f"'{bucket_id}' bucket doesn't have events in {start_time}..{end_time}.")
 
+    # 4) Gather and print metrics.
     # B: It is simple "aw-watcher-afk" data with not_afk.
     total_not_afk: float = 0.0
     # A: It are intervals where not_afk or '"not_afk": True' or "aw-stopwatch" data.
     aw_active_intervals: List[Tuple[datetime.datetime, datetime.datetime]] = []
     # D: It is A with more specific activity aggregated by this activity.
     tasks: Dict[str, float] = {}
+    # TODO implement
     return cur_interval
 
 
