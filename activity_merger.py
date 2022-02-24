@@ -78,7 +78,7 @@ class Interval:
         return self.start_time - tolerance <= event.timestamp\
                and self.end_time + tolerance >= event.timestamp + event.duration
 
-    def is_time_after_and_not_adjucent(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
+    def is_time_not_adjucent_to_end(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
         return self.end_time + tolerance < time
 
     def find_closest(self, date: datetime.datetime, tolerance: datetime.timedelta, by_end_time: bool) -> Interval:
@@ -88,18 +88,19 @@ class Interval:
         :param by_end_time: Flag to search interval `end_time`. Otherwise searches by `start_time`.
         :return: Interval before or `None` if all intervals are after specified time.
         """
-        interval = self  # TODO broken - doesn't work with by_end_time=False
-        # First check if interval is later.
-        if (interval.start_time if by_end_time else interval.end_time) - tolerance < date:
+        interval = self
+        # First check if date is later than current interval.
+        if (interval.end_time if by_end_time else interval.start_time) - tolerance < date:
             while tmp := interval.next:
-                if (tmp.start_time if by_end_time else tmp.end_time) + tolerance >= date:
+                if (tmp.end_time if by_end_time else tmp.start_time) + tolerance >= date:
                     return interval
                 interval = tmp  # Shift to interval later as possible result.
             return interval
-        else:  # Search closest in intervals before.
+        else:  # Date is before current interval.
             while tmp := interval.prev:
-                if (tmp.start_time if by_end_time else tmp.end_time) - tolerance < date:
+                if (tmp.end_time if by_end_time else tmp.start_time) - tolerance < date:
                     return tmp
+                interval = tmp
         return None  # Date is before first interval in the list.
 
     def new_after(self, event: Event) -> Interval:
@@ -200,18 +201,19 @@ class RulesHandler:
                 return interval
             return self._apply_event_recursively(event, interval.next, tolerance)
 
-    def apply_events(self, events: List[Event], cur_interval: Interval, tolerance: datetime.timedelta
+    def apply_events(self, events: List[Event], interval: Interval, tolerance: datetime.timedelta
                     ) -> Dict[str, int]:
         """
         Applies events to the specified linked list of intervals.
         :param events: List of events to apply.
-        :param cur_interval: Node of linked list to apply events onto. Out parameter.
+        :param interval: Node of linked list to apply events onto. Out parameter.
         :param tolerance: Tolerance to match events boundaries to intervals.
         :return: Dictionary of metrics obtained on applying events.
         """
         # Metrics to measure each bucket importance.
         metrics = {
             'cnt_skipped': 0,
+            'cnt_handled': 0,
             'cnt_match_interval': 0,
             'cnt_inside_interval': 0,
             'cnt_split_one_interval': 0,
@@ -219,14 +221,9 @@ class RulesHandler:
         }
         for event in events:
             # Find previous interval to merge into.
-            interval = cur_interval.find_closest(event.timestamp, tolerance, by_end_time=False)
+            interval = interval.find_closest(event.timestamp, tolerance, by_end_time=False)
             if not interval:
                 print(f"  Skipping event {event_to_str(event)} happened before of 'afk' watcher "
-                      "- computer didn't work this time.")
-                metrics['cnt_skipped'] += 1
-                continue
-            if interval.is_time_after_and_not_adjucent(event.timestamp, tolerance):
-                print(f"  Skipping event {event_to_str(event)} happened after of 'afk' watcher "
                       "- computer didn't work this time.")
                 metrics['cnt_skipped'] += 1
                 continue
@@ -258,6 +255,11 @@ class RulesHandler:
                 interval3 = interval.separate_new_from_end(event)
                 # TODO update names for all 3
                 metrics['cnt_inside_interval'] += 1
+            elif interval.is_time_not_adjucent_to_end(event.timestamp, tolerance):
+                print(f"  Skipping event {event_to_str(event)} happened after of 'afk' watcher "  # TODO too many for web
+                      "- computer didn't work this time.")
+                metrics['cnt_skipped'] += 1
+                continue
             else:
                 interval = interval.separate_new_from_end(event)
                 if interval.next:
@@ -266,6 +268,7 @@ class RulesHandler:
                     interval = interval.new_after(event)
                     # TODO set name
                 metrics['cnt_split_few_intervals'] += 1
+            metrics['cnt_handled'] += 1
         return metrics
 
 
