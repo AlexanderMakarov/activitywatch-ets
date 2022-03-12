@@ -13,7 +13,11 @@ from numpy import number, void
 from tomlkit import integer
 
 
-local_timezone = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
+# Which tolerance to use when comparing events. Mostly from different watchers.
+EVENTS_COMPARE_TOLERANCE_SEC = 1
+TOLERANCE = datetime.timedelta(0, 1, 0)  # 1 sec
+# Timezone to show dates.
+CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
 
 
 def event_data_to_str(event):
@@ -23,8 +27,8 @@ def event_data_to_str(event):
 
 
 def event_to_str(event):
-    return f"{event.timestamp.astimezone(local_timezone):%H:%M:%S}"\
-           f"..{(event.timestamp + event.duration).astimezone(local_timezone):%H:%M:%S}("\
+    return f"{event.timestamp.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
+           f"..{(event.timestamp + event.duration).astimezone(CURRENT_TIMEZONE):%H:%M:%S}("\
            f"{event_data_to_str(event)})"
 
 
@@ -35,6 +39,9 @@ class Interval:
 
     def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev=None,
                  next=None) -> None:
+        if start_time > end_time:
+            assert False, f"Wrong interval boundaries - start time {start_time} is after end time {end_time},"\
+                          f" prev={prev}, next={next}"
         self.start_time = start_time
         self.end_time = end_time
         self.prev = prev
@@ -47,8 +54,8 @@ class Interval:
         description = self.name
         if not description and len(self.events) > 0:
             description = f"{len(self.events)} events, last={event_data_to_str(self.events[-1])}"
-        return f"{self.start_time.astimezone(local_timezone):%H:%M:%S}"\
-               f"..{self.end_time.astimezone(local_timezone):%H:%M:%S}: {description}"
+        return f"{self.start_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
+               f"..{self.end_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}: {description}"
 
     def get_earliest(self) -> Interval:
         interval = self
@@ -78,7 +85,7 @@ class Interval:
         return self.start_time - tolerance <= event.timestamp\
                and self.end_time + tolerance >= event.timestamp + event.duration
 
-    def is_time_not_adjucent_to_end(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
+    def is_time_after_and_not_adjacent(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
         return self.end_time + tolerance < time
 
     def find_closest(self, date: datetime.datetime, tolerance: datetime.timedelta, by_end_time: bool) -> Interval:
@@ -117,29 +124,34 @@ class Interval:
         self.next = interval
         return interval
 
-    def separate_new_from_start(self, event: Event) -> Interval:
+    def separate_new_at_start(self, event: Event, tolerance: datetime.timedelta) -> Interval:
         """
         Separates current `Interval` to 2, with earliest part based on the given event.
-        I.e. from [0<-self->3] makes [0<-new->1][1<-self->3].
-        Doesn't upadate/set names for both intervals. Doesn't use event start time.
+        I.e. from [0<-self->3] makes [0<-new->1][1<-self->3]. Do nothing if resulting interval duration shorter than
+        given tolerance. Doesn't upadate/set names for both intervals. Doesn't use event start time.
         :param event: `Event` to split current interval with.
-        :return: Just created interval.
+        :return: Just created interval or current interval if no events were created.
         """
-        interval = Interval(self.start_time, event.timestamp + event.duration, self.prev, self)
+        event_end_time = event.timestamp + event.duration
+        if abs(self.start_time - event_end_time) < tolerance or abs(event_end_time - self.end_time) < tolerance:
+            return self
+        interval = Interval(self.start_time, event_end_time, self.prev, self)
         interval.events.extend(self.events)
         interval.events.append(event)
         self.start_time = interval.end_time
         self.prev = interval
         return interval
 
-    def separate_new_from_end(self, event) -> Interval:
+    def separate_new_at_end(self, event: Event, tolerance: datetime.timedelta) -> Interval:
         """
         Separates current `Interval` to 2, with latest part based on the given event.
-        I.e. from [0<-self->3] makes [0<-self->2][2<-new->3].
-        Doesn't upadate/set names for both intervals. Doesn't use event end time.
+        I.e. from [0<-self->3] makes [0<-self->2][2<-new->3]. Do nothing if resulting interval duration shorter than
+        given tolerance. Doesn't upadate/set names for both intervals. Doesn't use event end time.
         :param event: `Event` to split current interval with.
-        :return: Just created interval.
+        :return: Just created interval or current interval if no events were created.
         """
+        if abs(event.timestamp - self.end_time) < tolerance or abs(self.start_time - event.timestamp) < tolerance:
+            return self
         interval = Interval(event.timestamp, self.end_time, self, self.next)
         interval.events.extend(self.events)
         interval.events.append(event)
@@ -175,8 +187,9 @@ class Rule:
 
 
 class RulesHandler:
-    def __init__(self, key: str, rules: Dict[str, Rule]) -> None:
+    def __init__(self, key: str, rules: Dict[str, Rule], tolerance: datetime.timedelta=TOLERANCE) -> None:
         self.key = key
+        self.tolerance = tolerance
         self.rules = dict((re.compile(k), v) for k, v in rules.items())
 
     def __repr__(self) -> str:
@@ -185,34 +198,40 @@ class RulesHandler:
     def get_event_name(self, event) -> Any:
         return event.data[self.key]
 
-    def _apply_event_recursively(self, event: Event, interval: Interval, tolerance: datetime.timedelta) -> Interval:
-        # Event is started before interval here for sure.
-        # Check event ends inside this interval. If yes then stop recursion.
-        if interval.is_time_inside(event.timestamp + event.duration, tolerance):
-            interval = interval.separate_new_from_start(event)
+    def _span_event_on_few_intervals(self, event: Event, interval: Interval) -> Interval:
+        """
+        Recursively applies given event down to linked list of intervals.
+        Assumes that event is started before or at the start of the given interval.
+        :param event: Event to apply.
+        :param interval: Interval which starts before or exactly on this event.
+        :return: Interval on which event applying is over.
+        """
+        if interval.is_time_inside(event.timestamp + event.duration, self.tolerance):
+            # Event ends inside this interval. Therefore stop recursion.
+            interval = interval.separate_new_at_start(event, self.tolerance)
             # TODO update name
             return interval
         else:
-            interval.events.append(event)  # Event covers current interval completely.
+            # Event covers current interval completely.
+            interval.events.append(event)
             # TODO update name
             if not interval.next:
-                interval = interval.new_after(event)
-                # TODO set name
+                print(f"  Skipping part of {event_to_str(event)} event spanning after 'afk' watcher events "
+                      "- computer didn't work those time.")
                 return interval
-            return self._apply_event_recursively(event, interval.next, tolerance)
+            return self._span_event_on_few_intervals(event, interval.next)
 
-    def apply_events(self, events: List[Event], interval: Interval, tolerance: datetime.timedelta
-                    ) -> Dict[str, int]:
+    def apply_events(self, events: List[Event], interval: Interval) -> Dict[str, int]:
         """
         Applies events to the specified linked list of intervals.
         :param events: List of events to apply.
         :param interval: Node of linked list to apply events onto. Out parameter.
-        :param tolerance: Tolerance to match events boundaries to intervals.
         :return: Dictionary of metrics obtained on applying events.
         """
         # Metrics to measure each bucket importance.
         metrics = {
-            'cnt_skipped': 0,
+            'cnt_skipped_too_short': 0,
+            'cnt_skipped_out_of_afk': 0,
             'cnt_handled': 0,
             'cnt_match_interval': 0,
             'cnt_inside_interval': 0,
@@ -220,50 +239,62 @@ class RulesHandler:
             'cnt_split_few_intervals': 0,
         }
         for event in events:
-            # Find previous interval to merge into.
-            interval = interval.find_closest(event.timestamp, tolerance, by_end_time=False)
-            if not interval:
-                print(f"  Skipping event {event_to_str(event)} happened before of 'afk' watcher "
-                      "- computer didn't work this time.")
-                metrics['cnt_skipped'] += 1
+            # Skip too short events.
+            if event.duration < self.tolerance:
+                metrics['cnt_skipped_too_short'] += 1
                 continue
-            # There are following cases during merging events by time (with tolerance):
-            # 1) Event matches previous interval. Rare case.
-            #    Just add it to the interval and change its name.
-            # 2) Event matches only start_time or end_time of the interval.
-            #    Separate interval on 2 in this case.
-            # 3) Event is placed inside interval.
-            #    Separate interval on 3 - before, new, after.
-            # 4) Event covers 2 or more intervals, often partially.
-            #    Separate intervals which event covers partially, add event to intervals covered complentely.
-            if interval.is_match_start_time(event.timestamp, tolerance):
-                if interval.is_match_end_time(event.timestamp + event.duration, tolerance):
+            # Find previous interval to merge into.
+            interval = interval.find_closest(event.timestamp, self.tolerance, by_end_time=False)
+            if not interval:
+                print(f"  Skipping event {event_to_str(event)} happened before 'afk' watcher events "
+                      "- computer didn't work this time.")
+                metrics['cnt_skipped_out_of_afk'] += 1
+                continue
+            # Compare existing interval boundaries with event boundaries and update intervals linked list.
+            if interval.is_match_start_time(event.timestamp, self.tolerance):
+                if interval.is_event_inside(event, self.tolerance):
+                    # Event matches start of existing interval and ends somewhere inside.
+                    # Separate interval.
+                    interval = interval.separate_new_at_start(event, self.tolerance)
+                    # TODO update name
+                    metrics['cnt_split_one_interval'] += 1
+                elif interval.is_match_end_time(event.timestamp + event.duration, self.tolerance):
+                    # Event matches existing interval by boundaries. Rare case
+                    # Just append data to interval.
                     interval.events.append(event)
                     metrics['cnt_match_interval'] += 1
                     # TODO update name
                 else:
-                    interval = interval.separate_new_from_start(event)
-                    # TODO update name
-                    metrics['cnt_split_one_interval'] += 1
-            elif interval.is_match_end_time(event.timestamp + event.duration, tolerance):
-                interval = interval.separate_new_from_end(event)
+                    # Event wraps existing interval and goes further.
+                    # Apply event to current interval and further ones.
+                    interval = self._span_event_on_few_intervals(event, interval)
+                    metrics['cnt_split_few_intervals'] += 1
+            elif interval.is_match_end_time(event.timestamp + event.duration, self.tolerance):
+                # Event ends at the same time as current interval but started inside it.
+                # Split interval on two.
+                interval = interval.separate_new_at_end(event, self.tolerance)
                 # TODO update name
                 metrics['cnt_split_one_interval'] += 1
-            elif interval.is_event_inside(event, tolerance):
-                # TODO too few such events.
-                interval1 = interval.separate_new_from_start(event)
-                interval3 = interval.separate_new_from_end(event)
+            elif interval.is_event_inside(event, self.tolerance):
+                # Event is placed completely inside current interval.
+                # Split interval on three.
+                interval1 = interval.separate_new_at_start(event, self.tolerance)
+                interval3 = interval.separate_new_at_end(event, self.tolerance)
                 # TODO update names for all 3
                 metrics['cnt_inside_interval'] += 1
-            elif interval.is_time_not_adjucent_to_end(event.timestamp, tolerance):
-                print(f"  Skipping event {event_to_str(event)} happened after of 'afk' watcher "  # TODO too many for web
-                      "- computer didn't work this time.")
-                metrics['cnt_skipped'] += 1
+            elif interval.is_time_after_and_not_adjacent(event.timestamp, self.tolerance):
+                # Event is long (by tolerance) after all intervals.
+                # Skip it because "AFK" events are applied first and restricts time boundaries for other events.
+                print(f"  Skipping {event_to_str(event)} event happened far after 'afk' watcher events "
+                      "- computer didn't work those time.")
+                metrics['cnt_skipped_out_of_afk'] += 1
                 continue
             else:
-                interval = interval.separate_new_from_end(event)
+                # Event is started somewhere inside the interval and ends on next intervals.
+                # Split current interval and apply event to further ones.
+                interval = interval.separate_new_at_end(event, self.tolerance)
                 if interval.next:
-                    interval = self._apply_event_recursively(event, interval, tolerance)
+                    interval = self._span_event_on_few_intervals(event, interval)
                 else:
                     interval = interval.new_after(event)
                     # TODO set name
@@ -362,10 +393,11 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
         else:
             rules_handler = next((v for k, v in RULES.items() if bucket_id.startswith(k)), None)
             if rules_handler:
+                rules_handler.tolerance = tolerance  # TODO handle it more beautiful.
                 events = awc.get_events(bucket_id, start=start_time, end=end_time)
                 if events:
                     print(f"Handling '{bucket_id}' {len(events)} events with {rules_handler}")
-                    metrics = rules_handler.apply_events(events, cur_interval, tolerance)
+                    metrics = rules_handler.apply_events(events, cur_interval)
                     metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
                     intervals_in_strings = cur_interval.intervals_to_strings()
                     print(f"In result got {len(intervals_in_strings)} intervals. Details:\n  "
@@ -386,8 +418,6 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
 
 # Min duration one activity events sum to show.
 MIN_DURATION_SEC = 15 * 60  # 0.25 hours
-# Which tolerance to use when comparing events. Mostly from different watchers.
-EVENTS_COMPARE_TOLERANCE_SEC = 1
 # Keys matches bucket names start. If there will be few buckets with ID starting from key then all will be handled.
 # If few keys match the same bucket then only first RulesHandler will be applied to the bucket events.
 RULES = {
@@ -433,8 +463,7 @@ def main():
     awc = aw_client.ActivityWatchClient("activity_merger")
     buckets = awc.get_buckets()
     print(f"Buckets: {buckets.keys()}")
-    report_from_buckets(awc, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, RULES,
-                        datetime.timedelta(0, EVENTS_COMPARE_TOLERANCE_SEC, 0))
+    report_from_buckets(awc, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, RULES, TOLERANCE)
 
 
 if __name__ == '__main__':
