@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations  # https://stackoverflow.com/a/33533514/1535127
 import datetime
+import logging
 from difflib import restore
 import aw_client
 import socket
@@ -18,6 +19,7 @@ EVENTS_COMPARE_TOLERANCE_SEC = 1
 TOLERANCE = datetime.timedelta(0, 1, 0)  # 1 sec
 # Timezone to show dates.
 CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
+LOG: logging.Logger = logging.getLogger(__name__)
 
 
 def event_data_to_str(event):
@@ -216,7 +218,7 @@ class RulesHandler:
             interval.events.append(event)
             # TODO update name
             if not interval.next:
-                print(f"  Skipping part of {event_to_str(event)} event spanning after 'afk' watcher events "
+                LOG.debug(f"  Skipping part of {event_to_str(event)} event spanning after 'afk' watcher events "
                       "- computer didn't work those time.")
                 return interval
             return self._span_event_on_few_intervals(event, interval.next)
@@ -246,7 +248,7 @@ class RulesHandler:
             # Find previous interval to merge into.
             interval = interval.find_closest(event.timestamp, self.tolerance, by_end_time=False)
             if not interval:
-                print(f"  Skipping event {event_to_str(event)} happened before 'afk' watcher events "
+                LOG.debug(f"  Skipping event {event_to_str(event)} happened before 'afk' watcher events "
                       "- computer didn't work this time.")
                 metrics['cnt_skipped_out_of_afk'] += 1
                 continue
@@ -285,7 +287,7 @@ class RulesHandler:
             elif interval.is_time_after_and_not_adjacent(event.timestamp, self.tolerance):
                 # Event is long (by tolerance) after all intervals.
                 # Skip it because "AFK" events are applied first and restricts time boundaries for other events.
-                print(f"  Skipping {event_to_str(event)} event happened far after 'afk' watcher events "
+                LOG.debug(f"  Skipping {event_to_str(event)} event happened far after 'afk' watcher events "
                       "- computer didn't work those time.")
                 metrics['cnt_skipped_out_of_afk'] += 1
                 continue
@@ -354,14 +356,14 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                 cur_interval.prev = interval
                 cur_interval = interval
     else:
-        print(f"No AFK bucket found. Stopping here - no more events expected.")
+        LOG.info("No AFK bucket found. Stopping here - no more events expected.")
         return None
     if cur_interval:
         cur_interval.merge_all_adjacent_with_same_name()  # Remove duplicates.
         intervals_in_strings = cur_interval.intervals_to_strings()
-        print(f"By AFK found {len(intervals_in_strings)}:\n" + "\n".join(intervals_in_strings))
+        LOG.debug(f"By AFK found {len(intervals_in_strings)}:\n" + "\n  ".join(intervals_in_strings))
     else:
-        print(f"No AFK events found in {start_time}..{end_time}. Stopping here - no more events expected.")
+        LOG.info(f"No AFK events found in {start_time}..{end_time}. Stopping here - no more events expected.")
         return None
 
     # 2) "aw-stopwatch" events are highest priority. Just create intervals. Note that it may be an empty bucket.
@@ -380,15 +382,15 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                 interval.events.append(event)
             cur_interval = interval
         intervals_in_strings = cur_interval.intervals_to_strings()
-        print(f"With stopwatch found {len(intervals_in_strings)}:\n" + "\n".join(intervals_in_strings))
+        LOG.debug(f"With stopwatch found {len(intervals_in_strings)}:\n" + "\n".join(intervals_in_strings))
     else:
-        print("No stopwatch events found.")
+        LOG.info("No stopwatch events found.")
 
     # 3) iterate through remained buckets
     for bucket_id in buckets.keys():
         rule = next((x for x in rules.keys() if bucket_id.startswith), None)
         if rule is None:
-            print(f"Skipping '{bucket_id}' bucket as not described in RULES.")
+            LOG.info(f"Skipping '{bucket_id}' bucket as not described in RULES.")
             continue
         else:
             rules_handler = next((v for k, v in RULES.items() if bucket_id.startswith(k)), None)
@@ -396,14 +398,14 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                 rules_handler.tolerance = tolerance  # TODO handle it more beautiful.
                 events = awc.get_events(bucket_id, start=start_time, end=end_time)
                 if events:
-                    print(f"Handling '{bucket_id}' {len(events)} events with {rules_handler}")
+                    LOG.info(f"Handling '{bucket_id}' {len(events)} events with {rules_handler}")
                     metrics = rules_handler.apply_events(events, cur_interval)
                     metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
                     intervals_in_strings = cur_interval.intervals_to_strings()
-                    print(f"In result got {len(intervals_in_strings)} intervals. Details:\n  "
+                    LOG.info(f"In result got {len(intervals_in_strings)} intervals. Details:\n  "
                           + "\n  ".join(metrics_strings))
                 else:
-                    print(f"'{bucket_id}' bucket doesn't have events in {start_time}..{end_time}.")
+                    LOG.info(f"'{bucket_id}' bucket doesn't have events in {start_time}..{end_time}.")
 
     # 4) Gather and print metrics.
     # B: It is simple "aw-watcher-afk" data with not_afk.
@@ -459,12 +461,25 @@ def main():
     # TODO ask date
     # daystart = datetime.datetime.combine(datetime.datetime.now().date(), datetime.time())
     # dayend = daystart + datetime.timedelta(days=1)
+    # TODO support logging levels.
 
     awc = aw_client.ActivityWatchClient("activity_merger")
     buckets = awc.get_buckets()
-    print(f"Buckets: {buckets.keys()}")
+    LOG.info(f"Buckets: {buckets.keys()}")
     report_from_buckets(awc, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, RULES, TOLERANCE)
 
 
+def setup_logging():
+    logging.addLevelName(logging.WARNING, "WARN")
+    logging.addLevelName(logging.DEBUG, "DEBU")
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s.%(msecs)03d %(levelname)-4s: %(message)s',
+        datefmt="%H:%M:%S"
+    )
+    return logging.getLogger()
+
+
 if __name__ == '__main__':
+    LOG = setup_logging()
     main()
