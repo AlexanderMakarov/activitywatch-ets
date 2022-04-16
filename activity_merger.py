@@ -5,7 +5,7 @@ import logging
 from difflib import restore
 import aw_client
 import socket
-from typing import Any, List, Dict, Tuple
+from typing import Any, List, Dict, Tuple, Callable
 from aw_transform.filter_period_intersect import _intersecting_eventpairs
 from aw_core.models import Event
 import re
@@ -53,29 +53,62 @@ class Interval:
         self.name = None  # Depends from Interval purpose.
 
     def __repr__(self):
+        return self.to_str(False)
+
+    def to_str(self, debug=False):
         description = self.name
         if not description and len(self.events) > 0:
-            description = f"{len(self.events)} events, last={event_data_to_str(self.events[-1])}"
+            if debug:
+                events_str = ";".join((event_data_to_str(x) for x in self.events))
+                description = f"{len(self.events)} events={events_str}"
+            else:
+                description = f"{len(self.events)} events, last={event_data_to_str(self.events[-1])}"
         return f"{self.start_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
                f"..{self.end_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}: {description}"
 
-    def get_earliest(self) -> Interval:
+    def iterate_next(self, checker: Callable[[Interval], bool] = None) -> Interval:
+        """
+        Iterates 'next' intervals with protection from wrong order of nodes.
+        :param checker: Lambda to retrurn True if required state is reached.
+        :return: `Interval` where loop finished by given checker or last interval.
+        """
+        interval = self
+        while interval.next:
+            tmp = interval.next
+            if tmp.start_time <= interval.start_time:
+                raise ValueError(f"Wrong interval.next found: f{tmp} expected to be after current f{interval}.")
+            if checker(tmp):
+                return tmp
+            interval = tmp
+        return interval
+
+    def iterate_prev(self, checker: Callable[[Interval], bool] = None) -> Interval:
+        """
+        Iterates 'prev' intervals with protection from wrong order of nodes.
+        :param checker: Lambda to retrurn True if required state is reached.
+        :return: `Interval` where loop finished by given checker or first interval.
+        """
         interval = self
         while interval.prev:
-            interval = interval.prev
+            tmp = interval.prev
+            if tmp.start_time >= interval.start_time:
+                raise ValueError(f"Wrong interval.prev found: f{tmp} expected to be before current f{interval}.")
+            if checker and checker(tmp):
+                return tmp
+            interval = tmp
         return interval
 
     def get_count(self):
-        interval = self.get_earliest()
+        interval = self.iterate_prev()
         cnt = 1
         while interval := interval.next:
             cnt += 1
         return cnt
 
-    def intervals_to_strings(self, offset: int=0, count: int=0, from_earliest=True):
+    def intervals_to_strings(self, offset: int=0, count: int=0, from_earliest=True, debug=False):
         interval = self
         if from_earliest:
-            interval = self.get_earliest()
+            interval = self.iterate_prev()
         elif offset != 0:
             i = 0
             if offset > 0:
@@ -90,17 +123,17 @@ class Interval:
                     i += 1
         result = []
         if interval:
-            result.append(str(interval))
+            result.append(interval.to_str(debug))
             i = 1
             while interval := interval.next:
                 if i == count:  # If count < 1 then don't limit at all.
                     break
-                result.append(str(interval))
+                result.append(interval.to_str(debug))
                 i += 1
         return result
 
-    def intervals_to_string(self, offset: int=0, count: int=0, from_earliest=True) -> str:
-        intervals_in_strings = self.intervals_to_strings(offset, count, from_earliest)
+    def intervals_to_string(self, offset: int=0, count: int=0, from_earliest=True, debug=False) -> str:
+        intervals_in_strings = self.intervals_to_strings(offset, count, from_earliest, debug)
         return str(len(intervals_in_strings)) + " intervals:\n  " + "\n  ".join(intervals_in_strings)
 
     def compare_with_time(self, time: datetime.datetime, tolerance: datetime.timedelta, is_start: bool) -> float:
@@ -113,9 +146,7 @@ class Interval:
         tolerance, positive value if time is after (later) than interval edge.
         """
         diff = time - (self.start_time if is_start else self.end_time)
-        if abs(diff) <= tolerance:
-            return 0
-        return diff.total_seconds()
+        return 0 if abs(diff) <= tolerance else diff.total_seconds()
 
     def is_match_start_time(self, time: datetime.datetime, tolerance: datetime.timedelta) -> bool:
         return abs(self.start_time - time) <= tolerance
@@ -141,19 +172,11 @@ class Interval:
         :return: Interval before or `None` if all intervals are after specified time.
         """
         interval = self
-        # First check if date is later than current interval.
+        # First check if date is later than current interval (need search it later intervals).
         if (interval.end_time if by_end_time else interval.start_time) - tolerance < date:
-            while tmp := interval.next:
-                if (tmp.end_time if by_end_time else tmp.start_time) + tolerance >= date:
-                    return interval
-                interval = tmp  # Shift to interval later as possible result.
-            return interval
-        else:  # Date is before current interval.
-            while tmp := interval.prev:
-                if (tmp.end_time if by_end_time else tmp.start_time) - tolerance < date:
-                    return tmp
-                interval = tmp
-        return None  # Date is before first interval in the list.
+            return self.iterate_next(lambda x: (x.end_time if by_end_time else x.start_time) + tolerance >= date)
+        else:  # Date is before current interval (need search in previous intervals).
+            return self.iterate_prev(lambda x: (x.end_time if by_end_time else x.start_time) - tolerance < date)
 
     def new_after(self, event: Event) -> Interval:
         """
@@ -229,7 +252,7 @@ class Interval:
         self.next = self.next.next
 
     def merge_all_adjacent_with_same_name(self):
-        interval = self.get_earliest()
+        interval = self.iterate_prev()
         while interval.next:
             if interval.end_time == interval.next.start_time and interval.name == interval.next.name:
                 interval._merge_with_next()
@@ -321,14 +344,14 @@ class RulesHandler:
             # Following cases are possible:
             # [-----]    <- interval boundaries, next will be event ones
             # -----------------------------------------------------------
-            # [--]           <- split interval with new on the start
+            # [--]  |        <- split interval with new on the start
             # [-----]        <- just add event to interval
             # [-------]      <- span event on few intervals
-            #   [-]          <- split interval on 3
-            #   [---]        <- split interval with new on the end
-            #   [-----]      <- split current interval with new on the end and span event on few intervals
-            #       [--]     <- skip event as happend in AFK time
-            #          [---] <- skip event as happend in AFK time
+            # | [-] |        <- split interval on 3
+            # | [---]        <- split interval with new on the end
+            # | [-----]      <- split current interval with new on the end and span event on few intervals
+            # |     [--]     <- skip event as happend in AFK time
+            # |     |  [---] <- skip event as happend in AFK time
             compare_event_start_with_interval_end = interval.compare_with_time(event.timestamp, self.tolerance, False)
             # If event is after/later closest found interval then it is "out of AFK" so skip it (both 'skip' cases).
             if compare_event_start_with_interval_end >= 0:
@@ -336,7 +359,7 @@ class RulesHandler:
                           "- user didn't work those time.", event_to_str(event))
                 metrics['cnt_skipped_out_of_afk'] += 1
                 continue
-            # Event have to contribute into intervals at least partually. So do it.
+            # Event have to contribute into intervals at least partially. So do it.
             compare_starts = interval.compare_with_time(event.timestamp, self.tolerance, True)
             compare_ends = interval.compare_with_time(event.timestamp + event.duration, self.tolerance, False)
             if compare_starts == 0:
@@ -352,7 +375,7 @@ class RulesHandler:
                     interval = self._span_event_on_few_intervals(event, interval)
                     metrics['cnt_split_few_intervals'] += 1
             elif compare_ends < 0:
-                makes negative intervals
+                # TODO makes negative intervals
                 LOG.info("before %s %s", event_to_str(event), interval.intervals_to_string(offset=-1, count=3,
                                                                                            from_earliest=False))
                 interval = interval.separate_new_at_middle(event, self.tolerance)
@@ -410,27 +433,30 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
     bucket_id = next((x for x in buckets.keys() if x.startswith("aw-watcher-afk")), None)
     if bucket_id:
         events: List[Event] = awc.get_events(bucket_id, start=start_time, end=end_time)
+        events = sorted(events, key=lambda e: e.timestamp)
         for event in events:
             if not cur_interval:
                 cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
-                # TODO cur_interval.name = event.data['status']
                 cur_interval.events.append(event)
             else:
                 interval_to_put_after = cur_interval.find_closest(event.timestamp, tolerance, by_end_time=True)
                 if interval_to_put_after:
-                    interval_to_put_after.new_after(event)
+                    # If there is adjacent interval before then create new interval based on event.
+                    cur_interval = interval_to_put_after.new_after(event)
                 else:
-                    interval = Interval(event.timestamp, event.timestamp + event.duration, None, cur_interval)
-                interval.events.append(event)
-                # TODO interval.name = event.data['status']
-                cur_interval.prev = interval
-                cur_interval = interval
+                    # If no adjacent intervals then create new interval with event time bounds after cur_interval.
+                    # Note that event are sorted so cur_interval is expected to be before in time.
+                    tmp = Interval(event.timestamp, event.timestamp + event.duration, cur_interval, None)
+                    tmp.events.append(event)
+                    cur_interval.prev = tmp
+                    cur_interval = tmp
+            cur_interval.name = event.data['status']
     else:
         LOG.info("No AFK bucket found. Stopping here - no more events expected.")
         return None
     if cur_interval:
         cur_interval.merge_all_adjacent_with_same_name()  # Remove duplicates.
-        LOG.info("By AFK found %s", cur_interval.intervals_to_string())
+        LOG.info("By AFK found %s", cur_interval.intervals_to_string(debug=True))
     else:
         LOG.info("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
         return None
