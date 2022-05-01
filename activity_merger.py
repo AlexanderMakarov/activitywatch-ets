@@ -40,14 +40,14 @@ class Interval:
     """
 
     def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev=None,
-                 next=None) -> None:
-        if start_time > end_time:
-            assert False, f"Wrong interval boundaries - start time {start_time} is after end time {end_time},"\
-                          f" prev={prev}, next={next}"
+                 nexti=None) -> None:
+        if start_time >= end_time:
+            assert False, f"Wrong interval boundaries - start time {start_time} is after or equal end time"\
+                          f" {end_time}, prev={prev}, next={next}"
         self.start_time = start_time
         self.end_time = end_time
         self.prev = prev
-        self.next = next
+        self.next = nexti
         # Note that events need to add in a custom way, they often inherits from base Interval.
         self.events = []  # TODO need to flag when event appear first time.
         self.name = None  # Depends from Interval purpose.
@@ -55,7 +55,12 @@ class Interval:
     def __repr__(self):
         return self.to_str(False)
 
-    def to_str(self, debug=False):
+    def to_str(self, debug=False) -> str:
+        """
+        Makes string representation.
+        :param debug: Flag to add all events information. If `False` then puts only the last one.
+        :return: String representation of the interval.
+        """
         description = self.name
         if not description and len(self.events) > 0:
             if debug:
@@ -68,15 +73,19 @@ class Interval:
 
     def iterate_next(self, checker: Callable[[Interval], bool] = None) -> Interval:
         """
-        Iterates 'next' intervals with protection from wrong order of nodes.
+        Iterates 'next' intervals with checking order of nodes.
         :param checker: Lambda to retrurn True if required state is reached.
+        :param tolerance: Tolerance for consistency checks. If `None` (not specified) then not checked. , tolerance: datetime.timedelta = None
         :return: `Interval` where loop finished by given checker or last interval.
         """
         interval = self
         while interval.next:
             tmp = interval.next
-            if tmp.start_time <= interval.start_time:
-                raise ValueError(f"Wrong interval.next found: f{tmp} expected to be after current f{interval}.")
+            # Consistency checks.
+            if tmp.start_time <= interval.start_time or tmp.start_time < interval.end_time:
+                raise ValueError(f"Wrong 'next' link in '{interval}'->'{tmp}': "
+                                 f"{tmp.start_time} expected to be after (greater) {interval.end_time}.")
+            # Condition check.
             if checker(tmp):
                 return tmp
             interval = tmp
@@ -84,15 +93,19 @@ class Interval:
 
     def iterate_prev(self, checker: Callable[[Interval], bool] = None) -> Interval:
         """
-        Iterates 'prev' intervals with protection from wrong order of nodes.
+        Iterates 'prev' intervals with checking order of nodes.
         :param checker: Lambda to retrurn True if required state is reached.
+        #:param check_consistency: Flag to check constistency of list.
         :return: `Interval` where loop finished by given checker or first interval.
         """
         interval = self
         while interval.prev:
             tmp = interval.prev
-            if tmp.start_time >= interval.start_time:
-                raise ValueError(f"Wrong interval.prev found: f{tmp} expected to be before current f{interval}.")
+            # Consistency checks.
+            if tmp.start_time >= interval.start_time or tmp.end_time > interval.start_time:
+                raise ValueError(f"Wrong 'prev' link in '{tmp}'<-'{interval}': "
+                                 f"{tmp.end_time} expected to be before (lesser) {interval.start_time}.")
+            # Condition check.
             if checker and checker(tmp):
                 return tmp
             interval = tmp
@@ -105,36 +118,52 @@ class Interval:
             cnt += 1
         return cnt
 
-    def intervals_to_strings(self, offset: int=0, count: int=0, from_earliest=True, debug=False):
+    def get_range(self, offset: int=0, num: int=1, from_earliest=False) -> List[Interval]:
+        """
+        Builds list of surrounding intervals.
+        :param offset: Negative (earlier in time) or positive (later) integer to start get intervals from.
+        :param num: Number of intervals to get. If negative or 0 then don't limit.
+        :param from_earliest: Flag to start iterate from earliest interval.
+        :return: List of intervals.
+        """
         interval = self
         if from_earliest:
             interval = self.iterate_prev()
         elif offset != 0:
-            i = 0
-            if offset > 0:
+            if offset > 0:  # Scroll forward.
+                i = 1
                 while interval := interval.next:
                     if i >= offset:
                         break
                     i += 1
             else:
+                i = -1
                 while interval := interval.prev:
-                    if i >= offset:
+                    if i <= offset:
                         break
-                    i += 1
+                    i -= 1
         result = []
         if interval:
-            result.append(interval.to_str(debug))
+            result.append(interval)
             i = 1
             while interval := interval.next:
-                if i == count:  # If count < 1 then don't limit at all.
+                if i == num:  # If num < 1 then don't limit at all.
                     break
-                result.append(interval.to_str(debug))
+                result.append(interval)
                 i += 1
         return result
 
-    def intervals_to_string(self, offset: int=0, count: int=0, from_earliest=True, debug=False) -> str:
-        intervals_in_strings = self.intervals_to_strings(offset, count, from_earliest, debug)
-        return str(len(intervals_in_strings)) + " intervals:\n  " + "\n  ".join(intervals_in_strings)
+    def intervals_to_string(self, offset: int=0, num: int=0, from_earliest=True, debug=False) -> str:
+        """
+        Builds string with description of surrounding intervals.
+        :param offset: Negative (earlier in time) or positive (later) integer to start get intervals from.
+        :param num: Number of intervals to get. If negative or 0 then don't limit.
+        :param from_earliest: Flag to start iterate from earliest interval.
+        :param debug: Flag to pass into `to_str()` method.
+        :return: List of intervals.
+        """
+        intervals = self.get_range(offset, num, from_earliest)
+        return str(len(intervals)) + " intervals:\n  " + "\n  ".join(x.to_str(debug) for x in intervals)
 
     def compare_with_time(self, time: datetime.datetime, tolerance: datetime.timedelta, is_start: bool) -> float:
         """
@@ -181,14 +210,13 @@ class Interval:
     def new_after(self, event: Event) -> Interval:
         """
         Creates new `Interval` from specified event and inserts it after current.
-        Doesn't use event start time.
+        Doesn't use event start time. Doesn't put 'next' for current event.
         :param event: Event which causes new interval creation.
         :return: Just created interval.
         """
-        interval = Interval(self.end_time, event.timestamp + event.duration, self)
+        assert self.next == None, f"'{self}'.new_after is called while 'next' exists: f{self.next}."
+        interval = Interval(self.end_time, event.timestamp + event.duration, self, None)
         interval.events.append(event)
-        if self.next:
-            self.next.prev = interval
         self.next = interval
         return interval
 
@@ -237,11 +265,15 @@ class Interval:
         :return: Just created interval in the middle of initial interval or initial interval if no actions were
         performed.
         """
+        # last = self.separate_new_at_end(event, tolerance)
+        # return self.separate_new_at_end(event, tolerance)
+
         event_end_time = event.timestamp + event.duration
         # First separate last part i.e. [0<-self->2][2<-self->3]. Only if it makes sense.
         if abs(self.start_time - event_end_time) > tolerance and abs(event_end_time - self.end_time) > tolerance:
             last_interval = Interval(event_end_time, self.end_time, self, self.next)
             last_interval.events.extend(self.events)
+            self.end_time = last_interval.start_time
             self.next = last_interval
         # Next separate current interval with new at the end.
         return self.separate_new_at_end(event, tolerance)
@@ -250,6 +282,8 @@ class Interval:
         self.end_time = self.next.end_time
         self.events.extend(self.next.events)
         self.next = self.next.next
+        if self.next.next:
+            self.next.next.prev = self
 
     def merge_all_adjacent_with_same_name(self):
         interval = self.iterate_prev()
@@ -303,8 +337,8 @@ class RulesHandler:
             interval.events.append(event)
             # TODO update name
             if not interval.next:
-                LOG.debug(f"  Skipping part of {event_to_str(event)} event spanning after 'afk' watcher events "
-                      "- computer didn't work those time.")
+                LOG.debug("  Skipping part of %s event spanning after 'afk' watcher events "
+                          "- computer didn't work those time.", event_to_str(event))
                 return interval
             return self._span_event_on_few_intervals(event, interval.next)
 
@@ -362,32 +396,31 @@ class RulesHandler:
             # Event have to contribute into intervals at least partially. So do it.
             compare_starts = interval.compare_with_time(event.timestamp, self.tolerance, True)
             compare_ends = interval.compare_with_time(event.timestamp + event.duration, self.tolerance, False)
-            if compare_starts == 0:
-                if compare_ends < 0:
+            if compare_starts == 0:  # Start the same
+                if compare_ends < 0:  # + event ends before interval end
                     interval = interval.separate_new_at_start(event, self.tolerance)
                     # TODO update name
                     metrics['cnt_split_one_interval'] += 1
-                elif compare_ends == 0:
+                elif compare_ends == 0:  # + end the same
                     interval.events.append(event)
                     metrics['cnt_match_interval'] += 1
                     # TODO update name
-                else:
+                else:  # +  ends after interval
                     interval = self._span_event_on_few_intervals(event, interval)
                     metrics['cnt_split_few_intervals'] += 1
-            elif compare_ends < 0:
-                # TODO makes negative intervals
-                LOG.info("before %s %s", event_to_str(event), interval.intervals_to_string(offset=-1, count=3,
-                                                                                           from_earliest=False))
+            elif compare_ends < 0:  # Event ends on the interval
+                # LOG.info("before %s %s", event_to_str(event), interval.intervals_to_string(offset=-1, count=3,
+                                                                                        #    from_earliest=False))
                 interval = interval.separate_new_at_middle(event, self.tolerance)
-                LOG.info("after %s %s", event_to_str(event), interval.intervals_to_string(offset=-2, count=5,
-                                                                                          from_earliest=False))
+                # LOG.info("after %s %s", event_to_str(event), interval.intervals_to_string(offset=-2, count=5,
+                                                                                        #   from_earliest=False))
                 # TODO update names for all 3
                 metrics['cnt_inside_interval'] += 1
-            elif compare_ends == 0:
+            elif compare_ends == 0:  # End the same
                 interval = interval.separate_new_at_end(event, self.tolerance)
                 # TODO update name
                 metrics['cnt_split_one_interval'] += 1
-            else:
+            else:  # Event starts far after interval end.
                 interval = interval.separate_new_at_end(event, self.tolerance)
                 if interval.next:
                     interval = self._span_event_on_few_intervals(event, interval)
@@ -433,7 +466,7 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
     bucket_id = next((x for x in buckets.keys() if x.startswith("aw-watcher-afk")), None)
     if bucket_id:
         events: List[Event] = awc.get_events(bucket_id, start=start_time, end=end_time)
-        events = sorted(events, key=lambda e: e.timestamp)
+        events.sort(key=lambda e: e.timestamp)
         for event in events:
             if not cur_interval:
                 cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
@@ -493,10 +526,13 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                 events = awc.get_events(bucket_id, start=start_time, end=end_time)
                 if events:
                     LOG.info("Handling '%s' %d events with %s", bucket_id, len(events), rules_handler)
+                    events.sort(key=lambda e: e.timestamp)
                     metrics = rules_handler.apply_events(events, cur_interval)
                     metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
                     LOG.info("In result got %d intervals. Details:\n  %s", cur_interval.get_count(),
                              "\n  ".join(metrics_strings))
+                    LOG.info(f"After '%{bucket_id}' got\n{cur_interval.intervals_to_string()}")
+                    # cur_interval = cur_interval.iterate_prev(lambda x: x.end_time <= datetime.datetime(2022, 2, 11, 14, 30, 00))
                 else:
                     LOG.info("'%s' bucket doesn't have events in %s..%s.", bucket_id, start_time, end_time)
 
