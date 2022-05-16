@@ -40,17 +40,24 @@ class Interval:
     """
 
     def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev=None,
-                 nexti=None) -> None:
+                 next=None) -> None:
         if start_time >= end_time:
             assert False, f"Wrong interval boundaries - start time {start_time} is after or equal end time"\
                           f" {end_time}, prev={prev}, next={next}"
         self.start_time = start_time
         self.end_time = end_time
+        self.set_next(next)
         self.prev = prev
-        self.next = nexti
+        if prev:
+            prev.next = self
         # Note that events need to add in a custom way, they often inherits from base Interval.
         self.events = []  # TODO need to flag when event appear first time.
         self.name = None  # Depends from Interval purpose.
+
+    def set_next(self, next_interval: Interval):
+        self.next = next_interval
+        if next_interval:
+            next_interval.prev = self
 
     def __repr__(self):
         return self.to_str(False)
@@ -74,9 +81,8 @@ class Interval:
     def iterate_next(self, checker: Callable[[Interval], bool] = None) -> Interval:
         """
         Iterates 'next' intervals with checking order of nodes.
-        :param checker: Lambda to retrurn True if required state is reached.
-        :return: `Interval` where loop finished by given checker, last interval in no checker specified,
-        `None` otherwise.
+        :param checker: Lambda to retrurn True if provided `Interval` is searched one.
+        :return: `Interval` where given checker responded with `True`, otherwise last `Interval`.
         """
         if checker and checker(self):
             return self
@@ -91,14 +97,13 @@ class Interval:
             if checker and checker(tmp):
                 return tmp
             interval = tmp
-        return None if checker else interval
+        return interval
 
     def iterate_prev(self, checker: Callable[[Interval], bool] = None) -> Interval:
         """
         Iterates 'prev' intervals with checking order of nodes.
-        :param checker: Lambda to return True if required state is reached.
-        :return: `Interval` where loop finished by given checker, first interval in no checker specified,
-        `None` otherwise.
+        :param checker: Lambda to retrurn True if provided `Interval` is searched one.
+        :return: `Interval` where given checker responded with `True`, otherwise last `Interval`.
         """
         if checker and checker(self):
             return self
@@ -113,7 +118,7 @@ class Interval:
             if checker and checker(tmp):
                 return tmp
             interval = tmp
-        return None if checker else interval
+        return interval
 
     def get_count(self):
         interval = self.iterate_prev()
@@ -199,14 +204,14 @@ class Interval:
 
     def find_closest(self, date: datetime.datetime, tolerance: datetime.timedelta, by_end_time: bool) -> Interval:
         """
-        Finds interval with selectively `end_time` or `start_time` <= (i.e. earlier than) specified time.
-        :param date: Time to search closest interval.
-        :param by_end_time: Flag to search interval `end_time`. Otherwise searches by `start_time`.
-        :return: Interval before or `None` if all intervals are after specified time.
+        Finds interval with selectively `end_time` or `start_time` close to specified time, preferrably before.
+        :param date: Time to search interval closest to.
+        :param by_end_time: Flag to search by interval `end_time`. Otherwise searches by `start_time`.
+        :return: Interval closest before or on specified time. `None` if there are no such intervals.
         """
         interval = self
         # First check if date is later than current interval (need search it later intervals).
-        if (interval.end_time if by_end_time else interval.start_time) - tolerance < date:
+        if (interval.end_time if by_end_time else interval.start_time) - tolerance <= date:
             return self.iterate_next(lambda x: (x.end_time if by_end_time else x.start_time) + tolerance >= date)
         else:  # Date is before current interval (need search in previous intervals).
             return self.iterate_prev(lambda x: (x.end_time if by_end_time else x.start_time) - tolerance < date)
@@ -218,10 +223,10 @@ class Interval:
         :param event: Event which causes new interval creation.
         :return: Just created interval.
         """
-        assert self.next == None, f"'{self}'.new_after is called while 'next' exists: f{self.next}."
+        assert self.next is None, f"'{self}'.new_after is called while 'next' exists: f{self.next}."
         interval = Interval(self.end_time, event.timestamp + event.duration, self, None)
         interval.events.append(event)
-        self.next = interval
+        self.set_next(interval)
         return interval
 
     def separate_new_at_start(self, event: Event, tolerance: datetime.timedelta) -> Interval:
@@ -256,7 +261,7 @@ class Interval:
         interval.events.extend(self.events)
         interval.events.append(event)
         self.end_time = interval.start_time
-        self.next = interval
+        self.set_next(interval)
         return interval
 
     def separate_new_at_middle(self, event: Event, tolerance: datetime.timedelta) -> Interval:
@@ -278,22 +283,20 @@ class Interval:
             last_interval = Interval(event_end_time, self.end_time, self, self.next)
             last_interval.events.extend(self.events)
             self.end_time = last_interval.start_time
-            self.next = last_interval
+            self.set_next(last_interval)
         # Next separate current interval with new at the end.
         return self.separate_new_at_end(event, tolerance)
 
-    def _merge_with_next(self):
+    def merge_with_next(self):
         self.end_time = self.next.end_time
         self.events.extend(self.next.events)
-        self.next = self.next.next
-        if self.next.next:
-            self.next.next.prev = self
+        self.set_next(self.next.next)
 
     def merge_all_adjacent_with_same_name(self):
         interval = self.iterate_prev()
         while interval.next:
             if interval.end_time == interval.next.start_time and interval.name == interval.next.name:
-                interval._merge_with_next()
+                interval.merge_with_next()
             interval = interval.next
 
 
@@ -358,7 +361,8 @@ class RulesHandler:
         # Metrics to measure each bucket importance.
         metrics = {
             'cnt_skipped_too_short': 0,
-            'cnt_skipped_out_of_afk': 0,
+            'cnt_skipped_before_afk': 0,
+            'cnt_skipped_after_afk': 0,
             'cnt_handled': 0,
             'cnt_match_interval': 0,
             'cnt_inside_interval': 0,
@@ -370,20 +374,10 @@ class RulesHandler:
             if event.duration < self.tolerance:
                 metrics['cnt_skipped_too_short'] += 1
                 continue
-            # Find previous interval to merge into.
-            tmp = interval.find_closest(event.timestamp, self.tolerance, by_end_time=False)
-            # If event happend before all previous events/intervals then skip it.
-            if not tmp:
-                LOG.debug("  Skipping event %s happened before 'AFK' events "
-                          "- user didn't work those time.", event_to_str(event))
-                metrics['cnt_skipped_out_of_afk'] += 1
-                continue
-            else:
-                interval = tmp
             # Compare closest interval boundaries with event boundaries and update intervals linked list.
             # Following cases are possible:
-            #   [-----]      <- interval boundaries, next will be event ones
-            # -----------------------------------------------------------
+            #   [-----]      <- existing interval boundaries (like 'afk')
+            # ----------------------------------------------------------- events
             # []|     |       <- skip as 'out of boundaries'
             # [---]   |       <- split interval with new on the start
             # [-------]       <- just add event to interval
@@ -397,13 +391,22 @@ class RulesHandler:
             #   |     [--]       <- skip 'out of boundaries'
             #   |     |  [---]   <- skip 'out of boundaries'
             event_end = event.timestamp + event.duration
-            compare_event_start_with_interval_end = interval.compare_with_time(event.timestamp, self.tolerance, False)
-            compare_event_end_with_interval_start = interval.compare_with_time(event_end, self.tolerance, True)
+            # Find closest interval started before event start time (assuming 'afk' events built intervals already).
+            tmp = interval.find_closest(event.timestamp, self.tolerance, by_end_time=False)
+            # Declare some points to compare.
+            interval = tmp
+            event_start_minus_interval_end = interval.compare_with_time(event.timestamp, self.tolerance, False)
+            event_end_minus_interval_start = interval.compare_with_time(event_end, self.tolerance, True)
             # If event is after/later closest found interval then it is "out of AFK" so skip it (both 'skip' cases).
-            if compare_event_start_with_interval_end >= 0 or compare_event_end_with_interval_start <= 0:
-                LOG.debug("  Skipping %s event happened out of 'AFK' events "
+            if event_start_minus_interval_end > 0:
+                LOG.debug("  Skipping %s event happened before all 'AFK' events "
                           "- user didn't work those time.", event_to_str(event))
-                metrics['cnt_skipped_out_of_afk'] += 1
+                metrics['cnt_skipped_before_afk'] += 1
+                continue
+            if event.timestamp + self.tolerance > interval.end_time:
+                LOG.debug("  Skipping %s event happened after all 'AFK' events "
+                          "- user didn't work those time.", event_to_str(event))
+                metrics['cnt_skipped_between_afk'] += 1
                 continue
             # Event have to contribute into intervals at least partially. So do it.
             compare_starts = interval.compare_with_time(event.timestamp, self.tolerance, True)
@@ -506,7 +509,7 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                     # Note that event are sorted so cur_interval is expected to be before in time.
                     tmp = Interval(event.timestamp, event.timestamp + event.duration, cur_interval, None)
                     tmp.events.append(event)
-                    cur_interval.next = tmp
+                    cur_interval.set_next(tmp)
                     cur_interval = tmp
             cur_interval.name = event.data['status']
     else:
