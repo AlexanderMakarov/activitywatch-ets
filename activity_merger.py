@@ -46,18 +46,27 @@ class Interval:
                           f" {end_time}, prev={prev}, next={next}"
         self.start_time = start_time
         self.end_time = end_time
+        self.set_prev(prev)
         self.set_next(next)
-        self.prev = prev
-        if prev:
-            prev.next = self
         # Note that events need to add in a custom way, they often inherits from base Interval.
         self.events = []  # TODO need to flag when event appear first time.
         self.name = None  # Depends from Interval purpose.
+
+    def set_prev(self, prev_interval: Interval):
+        self.prev = prev_interval
+        if prev_interval:
+            prev_interval.next = self
 
     def set_next(self, next_interval: Interval):
         self.next = next_interval
         if next_interval:
             next_interval.prev = self
+
+    def __eq__(self, __o: object) -> bool:
+        return isinstance(__o , Interval) \
+                and self.start_time == __o.start_time \
+                and self.end_time == __o.end_time \
+                and self.name == __o.name
 
     def __repr__(self):
         return self.to_str(False)
@@ -141,13 +150,15 @@ class Interval:
         elif offset != 0:
             if offset > 0:  # Scroll forward.
                 i = 1
-                while interval := interval.next:
+                while interval.next:
+                    interval = interval.next
                     if i >= offset:
                         break
                     i += 1
             else:
                 i = -1
-                while interval := interval.prev:
+                while interval.prev:
+                    interval = interval.prev
                     if i <= offset:
                         break
                     i -= 1
@@ -214,7 +225,7 @@ class Interval:
         if (interval.end_time if by_end_time else interval.start_time) - tolerance <= date:
             return self.iterate_next(lambda x: (x.end_time if by_end_time else x.start_time) + tolerance >= date)
         else:  # Date is before current interval (need search in previous intervals).
-            return self.iterate_prev(lambda x: (x.end_time if by_end_time else x.start_time) - tolerance < date)
+            return self.iterate_prev(lambda x: (x.end_time if by_end_time else x.start_time) - tolerance <= date)
 
     def new_after(self, event: Event) -> Interval:
         """
@@ -244,7 +255,6 @@ class Interval:
         interval.events.extend(self.events)
         interval.events.append(event)
         self.start_time = interval.end_time
-        self.prev = interval
         return interval
 
     def separate_new_at_end(self, event: Event, tolerance: datetime.timedelta) -> Interval:
@@ -261,7 +271,6 @@ class Interval:
         interval.events.extend(self.events)
         interval.events.append(event)
         self.end_time = interval.start_time
-        self.set_next(interval)
         return interval
 
     def separate_new_at_middle(self, event: Event, tolerance: datetime.timedelta) -> Interval:
@@ -283,7 +292,6 @@ class Interval:
             last_interval = Interval(event_end_time, self.end_time, self, self.next)
             last_interval.events.extend(self.events)
             self.end_time = last_interval.start_time
-            self.set_next(last_interval)
         # Next separate current interval with new at the end.
         return self.separate_new_at_end(event, tolerance)
 
@@ -391,7 +399,7 @@ class RulesHandler:
             #   |     [--]       <- skip 'out of boundaries'
             #   |     |  [---]   <- skip 'out of boundaries'
             event_end = event.timestamp + event.duration
-            # Find closest interval started before event start time (assuming 'afk' events built intervals already).
+            # Find closest interval started before event start time.
             tmp = interval.find_closest(event.timestamp, self.tolerance, by_end_time=False)
             # Declare some points to compare.
             interval = tmp
