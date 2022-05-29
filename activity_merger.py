@@ -50,8 +50,17 @@ class Interval:
         self.set_prev(prev)
         self.set_next(next)
         # Note that events need to add in a custom way, they often inherits from base Interval.
-        self.events = []  # TODO need to flag when event appear first time.
+        self.events = []
         self.name = None  # Depends from Interval purpose.
+
+    def __eq__(self, __o: object) -> bool:
+        return isinstance(__o , Interval) \
+                and self.start_time == __o.start_time \
+                and self.end_time == __o.end_time \
+                and self.name == __o.name
+
+    def __repr__(self):
+        return self.to_str(False)
 
     def set_prev(self, prev_interval: Interval):
         self.prev = prev_interval
@@ -62,15 +71,6 @@ class Interval:
         self.next = next_interval
         if next_interval:
             next_interval.prev = self
-
-    def __eq__(self, __o: object) -> bool:
-        return isinstance(__o , Interval) \
-                and self.start_time == __o.start_time \
-                and self.end_time == __o.end_time \
-                and self.name == __o.name
-
-    def __repr__(self):
-        return self.to_str(False)
 
     def to_str(self, debug=False) -> str:
         """
@@ -310,6 +310,7 @@ class Rule:
 
 
 class RulesHandler:
+    # TODO add parameter for "to_str" keys set (for firefox 'title' and so on)
     def __init__(self, key: str, rules: Dict[str, Rule], tolerance: datetime.timedelta=TOLERANCE) -> None:
         self.key = key
         self.tolerance = tolerance
@@ -343,6 +344,7 @@ class RulesHandler:
         else:
             interval.events.append(event)
             # TODO update name
+            # TODO IDEA watcher makes events ending at EOD (few windows) which cover each other and makes stack overflow.
             return self._span_event_down(event, interval)
 
     def apply_events(self, events: List[Event], interval: Interval) -> Dict[str, int]:
@@ -390,16 +392,16 @@ class RulesHandler:
             # Find closest interval started before event start time.
             interval = interval.find_closest(event.timestamp, self.tolerance, by_end_time=False)
             # Declare some points to compare.
-            event_start_minus_interval_end = interval.compare_with_time(event.timestamp, self.tolerance, False)
-            event_end_minus_interval_start = interval.compare_with_time(event_end, self.tolerance, True)
+            interval_end_minus_event_start = interval.compare_with_time(event.timestamp, self.tolerance, False)
+            interval_start_minus_event_end = interval.compare_with_time(event_end, self.tolerance, True)
             # 1) If event completely before closest interval then it is "out of AFK" - skip it.
-            if event_end_minus_interval_start < 0:
+            if interval_start_minus_event_end < 0:
                 LOG.debug("  Skipping %s event happened before all 'AFK' events "
                           "- user didn't work those time.", event_to_str(event))
                 metrics['cnt_skipped_before_afk'] += 1
                 continue
             # 11, 12) If event is after closest interval then it is "out of AFK" - skip it.
-            if event_start_minus_interval_end >= 0:
+            if interval_end_minus_event_start >= 0:
                 LOG.debug("  Skipping %s event happened after/out of 'AFK' events "
                           "- user didn't work those time.", event_to_str(event))
                 metrics['cnt_skipped_after_afk'] += 1
@@ -459,6 +461,31 @@ class RulesHandler:
         return metrics
 
 
+def check_and_print_intervals(interval: Interval, max_events_per_interval: int, last_bucket_name: str,
+                              print_debug: bool = False) -> void:
+    """
+    Performs checks for validity of resulting intervals and prints results for manual checks.
+    :param interval: Interval to check linked list from.
+    :param max_events_per_interval: Expected max number of events in each interval.
+    :param last_bucket_name: Name of the last bucket events were applied from. Used for logs.
+    :param print_debug: Flag to pring "debug" information for resulting intervals.
+    """
+    interval = interval.iterate_prev()
+    intervals = []
+
+    def check_and_print(interval: Interval) -> bool:
+        if len(interval.events) > max_events_per_interval:
+            raise ValueError("After '%s' bucket events applied greater than %d events number appeared in %s."\
+                             " Surroundings: %s"
+                             % (last_bucket_name, max_events_per_interval, interval,
+                                interval.intervals_to_string(-2, 4, True)))
+        intervals.append(interval)
+
+    interval.iterate_next(check_and_print)
+    intervals_str = str(len(intervals)) + " intervals:\n  " + "\n  ".join(x.to_str(print_debug) for x in intervals)
+    LOG.info("By '%s' found %s", last_bucket_name, intervals_str)
+
+
 def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime.datetime, end_time: datetime.datetime,
                         buckets: List[str], rules: Dict[str, RulesHandler], tolerance: datetime.timedelta) -> Interval:
     """
@@ -483,9 +510,9 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
     #   0.25 = meeting in Slack with ZZZ from XXX to YYY
     #   0.25 = Skype conversations in durations A, B, C
     cur_interval: Interval = None
+    buckets_cnt = 0
 
-    # 1) Find out first "aw-watcher-afk" bucket to find out "not_afk" intervals as a main intervals to determine
-    # activity by (we still need in "afk" cases for '"not_afk": True').
+    # 1) Handle "aw-watcher-afk" bucket events first to build base intervals to determine activity by.
     # "aw-watcher-afk" - active watcher, it doesn't show "active" when user is not.
     # But is doesn't catch mic on meetings so may produce wrong AFK status.
     # Data contains the only 'status' key with "afk" and "not-afk" values. Make sense extract 100% activities in
@@ -502,30 +529,31 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
             else:
                 interval_to_put_after = cur_interval.find_closest(event.timestamp, tolerance, by_end_time=True)
                 if interval_to_put_after:
-                    # If there is adjacent interval before then create new interval based on event.
-                    cur_interval = interval_to_put_after.new_after(event)
+                    # Doesn't use `Interval.new_after` because it doesn't use event start time i.e. doesn't
+                    # allow gaps in intervals linked list.
+                    interval = Interval(event.timestamp, event.timestamp + event.duration, cur_interval, None)
+                    interval.events.append(event)
+                    cur_interval.set_next(interval)
+                    cur_interval = interval
                 else:
-                    # If no adjacent intervals then create new interval with event time bounds after cur_interval.
-                    # Note that event are sorted so cur_interval is expected to be before in time.
-                    tmp = Interval(event.timestamp, event.timestamp + event.duration, cur_interval, None)
-                    tmp.events.append(event)
-                    cur_interval.set_next(tmp)
-                    cur_interval = tmp
+                    raise AssertionError("Closest previous interval wasn't found during 'AFK' bucket events handling"
+                                         f"on {event_to_str(event)}.")
             cur_interval.name = event.data['status']
+        buckets_cnt += 1
     else:
         LOG.info("No AFK bucket found. Stopping here - no more events expected.")
         return None
     if cur_interval:
         cur_interval.merge_all_adjacent_with_same_name()  # Remove duplicates.
-        LOG.info("By AFK found %s", cur_interval.intervals_to_string(debug=True))
+        check_and_print_intervals(cur_interval, buckets_cnt, "AFK", True)
     else:
         LOG.info("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
         return None
 
-    # 2) "aw-stopwatch" events are highest priority. Just create intervals. Note that it may be an empty bucket.
-    # Create intervals above of previous intervals because stopwatch intervals are highest priority.
-    # "aw-stopwatch" - active watcher, it is managed by user intentionally so most priority.
-    # Make sense measure duration per unique label from "running=true" to "running=false".
+    # 2) "aw-stopwatch" bucket events have highest priority. They may cover cases where 'AFK' events are absent.
+    # Need to create intervals splitting and appending base 'AFK' intervals. Note that bucket is empty in most cases.
+    # "aw-stopwatch" - active watcher, it is managed by user directly.
+    # Make sense measuring duration per unique label from "running=true" to "running=false".
     # data={label: str, running: bool}
     events: List[Event] = awc.get_events("aw-stopwatch", start=start_time, end=end_time)
     if events:
@@ -537,11 +565,16 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                 interval = Interval(event.timestamp, event.timestamp + event.duration)
                 interval.events.append(event)
             cur_interval = interval
-        LOG.info("After stopwatch got %s", cur_interval.intervals_to_string())
+        buckets_cnt += 1
+        check_and_print_intervals(cur_interval, buckets_cnt, "stopwatch", True)
     else:
         LOG.info("No stopwatch events found.")
 
-    # 3) Iterate through remained buckets
+    # 3) Iterate through remained buckets by given rules.
+    # Assume that they are all "passive" watchers reacting on 3d-party application events which leads to:
+    # - Events may have bounds out of 'AFK' events therefore don't represent user activity (like "aw-idea").
+    # - Event start means some user activity, but event end may be just some timeout or "computer waken up".
+    # - Events may have not enough data to describe state (like "aw-window-watcher" behavior on Linux Wayland).
     for bucket_id in buckets.keys():
         rule = next((x for x in rules.keys() if bucket_id.startswith), None)
         if rule is None:
@@ -559,8 +592,8 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                     metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
                     LOG.info("In result got %d intervals. Details:\n  %s", cur_interval.get_count(),
                              "\n  ".join(metrics_strings))
-                    LOG.info("After '%s' got\n%s", bucket_id, cur_interval.intervals_to_string())
-                    # cur_interval = cur_interval.iterate_prev(lambda x: x.end_time <= datetime.datetime(2022, 2, 11, 14, 30, 00))
+                    buckets_cnt += 1
+                    check_and_print_intervals(cur_interval, buckets_cnt, bucket_id, False)
                 else:
                     LOG.info("'%s' bucket doesn't have events in %s..%s.", bucket_id, start_time, end_time)
 
