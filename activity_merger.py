@@ -329,23 +329,22 @@ class RulesHandler:
         :param interval: Interval to start apply after.
         :return: Last resulting interval.
         """
-        if interval.next is None:
-            return interval
-        interval = interval.next
-        ends_diff = interval.compare_with_time(event.timestamp + event.duration, self.tolerance, False)
-        if ends_diff == 0:
-            interval.events.append(event)
-            # TODO update name
-            return interval
-        elif ends_diff < 0:
-            interval = interval.separate_new_at_start(event, self.tolerance)
-            # TODO update name
-            return interval
-        else:
-            interval.events.append(event)
-            # TODO update name
-            # TODO IDEA watcher makes events ending at EOD (few windows) which cover each other and makes stack overflow.
-            return self._span_event_down(event, interval)
+        # Recursive implementation makes stack overflow.
+        while interval.next:
+            interval = interval.next
+            ends_diff = interval.compare_with_time(event.timestamp + event.duration, self.tolerance, False)
+            if ends_diff == 0:
+                interval.events.append(event)
+                # TODO update name
+                return interval
+            elif ends_diff < 0:
+                interval = interval.separate_new_at_start(event, self.tolerance)
+                # TODO update name
+                return interval
+            else:
+                interval.events.append(event)
+                # TODO update name
+        return interval
 
     def apply_events(self, events: List[Event], interval: Interval) -> Dict[str, int]:
         """
@@ -462,13 +461,14 @@ class RulesHandler:
 
 
 def check_and_print_intervals(interval: Interval, max_events_per_interval: int, last_bucket_name: str,
-                              print_debug: bool = False) -> void:
+                              level: logging._Level = logging.INFO) -> void:
     """
     Performs checks for validity of resulting intervals and prints results for manual checks.
     :param interval: Interval to check linked list from.
     :param max_events_per_interval: Expected max number of events in each interval.
     :param last_bucket_name: Name of the last bucket events were applied from. Used for logs.
-    :param print_debug: Flag to pring "debug" information for resulting intervals.
+    :param level: Logging level representing how to print resulting intervals. 'WARN' and higher - doesn't print
+    intervals, 'INFO' print all intervals without debug information, 'DEBUG' and lower - print everything.
     """
     interval = interval.iterate_prev()
     intervals = []
@@ -482,8 +482,13 @@ def check_and_print_intervals(interval: Interval, max_events_per_interval: int, 
         intervals.append(interval)
 
     interval.iterate_next(check_and_print)
-    intervals_str = str(len(intervals)) + " intervals:\n  " + "\n  ".join(x.to_str(print_debug) for x in intervals)
-    LOG.info("By '%s' found %s", last_bucket_name, intervals_str)
+    if level >= logging.WARN:
+        intervals_str = str(len(intervals)) + " intervals"
+    elif level == logging.INFO:
+        intervals_str = str(len(intervals)) + " intervals:\n  " + "\n  ".join(x.to_str(False) for x in intervals)
+    else:
+        intervals_str = str(len(intervals)) + " intervals:\n  " + "\n  ".join(x.to_str(True) for x in intervals)
+    LOG.info("After '%s' handling got %s", last_bucket_name, intervals_str)
 
 
 def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime.datetime, end_time: datetime.datetime,
@@ -545,7 +550,7 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
         return None
     if cur_interval:
         cur_interval.merge_all_adjacent_with_same_name()  # Remove duplicates.
-        check_and_print_intervals(cur_interval, buckets_cnt, "AFK", True)
+        check_and_print_intervals(cur_interval, buckets_cnt, "AFK")
     else:
         LOG.info("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
         return None
@@ -587,13 +592,22 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                 events = awc.get_events(bucket_id, start=start_time, end=end_time)
                 if events:
                     LOG.info("Handling '%s' %d events with %s", bucket_id, len(events), rules_handler)
+                    # Note that some watchers (like IDEA watcher from few windows) makes events covering each other,
+                    # i.e. not adjusted. But on each focus change it do generates new event.
+                    # So first sort all events and cut to make adjusted.
                     events.sort(key=lambda e: e.timestamp)
+                    prev_event = None
+                    for event in events:
+                        if prev_event and prev_event.timestamp + prev_event.duration > event.timestamp:
+                            prev_event.duration = event.timestamp - prev_event.timestamp
+                        prev_event = event
+                    # Handle events.
                     metrics = rules_handler.apply_events(events, cur_interval)
                     metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
                     LOG.info("In result got %d intervals. Details:\n  %s", cur_interval.get_count(),
                              "\n  ".join(metrics_strings))
                     buckets_cnt += 1
-                    check_and_print_intervals(cur_interval, buckets_cnt, bucket_id, False)
+                    check_and_print_intervals(cur_interval, buckets_cnt, bucket_id, logging.WARN)
                 else:
                     LOG.info("'%s' bucket doesn't have events in %s..%s.", bucket_id, start_time, end_time)
 
