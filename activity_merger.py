@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
-from __future__ import annotations  # https://stackoverflow.com/a/33533514/1535127
 import datetime
 import logging
-from difflib import restore
-from tkinter import N
 import aw_client
-import socket
-from typing import Any, List, Dict, Tuple, Callable
-from aw_transform.filter_period_intersect import _intersecting_eventpairs
-from aw_core.models import Event
+import collections
+import dataclasses
+from typing import Any, List, Dict, Optional, Tuple, Callable
 import re
-
-from numpy import number, void
-from tomlkit import integer
 
 
 # Which tolerance to use when comparing events. Mostly from different watchers.
@@ -23,13 +16,19 @@ CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzi
 LOG: logging.Logger = logging.getLogger(__name__)
 
 
-def event_data_to_str(event):
+Event = collections.namedtuple('Event', ['bucket_id', 'timestamp', 'duration', 'data'])
+"""
+Lightweight representation of ActivityWatcher event without "id" field but with "bucket_it" field to trach source.
+"""
+
+
+def event_data_to_str(event: Event):
     if not event:
         return 'null'
     return str(event.data)
 
 
-def event_to_str(event):
+def event_to_str(event: Event):
     return f"{event.timestamp.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
            f"..{(event.timestamp + event.duration).astimezone(CURRENT_TIMEZONE):%H:%M:%S}("\
            f"{event_data_to_str(event)})"
@@ -40,8 +39,7 @@ class Interval:
     Linked list node with start and end time.
     """
 
-    def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev=None,
-                 next=None) -> None:
+    def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev=None, next=None) -> None:
         if start_time >= end_time:
             assert False, f"Wrong interval boundaries - start time {start_time} is after or equal end time"\
                           f" {end_time}, prev={prev}, next={next}"
@@ -50,7 +48,7 @@ class Interval:
         self.set_prev(prev)
         self.set_next(next)
         # Note that events need to add in a custom way, they often inherits from base Interval.
-        self.events = []
+        self.events: List[Event] = []
         self.name = None  # Depends from Interval purpose.
 
     def __eq__(self, __o: object) -> bool:
@@ -87,6 +85,12 @@ class Interval:
                 description = f"{len(self.events)} events, last={event_data_to_str(self.events[-1])}"
         return f"{self.start_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
                f"..{self.end_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}: {description}"
+
+    def get_duration(self) -> float:
+        """
+        :return: Duration of interval in seconds.
+        """
+        return (self.end_time - self.start_time).total_seconds()
 
     def iterate_next(self, checker: Callable[[Interval], bool] = None) -> Interval:
         """
@@ -295,173 +299,217 @@ class Interval:
             interval = interval.next
 
 
+@dataclasses.dataclass
 class Rule:
-    def __init__(self, not_afk: bool = False, subrules: RulesHandler = None,
-                 ignore: bool = False) -> None:
-        """
-        Constuctor.
-        :param not_afk: Flag to convert "afk" state to "not_afk".
-        :param subrules: Applies rules for different key in 'data' of event.
-        :param ignore: Flag to ignore this activity for reports.
-        """
-        self.not_afk = not_afk
-        self.subrules = subrules
-        self.ignore = ignore
+    """
+    Structure which represents how to compare related event with others.
+    :param priority: Priority of the rule, greater value => more chance to be used among remained.
+    Better to use unique priority values, otherwise conflicts will be solved inpredictably.
+    Note that default priority for "afk" watcher is 500, for "watchdog" - 1000.
+    :param subhandler: `RulesHandler` for the different key of event with its own set of rules.
+    It allows to take into consideration several keys of the event.
+    :param ignore: Flag to ignore this activity for reports. May be used for "not work" activities.
+    """
+
+    priority: int
+    subhandler: RulesHandler = None
+    ignore: bool = False
+    # def __init__(self, priority: int = 1, subhandler: RulesHandler = None,
+    #              ignore: bool = False) -> None:
+    #     """
+    #     Constuctor.
+    #     :param priority: Priority of the rule, greater value = more chance to be used among remained.
+    #     Better to use unique priority values, otherwise conflicts will be solved inpredictably.
+    #     Note that default priority for "afk" watcher is 50, for "watchdog" - 100.
+    #     :param subhandler: `RulesHandler` for the different key with its own set of rules to apply only for this rule.
+    #     It allows to handle all keys of the event.
+    #     :param ignore: Flag to ignore this activity for reports. May be used for "not work" activities.
+    #     """
+    #     self.priority = priority
+    #     self.subhandler = subhandler
+    #     self.ignore = ignore
 
 
 class RulesHandler:
+
     # TODO add parameter for "to_str" keys set (for firefox 'title' and so on)
-    def __init__(self, key: str, rules: Dict[str, Rule], tolerance: datetime.timedelta=TOLERANCE) -> None:
+    def __init__(self, key: str, rules: Dict[str, Rule], to_str_keys: Optional[List[str]] = None,
+                 tolerance: datetime.timedelta=TOLERANCE) -> None:
+        """
+        Default constructor.
+        :param key: Key from ActivityWatch event to choose rules basing on.
+        :param rules: Map of key regexp pattern to `Rule` object for handling it.
+        :param to_str_keys: List of keys to make `to_str` implementation basing on. If not specified then base
+        event key value is used.
+        """
         self.key = key
-        self.tolerance = tolerance
-        self.rules = dict((re.compile(k), v) for k, v in rules.items())
+        self.rules: Dict[re.Pattern, Rule] = dict((re.compile(k), v) for k, v in rules.items())
+        self.to_str_keys = to_str_keys
 
     def __repr__(self) -> str:
         return f"RulesHandler(key={self.key}, rules_len={len(self.rules)})"
 
-    def get_event_name(self, event) -> Any:
+    def get_rule(self, event: Event) -> Optional[Tuple[Rule, List[str]]]:
+        """
+        Searches rule for specified event.
+        :param event: Event to find rule for.
+        :return: `Rule` handling specified event and ordered list of values which point to the rule.
+        """
+        value = event.data[self.key]
+        values = [value]
+        rule = next((rule for (regex, rule) in self.rules.items() if regex.match(value)), None)
+        if rule and rule.subhandler:
+            rule, subhandler_values = rule.subhandler.get_rule(event)
+            values.extend(subhandler_values)
+        return rule, values
+
+    def get_event_name(self, event: Event) -> Any:
         return event.data[self.key]
 
-    def _span_event_down(self, event: Event, interval: Interval) -> Interval:
-        """
-        Recursively updates event down starting after specified interval.
-        :param event: Event to apply.
-        :param interval: Interval to start apply after.
-        :return: Last resulting interval.
-        """
-        # Recursive implementation makes stack overflow.
-        while interval.next:
-            interval = interval.next
-            ends_diff = interval.compare_with_time(event.timestamp + event.duration, self.tolerance, False)
-            if ends_diff == 0:
-                interval.events.append(event)
-                # TODO update name
-                return interval
-            elif ends_diff < 0:
-                interval = interval.separate_new_at_start(event, self.tolerance)
-                # TODO update name
-                return interval
-            else:
-                interval.events.append(event)
-                # TODO update name
-        return interval
 
-    def apply_events(self, events: List[Event], interval: Interval) -> Dict[str, int]:
-        """
-        Applies events to the specified linked list of intervals.
-        Expected that this list contains from "afk" and "watchdog" watchers, i.e. events out of bounds of existing
-        intervals should be ignored.
-        :param events: List of events to apply.
-        :param interval: Node of linked list to apply events onto. Out parameter.
-        :return: Dictionary of metrics obtained on applying events.
-        """
-        # Metrics to measure each bucket importance.
-        metrics = {
-            'cnt_skipped_too_short': 0,
-            'cnt_skipped_before_afk': 0,
-            'cnt_skipped_after_afk': 0,
-            'cnt_handled': 0,
-            'cnt_match_interval': 0,
-            'cnt_inside_interval': 0,
-            'cnt_split_one_interval': 0,
-            'cnt_split_few_intervals': 0,
-        }
-        for event in events:
-            # Skip too short events.
-            if event.duration < self.tolerance:
-                metrics['cnt_skipped_too_short'] += 1
-                continue
-            # Compare closest interval boundaries with event boundaries and update intervals linked list.
-            # Following cases are possible:
-            #   [-----]      <- existing interval boundaries (like 'afk')
-            # ----------------------------------------------------------- events
-            # []|     |       <- 1. skip as 'out of boundaries'
-            # [---]   |       <- 2. split interval with new on the start
-            # [-------]       <- 3. just add event to interval
-            # [---------]     <- 4. span event on few intervals
-            #   [--]  |        <- 5. split interval with new on the start
-            #   [-----]        <- 6. just add event to interval
-            #   [-------]      <- 7. span event on few intervals
-            #   | [-] |         <- 8. split interval on 3
-            #   | [---]         <- 9. split interval with new on the end
-            #   | [-----]       <- 10. split current interval with new on the end and span event on few intervals
-            #   |     [--]       <- 11. skip as 'out of boundaries'
-            #   |     |  [---]   <- 12. skip as 'out of boundaries'
-            event_end = event.timestamp + event.duration
-            # Find closest interval started before event start time.
-            interval = interval.find_closest(event.timestamp, self.tolerance, by_end_time=False)
-            # Declare some points to compare.
-            interval_end_minus_event_start = interval.compare_with_time(event.timestamp, self.tolerance, False)
-            interval_start_minus_event_end = interval.compare_with_time(event_end, self.tolerance, True)
-            # 1) If event completely before closest interval then it is "out of AFK" - skip it.
-            if interval_start_minus_event_end < 0:
-                LOG.debug("  Skipping %s event happened before all 'AFK' events "
-                          "- user didn't work those time.", event_to_str(event))
-                metrics['cnt_skipped_before_afk'] += 1
-                continue
-            # 11, 12) If event is after closest interval then it is "out of AFK" - skip it.
-            if interval_end_minus_event_start >= 0:
-                LOG.debug("  Skipping %s event happened after/out of 'AFK' events "
-                          "- user didn't work those time.", event_to_str(event))
-                metrics['cnt_skipped_after_afk'] += 1
-                continue
-            starts_diff = interval.compare_with_time(event.timestamp, self.tolerance, True)
-            ends_diff = interval.compare_with_time(event_end, self.tolerance, False)
-            if starts_diff == 0:
-                if ends_diff == 0:
-                    # 6) Event matches interval.
-                    interval.events.append(event)
-                    # TODO update name
-                    metrics['cnt_match_interval'] += 1
-                elif ends_diff < 0:
-                    # 5) Event start matches interval and event ends inside it.
-                    interval = interval.separate_new_at_start(event, self.tolerance)
-                    # TODO update name
-                    metrics['cnt_split_one_interval'] += 1
-                else:
-                    # 7) Event start matches interval and event ends after it.
-                    interval = self._span_event_down(event, interval)
-                    metrics['cnt_split_few_intervals'] += 1
-            elif starts_diff > 0:
-                if ends_diff == 0:
-                    # 9) Event starts inside interval and ends matches.
-                    interval = interval.separate_new_at_end(event, self.tolerance)
-                    # TODO update name
-                    metrics['cnt_split_one_interval'] += 1
-                elif ends_diff < 0:
-                    # 8) Event starts and ends inside interval.
-                    interval = interval.separate_new_at_middle(event, self.tolerance)
-                    # TODO update names for all 3
-                    metrics['cnt_inside_interval'] += 1
-                else:
-                    # 10) Event starts inside interval and ends after it.
-                    interval = interval.separate_new_at_end(event, self.tolerance)
-                    # TODO update name
-                    interval = self._span_event_down(event, interval)
-                    metrics['cnt_split_few_intervals'] += 1
+def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timedelta) -> Interval:
+    """
+    Recursively updates event down starting after specified interval.
+    :param event: Event to apply.
+    :param interval: Interval to start apply after.
+    :param tolerance: Tolerance to match events boundaries to intervals.
+    :return: Last resulting interval.
+    """
+    # Recursive implementation makes stack overflow.
+    while interval.next:
+        interval = interval.next
+        ends_diff = interval.compare_with_time(event.timestamp + event.duration, tolerance, False)
+        if ends_diff == 0:
+            interval.events.append(event)
+            # TODO update name
+            return interval
+        elif ends_diff < 0:
+            interval = interval.separate_new_at_start(event, tolerance)
+            # TODO update name
+            return interval
+        else:
+            interval.events.append(event)
+            # TODO update name
+    return interval
+
+
+def apply_events(events: List[Event], interval: Interval, tolerance: datetime.timedelta) -> Dict[str, int]:
+    """
+    Applies events to the specified linked list of intervals.
+    Expected that this list contains from "afk" and "watchdog" watchers, i.e. events out of bounds of existing
+    intervals should be ignored.
+    :param events: List of events to apply.
+    :param interval: Node of linked list to apply events onto. Out parameter.
+    :param tolerance: Tolerance to match events boundaries to intervals.
+    :return: Dictionary of metrics obtained on applying events.
+    """
+    # Metrics to measure each bucket importance.
+    metrics = {
+        'cnt_skipped_too_short': 0,
+        'cnt_skipped_before_afk': 0,
+        'cnt_skipped_after_afk': 0,
+        'cnt_handled': 0,
+        'cnt_match_interval': 0,
+        'cnt_inside_interval': 0,
+        'cnt_split_one_interval': 0,
+        'cnt_split_few_intervals': 0,
+    }
+    for event in events:
+        # Skip too short events.
+        if event.duration < tolerance:
+            metrics['cnt_skipped_too_short'] += 1
+            continue
+        # Compare closest interval boundaries with event boundaries and update intervals linked list.
+        # Following cases are possible:
+        #   [-----]      <- existing interval boundaries (like 'afk')
+        # ----------------------------------------------------------- events
+        # []|     |       <- 1. skip as 'out of boundaries'
+        # [---]   |       <- 2. split interval with new on the start
+        # [-------]       <- 3. just add event to interval
+        # [---------]     <- 4. span event on few intervals
+        #   [--]  |        <- 5. split interval with new on the start
+        #   [-----]        <- 6. just add event to interval
+        #   [-------]      <- 7. span event on few intervals
+        #   | [-] |         <- 8. split interval on 3
+        #   | [---]         <- 9. split interval with new on the end
+        #   | [-----]       <- 10. split current interval with new on the end and span event on few intervals
+        #   |     [--]       <- 11. skip as 'out of boundaries'
+        #   |     |  [---]   <- 12. skip as 'out of boundaries'
+        event_end = event.timestamp + event.duration
+        # Find closest interval started before event start time.
+        interval = interval.find_closest(event.timestamp, tolerance, by_end_time=False)
+        # Declare some points to compare.
+        interval_end_minus_event_start = interval.compare_with_time(event.timestamp, tolerance, False)
+        interval_start_minus_event_end = interval.compare_with_time(event_end, tolerance, True)
+        # 1) If event completely before closest interval then it is "out of AFK" - skip it.
+        if interval_start_minus_event_end < 0:
+            LOG.debug("  Skipping %s event happened before all 'AFK' events "
+                        "- user didn't work those time.", event_to_str(event))
+            metrics['cnt_skipped_before_afk'] += 1
+            continue
+        # 11, 12) If event is after closest interval then it is "out of AFK" - skip it.
+        if interval_end_minus_event_start >= 0:
+            LOG.debug("  Skipping %s event happened after/out of 'AFK' events "
+                        "- user didn't work those time.", event_to_str(event))
+            metrics['cnt_skipped_after_afk'] += 1
+            continue
+        starts_diff = interval.compare_with_time(event.timestamp, tolerance, True)
+        ends_diff = interval.compare_with_time(event_end, tolerance, False)
+        if starts_diff == 0:
+            if ends_diff == 0:
+                # 6) Event matches interval.
+                interval.events.append(event)
+                # TODO update name
+                metrics['cnt_match_interval'] += 1
+            elif ends_diff < 0:
+                # 5) Event start matches interval and event ends inside it.
+                interval = interval.separate_new_at_start(event, tolerance)
+                # TODO update name
+                metrics['cnt_split_one_interval'] += 1
             else:
-                if ends_diff == 0:
-                    # 3) Event started before "AFK" and ends exactly on first interval end.
-                    interval.events.append(event)
-                    # TODO update name
-                    metrics['cnt_match_interval'] += 1
-                elif ends_diff < 0:
-                    # 2) Event started before "AFK" and ends inside first interval.
-                    interval = interval.separate_new_at_start(event, self.tolerance)
-                    # TODO update name
-                    metrics['cnt_split_one_interval'] += 1
-                else:
-                    # 4) Event started before "AFK" and ends after first interval.
-                    interval.events.append(event)
-                    # TODO update name
-                    interval = self._span_event_down(event, interval)
-                    metrics['cnt_split_few_intervals'] += 1
-            metrics['cnt_handled'] += 1
-        return metrics
+                # 7) Event start matches interval and event ends after it.
+                interval = _span_event_down(event, interval, tolerance)
+                metrics['cnt_split_few_intervals'] += 1
+        elif starts_diff > 0:
+            if ends_diff == 0:
+                # 9) Event starts inside interval and ends matches.
+                interval = interval.separate_new_at_end(event, tolerance)
+                # TODO update name
+                metrics['cnt_split_one_interval'] += 1
+            elif ends_diff < 0:
+                # 8) Event starts and ends inside interval.
+                interval = interval.separate_new_at_middle(event, tolerance)
+                # TODO update names for all 3
+                metrics['cnt_inside_interval'] += 1
+            else:
+                # 10) Event starts inside interval and ends after it.
+                interval = interval.separate_new_at_end(event, tolerance)
+                # TODO update name
+                interval = _span_event_down(event, interval, tolerance)
+                metrics['cnt_split_few_intervals'] += 1
+        else:
+            if ends_diff == 0:
+                # 3) Event started before "AFK" and ends exactly on first interval end.
+                interval.events.append(event)
+                # TODO update name
+                metrics['cnt_match_interval'] += 1
+            elif ends_diff < 0:
+                # 2) Event started before "AFK" and ends inside first interval.
+                interval = interval.separate_new_at_start(event, tolerance)
+                # TODO update name
+                metrics['cnt_split_one_interval'] += 1
+            else:
+                # 4) Event started before "AFK" and ends after first interval.
+                interval.events.append(event)
+                # TODO update name
+                interval = _span_event_down(event, interval, tolerance)
+                metrics['cnt_split_few_intervals'] += 1
+        metrics['cnt_handled'] += 1
+    return metrics
 
 
 def check_and_print_intervals(interval: Interval, max_events_per_interval: int, last_bucket_name: str,
-                              level: logging._Level = logging.INFO) -> void:
+                              level: logging._Level = logging.INFO) -> None:
     """
     Performs checks for validity of resulting intervals and prints results for manual checks.
     :param interval: Interval to check linked list from.
@@ -479,6 +527,14 @@ def check_and_print_intervals(interval: Interval, max_events_per_interval: int, 
                              " Surroundings: %s"
                              % (last_bucket_name, max_events_per_interval, interval,
                                 interval.intervals_to_string(-2, 4, True)))
+        last_bucket_id = None
+        for event in interval.events:
+            if event.bucket_id == last_bucket_id:
+                raise ValueError("After '%s' bucket events applied few events from same bucket appeared in %s."\
+                                 " Surroundings: %s"
+                                 % (last_bucket_name, last_bucket_id, interval,
+                                    interval.intervals_to_string(-2, 4, True)))
+            last_bucket_id = event.bucket_id
         intervals.append(interval)
 
     interval.iterate_next(check_and_print)
@@ -492,29 +548,18 @@ def check_and_print_intervals(interval: Interval, max_events_per_interval: int, 
 
 
 def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime.datetime, end_time: datetime.datetime,
-                        buckets: List[str], rules: Dict[str, RulesHandler], tolerance: datetime.timedelta) -> Interval:
+                        buckets: List[str], tolerance: datetime.timedelta) -> Interval:
     """
     Gets events from specified buckets, prints report by them and returns linked list of `Interval`-s.
     :param awc: ActivityWatch client to use.
     :param start_time: Start time for the report.
     :param end_time: End time for the report.
     :param buckets: List of buckets to report events from.
-    :param rules: User-specific map of rules to make report with.
     :param tolerance: Tolerance to match events boundaries to intervals.
     :return: Last touched `Interval` from linked list built from events.
     """
-
-    # Expected output:
-    # A) Worked at intervals: A, B, C - Total ZZ
-    # B) TOTAL not afk = Z
-    # C) Unknown = ZZZ
-    # D) 2h = window "xxx"
-    #   1h = browser "XXX" site
-    #   1.75h = IDEA on projectPath
-    #   0.25 = meeting in Zoom from XXX to YYY
-    #   0.25 = meeting in Slack with ZZZ from XXX to YYY
-    #   0.25 = Skype conversations in durations A, B, C
     cur_interval: Interval = None
+    bucket_ids_to_handle = list(buckets.keys())
     buckets_cnt = 0
 
     # 1) Handle "aw-watcher-afk" bucket events first to build base intervals to determine activity by.
@@ -523,10 +568,11 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
     # Data contains the only 'status' key with "afk" and "not-afk" values. Make sense extract 100% activities in
     # periods from "not-afk" to "afk" and in remained intervals if other watchers shows "meeting".
     # data={status: [afk, not-afk]}
-    bucket_id = next((x for x in buckets.keys() if x.startswith("aw-watcher-afk")), None)
+    bucket_id = next((x for x in bucket_ids_to_handle if x.startswith("aw-watcher-afk")), None)
     if bucket_id:
-        events: List[Event] = awc.get_events(bucket_id, start=start_time, end=end_time)
+        events: List[object] = awc.get_events(bucket_id, start=start_time, end=end_time)
         events.sort(key=lambda e: e.timestamp)
+        events = [Event(bucket_id, x.timestamp, x.duration, x.data) for x in events]
         for event in events:
             if not cur_interval:
                 cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
@@ -544,6 +590,7 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
                     raise AssertionError("Closest previous interval wasn't found during 'AFK' bucket events handling"
                                          f"on {event_to_str(event)}.")
             cur_interval.name = event.data['status']
+        bucket_ids_to_handle.remove(bucket_id)
         buckets_cnt += 1
     else:
         LOG.info("No AFK bucket found. Stopping here - no more events expected.")
@@ -560,8 +607,10 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
     # "aw-stopwatch" - active watcher, it is managed by user directly.
     # Make sense measuring duration per unique label from "running=true" to "running=false".
     # data={label: str, running: bool}
-    events: List[Event] = awc.get_events("aw-stopwatch", start=start_time, end=end_time)
+    bucket_id = "aw-stopwatch"
+    events: List[object] = awc.get_events(bucket_id, start=start_time, end=end_time)
     if events:
+        events = [Event(bucket_id, x.id, x.timestamp, x.duration, x.data) for x in events]
         for event in events:  # TODO implement.
             if cur_interval:
                 # Events are sorted here.
@@ -574,52 +623,129 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
         check_and_print_intervals(cur_interval, buckets_cnt, "stopwatch", True)
     else:
         LOG.info("No stopwatch events found.")
+    bucket_ids_to_handle.remove(bucket_id)
 
     # 3) Iterate through remained buckets by given rules.
     # Assume that they are all "passive" watchers reacting on 3d-party application events which leads to:
     # - Events may have bounds out of 'AFK' events therefore don't represent user activity (like "aw-idea").
     # - Event start means some user activity, but event end may be just some timeout or "computer waken up".
     # - Events may have not enough data to describe state (like "aw-window-watcher" behavior on Linux Wayland).
-    for bucket_id in buckets.keys():
-        rule = next((x for x in rules.keys() if bucket_id.startswith), None)
-        if rule is None:
-            LOG.info("Skipping '%s' bucket as not described in rules.", bucket_id)
-            continue
+    for bucket_id in bucket_ids_to_handle:
+        raw_events = awc.get_events(bucket_id, start=start_time, end=end_time)
+        if raw_events:
+            LOG.info(f"Applying '{bucket_id}' {len(raw_events)} events with.")
+            # Note that some watchers (like IDEA watcher from few windows) makes events covering each other,
+            # i.e. not adjusted. But on each focus change it do generates new event.
+            # So first sort all events and cut to make adjusted.
+            raw_events.sort(key=lambda e: e.timestamp)
+            prev_event = None
+            events = []  # Convert all events into inner named tuple with more fields.
+            for event in raw_events:  # Note that input events are mutable, but `Event` is immutable.
+                if prev_event:
+                    if prev_event.timestamp + prev_event.duration > event.timestamp:
+                        prev_event.duration = event.timestamp - prev_event.timestamp
+                    events.append(Event(bucket_id, prev_event.timestamp, prev_event.duration, prev_event.data))
+                prev_event = event
+            events.append(prev_event)  # Add last event.
+            # Handle events.
+            metrics = apply_events(events, cur_interval, tolerance)
+            metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
+            LOG.info("In result got %d intervals. Details:\n  %s", cur_interval.get_count(),
+                        "\n  ".join(metrics_strings))
+            buckets_cnt += 1
+            check_and_print_intervals(cur_interval, buckets_cnt, bucket_id, logging.WARN)
         else:
-            rules_handler = next((v for k, v in rules.items() if bucket_id.startswith(k)), None)
-            if rules_handler:
-                rules_handler.tolerance = tolerance  # TODO handle it more beautiful.
-                events = awc.get_events(bucket_id, start=start_time, end=end_time)
-                if events:
-                    LOG.info("Handling '%s' %d events with %s", bucket_id, len(events), rules_handler)
-                    # Note that some watchers (like IDEA watcher from few windows) makes events covering each other,
-                    # i.e. not adjusted. But on each focus change it do generates new event.
-                    # So first sort all events and cut to make adjusted.
-                    events.sort(key=lambda e: e.timestamp)
-                    prev_event = None
-                    for event in events:
-                        if prev_event and prev_event.timestamp + prev_event.duration > event.timestamp:
-                            prev_event.duration = event.timestamp - prev_event.timestamp
-                        prev_event = event
-                    # Handle events.
-                    metrics = rules_handler.apply_events(events, cur_interval)
-                    metrics_strings = (f"{k}: {v}" for k, v in metrics.items())
-                    LOG.info("In result got %d intervals. Details:\n  %s", cur_interval.get_count(),
-                             "\n  ".join(metrics_strings))
-                    buckets_cnt += 1
-                    check_and_print_intervals(cur_interval, buckets_cnt, bucket_id, logging.WARN)
-                else:
-                    LOG.info("'%s' bucket doesn't have events in %s..%s.", bucket_id, start_time, end_time)
+            LOG.info("'%s' bucket doesn't have events in %s..%s.", bucket_id, start_time, end_time)
+    return cur_interval
 
-    # 4) Gather and print metrics.
-    # B: It is simple "aw-watcher-afk" data with not_afk.
+
+@dataclasses.dataclass
+class IntervalHandler:
+    """
+    Structure to represent analyzed interval with attributes required to TODO 
+    """
+
+    interval: Interval
+    rule: Rule
+    event: Event
+    values: List[str]
+    value: str
+
+
+def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, RulesHandler]) -> Dict[str, float]:
+    """
+    :param interval: Some interval from the full linked list of intervals to analyze.
+    :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
+    :param rules: User-specific map of event bucket name prefix to `RulesHandler` to handle data intervals.
+    :return Dictionary of report interval description to effort. # TODO return more complicated object.
+    """
+
+    # Expected output:
+    # A) Worked at intervals: A, B, C
+    # B) TOTAL worked
+    # C) Unknown = ZZZ
+    # D) 2h = window "xxx"
+    #   1h = browser "XXX" site
+    #   1.75h = IDEA on projectPath
+    #   0.25 = meeting in Zoom from XXX to YYY
+    #   0.25 = meeting in Slack with ZZZ from XXX to YYY
+    #   0.25 = Skype conversations in durations A, B, C
+    # E) Gaps between events - to measure activities with turned off laptop (offline meetings, lunches, etc.) 
+
+    # B: It is "aw-watcher-afk" data with not_afk plus "aw-watchdog" events.
     total_not_afk: float = 0.0
     # A: It are intervals where not_afk or '"not_afk": True' or "aw-stopwatch" data.
     aw_active_intervals: List[Tuple[datetime.datetime, datetime.datetime]] = []
     # D: It is A with more specific activity aggregated by this activity.
     tasks: Dict[str, float] = {}
-    # TODO implement
-    return cur_interval
+    # Assemble full set of RulesHandler-s from predifined ones and custom.
+    bucket_prefix_to_ruleshandler: Dict[str, RulesHandler] = dict(custom_rules)
+    if "aw-watcher-afk" not in bucket_prefix_to_ruleshandler:
+        bucket_prefix_to_ruleshandler["aw-watcher-afk"] = RulesHandler('status', {
+            "afk": Rule(500, ignore=True),
+            "not-afk": Rule(0)
+        })
+    if "aw-stopwatch" not in bucket_prefix_to_ruleshandler:
+        bucket_prefix_to_ruleshandler["aw-stopwatch"] = RulesHandler('label', {
+            ".*": Rule(0, subhandler=RulesHandler('running', {
+                "true": Rule(1000),
+                "false": Rule(0, ignore=True)  # Even if it is the only event in interval it carries no activity.
+            }))
+        })
+    # Iterate all intervals, find out main event and associated rule for each, collect map of "activity" per duration.
+    cur_interval: Interval = interval.iterate_prev()  # Go to the first interval.
+    activity_counter = collections.Counter()
+    # Prepare dummy to use first interval on the very first iteration below.
+    cur_interval = Interval(cur_interval.start_time, cur_interval.end_time, None, cur_interval)
+    while cur_interval.next:
+        cur_interval = cur_interval.next
+        # Find out all rules applicable to the interval.
+        interval_handler: IntervalHandler = None
+        for event in cur_interval.events:
+            handler: RulesHandler = next((handler for bucket_prefix, handler in bucket_prefix_to_ruleshandler.items()
+                                         if event.bucket_id.startswith(bucket_prefix)), None)
+            if not handler:
+                LOG.info(f"Can't find handler for {event}")
+                continue
+            rule, values = handler.get_rule(event)
+            if rule:
+                # Keep only rule with the highest priority.
+                if interval_handler is None or rule.priority > interval_handler.rule.priority:
+                    interval_handler = IntervalHandler(cur_interval, rule, event, values, "->".join(values))
+        # Decide whether to count this interval or not.
+        if interval_handler is None:
+            LOG.info(f"Skipping {cur_interval} because it doesn't contain events matching any rule."
+                     + " Events:\n  " + "\n  ".join(str(x) for x in cur_interval.events))
+            continue
+        if interval_handler.rule.ignore:
+            LOG.debug(f"Skipping {interval_handler.interval} because of {interval_handler.rule} priority is highest"
+                      f" for {interval_handler.event}.")
+            continue
+        # is_fresh = cur_interval.prev is None or cur_interval.prev.end_time != cur_interval.start_time
+        # TODO collect rule+event into buckets.
+        activity_counter[interval_handler.value] += interval_handler.interval.get_duration()
+    # TODO Apply `round_to` with distributing small buckets into wider ones.
+    return activity_counter
 
 
 # Min duration one activity events sum to show.
@@ -630,33 +756,33 @@ RULES = {
     # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
     # data={app: str, title: str}.
     "aw-watcher-window": RulesHandler("app", {
-        "zoom": Rule(not_afk=True),
-        "Slack": Rule(subrules=RulesHandler("title", {
+        "zoom": Rule(90),
+        "Slack": Rule(89, subhandler=RulesHandler("title", {
             # BTW it is not the only case.
-            ".*screen share": Rule(not_afk=True),
+            ".*screen share": Rule(89),
         })),
         # Skype doesn't provide info that it is a meeting.
-        "Skype": Rule(not_afk=True),
-        "unknown": Rule(),  # Means that window manager was unable to gather data. Discord,
-        "flameshot": Rule(),  # Screenshot tool.
-        "jetbrains-idea": Rule(),  # IDE. TODO ~2 seconds after "afk" watcher events -> are not counted!
-        "Double Commander": Rule(),  # File manager.
-        "smplayer": Rule(),  # Video player.
-        "FeatherPad": Rule(),  # Text editor.
+        "Skype": Rule(88),
+        "unknown": Rule(0),  # Means that window manager was unable to gather data (for Discord, )
+        "flameshot": Rule(5),  # Screenshot tool.
+        "jetbrains-idea": Rule(40),  # IDE. TODO ~2 seconds after "afk" watcher events -> are not counted!
+        "Double Commander": Rule(35),  # File manager.
+        "smplayer": Rule(36),  # Video player.
+        "FeatherPad": Rule(37),  # Text editor.
     }),
     # Passive watcher, always provides value, even if user AFK.
     # But "change value" event most probably shows activity (excluding web pages which change title periodically).
     # data={url: str, title: str, audible: bool, incognito: bool, tabCount: int}.
     "aw-watcher-web": RulesHandler("url", {
-        "https://vimbox.skyeng.ru/.*": Rule(not_afk=True, ignore=True),
-        "https://gitlab.akvelon.net:9443/.*": Rule(),
-        "https://akvelon.atlassian.net/wiki/.*": Rule(),
-        "https://gitlab.intapp.com/.*": Rule(),
-        "https://wiki.intapp.com/wiki/.*": Rule(),
+        "https://vimbox.skyeng.ru/.*": Rule(87, ignore=True),
+        "https://gitlab.akvelon.net:9443/.*": Rule(41),
+        "https://akvelon.atlassian.net/wiki/.*": Rule(42),
+        "https://gitlab.intapp.com/.*": Rule(43),
+        "https://wiki.intapp.com/wiki/.*": Rule(44),
     }),
-    # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
+    # Passive watcher, always provides value, even if user AFK. But "change value" event shows activity/focus on.
     # data={file: str, projectPath: str, language: str, editor: const, editorVersion: const, eventType: const}
-    "aw-watcher-idea": RulesHandler("file", {}),
+    "aw-watcher-idea": RulesHandler("file", {}),  # TODO build some rules for IDEA
 }
 
 
@@ -667,10 +793,12 @@ def main():
     # dayend = daystart + datetime.timedelta(days=1)
     # TODO support logging levels.
 
-    awc = aw_client.ActivityWatchClient("activity_merger")
-    buckets = awc.get_buckets()
+    client = aw_client.ActivityWatchClient("activity_merger")
+    buckets = client.get_buckets()
     LOG.info(f"Buckets: {buckets.keys()}")
-    report_from_buckets(awc, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, RULES, TOLERANCE)
+    interval = report_from_buckets(client, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, TOLERANCE)
+    report = analyze_intervals(interval, MIN_DURATION_SEC, RULES)
+    LOG.info(report)
 
 
 def setup_logging():
