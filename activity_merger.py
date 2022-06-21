@@ -60,12 +60,12 @@ class Interval:
     def __repr__(self):
         return self.to_str(False)
 
-    def set_prev(self, prev_interval: Interval):
+    def set_prev(self, prev_interval: 'Interval') -> None:
         self.prev = prev_interval
         if prev_interval:
             prev_interval.next = self
 
-    def set_next(self, next_interval: Interval):
+    def set_next(self, next_interval: 'Interval') -> None:
         self.next = next_interval
         if next_interval:
             next_interval.prev = self
@@ -92,7 +92,7 @@ class Interval:
         """
         return (self.end_time - self.start_time).total_seconds()
 
-    def iterate_next(self, checker: Callable[[Interval], bool] = None) -> Interval:
+    def iterate_next(self, checker: Callable[['Interval'], bool] = None) -> 'Interval':
         """
         Iterates 'next' intervals with checking order of nodes.
         :param checker: Lambda to return True if provided `Interval` is searched one.
@@ -113,7 +113,7 @@ class Interval:
             interval = tmp
         return interval
 
-    def iterate_prev(self, checker: Callable[[Interval], bool] = None) -> Interval:
+    def iterate_prev(self, checker: Callable[['Interval'], bool] = None) -> 'Interval':
         """
         Iterates 'prev' intervals with checking order of nodes.
         :param checker: Lambda to return True if provided `Interval` is searched one.
@@ -141,7 +141,7 @@ class Interval:
             cnt += 1
         return cnt
 
-    def get_range(self, offset: int=0, num: int=1, from_earliest=False) -> List[Interval]:
+    def get_range(self, offset: int=0, num: int=1, from_earliest=False) -> List['Interval']:
         """
         Builds list of surrounding intervals.
         :param offset: Negative (earlier in time) or positive (later) integer to start get intervals from.
@@ -202,7 +202,7 @@ class Interval:
         diff = time - (self.start_time if is_start else self.end_time)
         return 0 if abs(diff) <= tolerance else diff.total_seconds()
 
-    def find_closest(self, date: datetime.datetime, tolerance: datetime.timedelta, by_end_time: bool) -> Interval:
+    def find_closest(self, date: datetime.datetime, tolerance: datetime.timedelta, by_end_time: bool) -> 'Interval':
         """
         Finds interval in the linked list with selectively `end_time` or `start_time` closer to the given time.
         First tries to find first interval on the specified time or right before. If there are no such intervals
@@ -218,7 +218,7 @@ class Interval:
         else:  # Date is before current interval (need search in previous intervals).
             return self.iterate_prev(lambda x: (x.end_time if by_end_time else x.start_time) - tolerance <= date)
 
-    def new_after(self, event: Event) -> Interval:
+    def new_after(self, event: Event) -> 'Interval':
         """
         Creates new `Interval` from specified event and inserts it after current.
         Doesn't use event start time. Doesn't put 'next' for current event.
@@ -231,7 +231,7 @@ class Interval:
         self.set_next(interval)
         return interval
 
-    def separate_new_at_start(self, event: Event, tolerance: datetime.timedelta) -> Interval:
+    def separate_new_at_start(self, event: Event, tolerance: datetime.timedelta) -> 'Interval':
         """
         Separates current `Interval` to 2, with earliest part based on the given event.
         I.e. from [0<-self->3] makes [0<-new->1][1<-self->3]. Does nothing if resulting interval duration shorter than
@@ -248,7 +248,7 @@ class Interval:
         self.start_time = interval.end_time
         return interval
 
-    def separate_new_at_end(self, event: Event, tolerance: datetime.timedelta) -> Interval:
+    def separate_new_at_end(self, event: Event, tolerance: datetime.timedelta) -> 'Interval':
         """
         Separates current `Interval` to 2, with latest part based on the given event.
         I.e. from [0<-self->3] makes [0<-self->2][2<-new->3]. Does nothing if resulting interval duration shorter than
@@ -264,7 +264,7 @@ class Interval:
         self.end_time = interval.start_time
         return interval
 
-    def separate_new_at_middle(self, event: Event, tolerance: datetime.timedelta) -> Interval:
+    def separate_new_at_middle(self, event: Event, tolerance: datetime.timedelta) -> 'Interval':
         """
         Separates current `Interval` to 3, with only middle parh based on given event.
         I.e. from [0<-self->3] makes [0<-self->1][1<-new->2][2<-self->3].
@@ -303,25 +303,31 @@ class Interval:
 class Rule:
     """
     Structure which represents how to compare related event with others.
-    :param priority: Priority of the rule, greater value => more chance to be used among remained.
+    :param key_pattern: Regexp pattern to handle intervals of. Make sense only in scope of specific `EventKeyHandler`.
+    :param priority: Priority of the rule, greater value => more chance to be used among remained rules.
     Better to use unique priority values, otherwise conflicts will be solved inpredictably.
-    Note that default priority for "afk" watcher is 500, for "watchdog" - 1000.
-    :param subhandler: `RulesHandler` for the different key of event with its own set of rules.
+    Note that default priority for "afk" watcher 'afk' state is 500, 'not-afk' rule - 1,
+    for "watchdog" "enabled" state - 1000.
+    :param subhandler: `EventKeyHandler` for the different key of event with its own set of rules.
     It allows to take into consideration several keys of the event.
-    :param ignore: Flag to ignore this activity for reports. May be used for "not work" activities.
+    :param skip: Flag to skip this activity from reports. May be used for "non working" activities.
+    :param reveal_rules: Flag for "service" rules. They useless for report and in case if no rule provided for interval
+    will cause some hints about necessity of new rule. Used for default "not-afk" events handler.
     """
 
+    key_pattern: str
     priority: int
-    subhandler: RulesHandler = None
-    ignore: bool = False
-    # def __init__(self, priority: int = 1, subhandler: RulesHandler = None,
+    subhandler: 'EventKeyHandler' = None
+    skip: bool = False
+    reveal_rules: bool = False
+    # def __init__(self, priority: int = 1, subhandler: EventKeyHandler = None,
     #              ignore: bool = False) -> None:
     #     """
     #     Constuctor.
     #     :param priority: Priority of the rule, greater value = more chance to be used among remained.
     #     Better to use unique priority values, otherwise conflicts will be solved inpredictably.
     #     Note that default priority for "afk" watcher is 50, for "watchdog" - 100.
-    #     :param subhandler: `RulesHandler` for the different key with its own set of rules to apply only for this rule.
+    #     :param subhandler: `EventKeyHandler` for the different key with its own set of rules to apply only for this rule.
     #     It allows to handle all keys of the event.
     #     :param ignore: Flag to ignore this activity for reports. May be used for "not work" activities.
     #     """
@@ -330,24 +336,26 @@ class Rule:
     #     self.ignore = ignore
 
 
-class RulesHandler:
+class EventKeyHandler:
+    """
+    Class to handle one `Event` key with different `Rule`-s.
+    """
 
-    # TODO add parameter for "to_str" keys set (for firefox 'title' and so on)
-    def __init__(self, key: str, rules: Dict[str, Rule], to_str_keys: Optional[List[str]] = None,
+    def __init__(self, key: str, rules: List[Rule], to_str_keys: Optional[List[str]] = None,
                  tolerance: datetime.timedelta=TOLERANCE) -> None:
         """
         Default constructor.
         :param key: Key from ActivityWatch event to choose rules basing on.
-        :param rules: Map of key regexp pattern to `Rule` object for handling it.
+        :param rules: List of `Rule` objects to handle differrent "key" values.
         :param to_str_keys: List of keys to make `to_str` implementation basing on. If not specified then base
         event key value is used.
         """
         self.key = key
-        self.rules: Dict[re.Pattern, Rule] = dict((re.compile(k), v) for k, v in rules.items())
+        self.rules: Dict[re.Pattern, Rule] = dict((re.compile(rule.key_pattern), rule) for rule in rules)
         self.to_str_keys = to_str_keys
 
     def __repr__(self) -> str:
-        return f"RulesHandler(key={self.key}, rules_len={len(self.rules)})"
+        return f"EventKeyHandler(key={self.key}, rules_len={len(self.rules)})"
 
     def get_rule(self, event: Event) -> Optional[Tuple[Rule, List[str]]]:
         """
@@ -509,7 +517,7 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
 
 
 def check_and_print_intervals(interval: Interval, max_events_per_interval: int, last_bucket_name: str,
-                              level: logging._Level = logging.INFO) -> None:
+                              level: int = logging.INFO) -> None:
     """
     Performs checks for validity of resulting intervals and prints results for manual checks.
     :param interval: Interval to check linked list from.
@@ -671,13 +679,17 @@ class IntervalHandler:
     values: List[str]
     value: str
 
+    def build_rule_name(self) -> str:
+        return # TODO build rule name for metrics.
 
-def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, RulesHandler]) -> Dict[str, float]:
+
+def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, EventKeyHandler]
+        ) -> Tuple[Dict[str, float], collections.Counter]:
     """
     :param interval: Some interval from the full linked list of intervals to analyze.
     :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
-    :param rules: User-specific map of event bucket name prefix to `RulesHandler` to handle data intervals.
-    :return Dictionary of report interval description to effort. # TODO return more complicated object.
+    :param rules: User-specific map of event bucket name prefix to `EventKeyHandler` to handle data intervals.
+    :return Tuple with 1st element - map of report interval description to effort, 2nd element - map of metrics. # TODO return more complicated object.
     """
 
     # Expected output:
@@ -698,34 +710,51 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     aw_active_intervals: List[Tuple[datetime.datetime, datetime.datetime]] = []
     # D: It is A with more specific activity aggregated by this activity.
     tasks: Dict[str, float] = {}
-    # Assemble full set of RulesHandler-s from predifined ones and custom.
-    bucket_prefix_to_ruleshandler: Dict[str, RulesHandler] = dict(custom_rules)
+    # Assemble full set of EventKeyHandler-s from predifined ones and custom.
+    bucket_prefix_to_ruleshandler: Dict[str, EventKeyHandler] = dict(custom_rules)
     if "aw-watcher-afk" not in bucket_prefix_to_ruleshandler:
-        bucket_prefix_to_ruleshandler["aw-watcher-afk"] = RulesHandler('status', {
-            "afk": Rule(500, ignore=True),
-            "not-afk": Rule(0)
-        })
+        bucket_prefix_to_ruleshandler["aw-watcher-afk"] = EventKeyHandler('status', [
+            Rule("afk", 500, skip=True),
+            Rule("not-afk", 1, reveal_rules=True)
+        ])
     if "aw-stopwatch" not in bucket_prefix_to_ruleshandler:
-        bucket_prefix_to_ruleshandler["aw-stopwatch"] = RulesHandler('label', {
-            ".*": Rule(0, subhandler=RulesHandler('running', {
-                "true": Rule(1000),
-                "false": Rule(0, ignore=True)  # Even if it is the only event in interval it carries no activity.
-            }))
-        })
-    # Iterate all intervals, find out main event and associated rule for each, collect map of "activity" per duration.
-    cur_interval: Interval = interval.iterate_prev()  # Go to the first interval.
+        bucket_prefix_to_ruleshandler["aw-stopwatch"] = EventKeyHandler('label', [
+            Rule(".*", 0, subhandler=EventKeyHandler('running', [
+                Rule("true", 1000),
+                Rule("false", 0, skip=True)  # Even if it is the only event in interval it carries no activity.
+            ]))
+        ])
+    # Prepare to loop through intervals with searching rules, building report and metrics.
+    # Go to the first interval.
+    cur_interval: Interval = interval.iterate_prev()
+    # Make container for report.
     activity_counter = collections.Counter()
-    # Prepare dummy to use first interval on the very first iteration below.
+    # Make container for metrics.
+    metrics = {
+        'events without handlers': (0, 0),
+        'intervals without rules': (0, 0),
+        'ignored intervals': (0, 0),
+        'missed rules': (0, 0),
+    }
+    # Prepare dummy Interval to use first interval on the very first iteration below.
     cur_interval = Interval(cur_interval.start_time, cur_interval.end_time, None, cur_interval)
+    # Iterate all intervals, find out main event and associated rule for each, collect map of "activity" per duration.
     while cur_interval.next:
         cur_interval = cur_interval.next
         # Find out all rules applicable to the interval.
         interval_handler: IntervalHandler = None
         for event in cur_interval.events:
-            handler: RulesHandler = next((handler for bucket_prefix, handler in bucket_prefix_to_ruleshandler.items()
-                                         if event.bucket_id.startswith(bucket_prefix)), None)
+            handler: EventKeyHandler = next(
+                (
+                    handler for bucket_prefix, handler in bucket_prefix_to_ruleshandler.items()
+                    if event.bucket_id.startswith(bucket_prefix)
+                ),
+                None
+            )
             if not handler:
                 LOG.info(f"Can't find handler for {event}")
+                metric = metrics['events without handlers']
+                metrics['events without handlers'] = (metric[0] + 1, metric[1] + cur_interval.get_duration())
                 continue
             rule, values = handler.get_rule(event)
             if rule:
@@ -736,53 +765,64 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
         if interval_handler is None:
             LOG.info(f"Skipping {cur_interval} because it doesn't contain events matching any rule."
                      + " Events:\n  " + "\n  ".join(str(x) for x in cur_interval.events))
+            metric = metrics['intervals without rules']
+            metrics['intervals without rules'] = (metric[0] + 1, metric[1] + cur_interval.get_duration())
             continue
-        if interval_handler.rule.ignore:
+        if interval_handler.rule.skip:
             LOG.debug(f"Skipping {interval_handler.interval} because of {interval_handler.rule} priority is highest"
                       f" for {interval_handler.event}.")
+            metric = metrics['ignored intervals']
+            metrics['ignored intervals'] = (metric[0] + 1, metric[1] + cur_interval.get_duration())
             continue
+        if interval_handler.rule.reveal_rules:
+            LOG.info(f"Can't find rule for interval {cur_interval} with events:"
+                     + "  \n" +  "\n  ".join(str(x) for x in cur_interval.events))
+            metric = metrics['missed rules']
+            metrics['missed rules'] = (metric[0] + 1, metric[1] + cur_interval.get_duration())
         # is_fresh = cur_interval.prev is None or cur_interval.prev.end_time != cur_interval.start_time
-        # TODO collect rule+event into buckets.
+        metrics_rule_key = str(interval_handler.rule)
+        metric = metrics.get(metrics_rule_key, (0, 0))
+        metrics[metrics_rule_key] = (metric[0] + 1, metric[1] + cur_interval.get_duration())
         activity_counter[interval_handler.value] += interval_handler.interval.get_duration()
     # TODO Apply `round_to` with distributing small buckets into wider ones.
-    return activity_counter
+    return activity_counter, metrics
 
 
 # Min duration one activity events sum to show.
 MIN_DURATION_SEC = 15 * 60  # 0.25 hours
 # Keys matches bucket names start. If there will be few buckets with ID starting from key then all will be handled.
-# If few keys match the same bucket then only first RulesHandler will be applied to the bucket events.
+# If few keys match the same bucket then only first EventKeyHandler will be applied to the bucket events.
 RULES = {
     # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
     # data={app: str, title: str}.
-    "aw-watcher-window": RulesHandler("app", {
-        "zoom": Rule(90),
-        "Slack": Rule(89, subhandler=RulesHandler("title", {
-            # BTW it is not the only case.
-            ".*screen share": Rule(89),
-        })),
+    "aw-watcher-window": EventKeyHandler("app", [
+        Rule("zoom", 900),
+        Rule("Slack", 890, subhandler=EventKeyHandler("title", [
+            Rule("Slack | .*", 889),
+            Rule(".*screen share", 890),
+        ])),
         # Skype doesn't provide info that it is a meeting.
-        "Skype": Rule(88),
-        "unknown": Rule(0),  # Means that window manager was unable to gather data (for Discord, )
-        "flameshot": Rule(5),  # Screenshot tool.
-        "jetbrains-idea": Rule(40),  # IDE. TODO ~2 seconds after "afk" watcher events -> are not counted!
-        "Double Commander": Rule(35),  # File manager.
-        "smplayer": Rule(36),  # Video player.
-        "FeatherPad": Rule(37),  # Text editor.
-    }),
+        Rule("Skype", 880),
+        Rule("unknown", 510),  # Means that window manager was unable to gather data (for Discord, )
+        Rule("flameshot", 520),  # Screenshot tool.
+        Rule("jetbrains-idea", 40),  # IDE. TODO ~2 seconds after "afk" watcher events -> are not counted!
+        Rule("Double Commander", 35),  # File manager.
+        Rule("smplayer", 36),  # Video player.
+        Rule("FeatherPad", 37),  # Text editor.
+    ]),
     # Passive watcher, always provides value, even if user AFK.
     # But "change value" event most probably shows activity (excluding web pages which change title periodically).
     # data={url: str, title: str, audible: bool, incognito: bool, tabCount: int}.
-    "aw-watcher-web": RulesHandler("url", {
-        "https://vimbox.skyeng.ru/.*": Rule(87, ignore=True),
-        "https://gitlab.akvelon.net:9443/.*": Rule(41),
-        "https://akvelon.atlassian.net/wiki/.*": Rule(42),
-        "https://gitlab.intapp.com/.*": Rule(43),
-        "https://wiki.intapp.com/wiki/.*": Rule(44),
-    }),
+    "aw-watcher-web": EventKeyHandler("url", [
+        Rule("https://vimbox.skyeng.ru/.*", 870, skip=True),
+        Rule("https://gitlab.akvelon.net:9443/.*", 41),
+        Rule("https://akvelon.atlassian.net/wiki/.*", 42),
+        Rule("https://gitlab.intapp.com/.*", 43),
+        Rule("https://wiki.intapp.com/wiki/.*", 44),
+    ]),
     # Passive watcher, always provides value, even if user AFK. But "change value" event shows activity/focus on.
     # data={file: str, projectPath: str, language: str, editor: const, editorVersion: const, eventType: const}
-    "aw-watcher-idea": RulesHandler("file", {}),  # TODO build some rules for IDEA
+    "aw-watcher-idea": EventKeyHandler("file", {}),  # TODO build some rules for IDEA
 }
 
 
@@ -796,9 +836,17 @@ def main():
     client = aw_client.ActivityWatchClient("activity_merger")
     buckets = client.get_buckets()
     LOG.info(f"Buckets: {buckets.keys()}")
-    interval = report_from_buckets(client, datetime.datetime(2022, 2, 11), datetime.datetime(2022, 2, 12), buckets, TOLERANCE)
-    report = analyze_intervals(interval, MIN_DURATION_SEC, RULES)
-    LOG.info(report)
+    interval = report_from_buckets(
+        client,
+        datetime.datetime(2022, 2, 11),
+        datetime.datetime(2022, 2, 12),
+        buckets,
+        TOLERANCE
+    )
+    report, metrics = analyze_intervals(interval, MIN_DURATION_SEC, RULES)
+    LOG.info("Metrics from intervals anylize:\n  "
+             + "\n  ".join(f"{v[0]:4} on {datetime.timedelta(seconds=v[1])} - {k}" for k, v in metrics.items()))
+    LOG.info("Report:\n  " + "\n  ".join(f"{datetime.timedelta(seconds=v)} {k}" for k, v in report.most_common()))
 
 
 def setup_logging():
