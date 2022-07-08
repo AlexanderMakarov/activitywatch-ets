@@ -37,6 +37,9 @@ def event_to_str(event: Event):
 class Interval:
     """
     Linked list node with start and end time.
+    :param start_time: Interval start time.
+    :param end_time: Interval end time.
+    :param events: List of `Event`-s happened in this interval.
     """
 
     def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev=None, next=None) -> None:
@@ -307,6 +310,8 @@ class Rule:
     :param skip: Flag to skip this activity from reports. May be used for "non working" activities.
     :param reveal_rule: Flag for "service" rules. They useless for report and in case if no rule provided for interval
     will cause some hints about necessity of new rule. Used for default "not-afk" events handler.
+    :param merge_next: Flag to merge current interval with the next interval rule. Useful for 'new browser tab' like
+    activities.
     """
 
     key_pattern: str
@@ -315,6 +320,7 @@ class Rule:
     to_string: Callable[[str], str] = None
     skip: bool = False
     reveal_rule: bool = False
+    merge_next: bool = False
 
     def get_description(self, match: re.Match) -> Optional[str]:
         """
@@ -360,6 +366,7 @@ class EventKeyHandler:
                 if description:
                     descriptions.append(description)
                 matched_rule = rule
+                break
         if matched_rule and matched_rule.subhandler:
             matched_rule, subhandler_descriptions = matched_rule.subhandler.get_rule(event)
             descriptions.extend(subhandler_descriptions)
@@ -663,7 +670,7 @@ class IntervalHandler:
     Structure to represent analyzed interval with attributes required to TODO 
     """
 
-    interval: Interval
+    intervals: List[Interval]
     rule: Rule
     event: Event
     values: List[str]
@@ -675,12 +682,16 @@ def _increment_metric(metrics: Dict[str, Tuple[int, float]], metric_name: str, i
     metrics[metric_name] = (metric[0] + 1, metric[1] + interval.get_duration())
 
 
-def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, EventKeyHandler]
+def _intervals_duration(intervals: List[Interval]):
+    return (intervals[-1].end_time - intervals[0].start_time).total_seconds()
+
+
+def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, List[EventKeyHandler]]
         ) -> Tuple[collections.Counter, Dict[str, Tuple[int, float]]]:
     """
     :param interval: Linked list of intervals to analyze.
     :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
-    :param rules: User-specific map of event bucket name prefix to `EventKeyHandler` to handle data intervals.
+    :param rules: User-specific map of event bucket name prefix to list of `EventKeyHandler`-s to handle data intervals.
     :return Tuple of 1 - map of report interval description to effort, 2 - map of metrics. # TODO return more complicated object.
     """
 
@@ -705,17 +716,17 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     # Assemble full set of EventKeyHandler-s from predifined ones and custom.
     bucket_prefix_to_ruleshandler: Dict[str, EventKeyHandler] = dict(custom_rules)
     if "aw-watcher-afk" not in bucket_prefix_to_ruleshandler:
-        bucket_prefix_to_ruleshandler["aw-watcher-afk"] = EventKeyHandler('status', [
+        bucket_prefix_to_ruleshandler["aw-watcher-afk"] = [EventKeyHandler('status', [
             Rule("afk", 500, skip=True),
             Rule("not-afk", 1, reveal_rule=True)
-        ])
+        ])]
     if "aw-stopwatch" not in bucket_prefix_to_ruleshandler:
-        bucket_prefix_to_ruleshandler["aw-stopwatch"] = EventKeyHandler('label', [
+        bucket_prefix_to_ruleshandler["aw-stopwatch"] = [EventKeyHandler('label', [
             Rule(".*", 0, subhandler=EventKeyHandler('running', [
                 Rule("true", 1000),
                 Rule("false", 0, skip=True)  # Even if it is the only event in interval it carries no activity.
             ]))
-        ])
+        ])]
     # Prepare to loop through intervals with searching rules, building report and metrics.
     # Go to the first interval.
     cur_interval: Interval = interval.iterate_prev()
@@ -726,35 +737,42 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
         'total intervals': (0, 0),
         'events without handlers': (0, 0),
         'intervals without rules': (0, 0),
-        'skipped by rule intervals': (0, 0),
-        'need to reveal rule intervals': (0, 0),
+        'intervals merged to next rule': (0, 0),
+        'intervals with rule to skip': (0, 0),
+        'intervals need to reveal rule for': (0, 0),
     }
     # Prepare dummy Interval to use first interval on the very first iteration below.
     cur_interval = Interval(cur_interval.start_time, cur_interval.end_time, None, cur_interval)
     # Iterate all intervals, find out main event and associated rule for each, collect map of "activity" per duration.
+    deferred_interval = None
     while cur_interval.next:
         cur_interval = cur_interval.next
         interval_duration = cur_interval.get_duration()
         # Find out all rules applicable to the interval.
         interval_handler: IntervalHandler = None
         for event in cur_interval.events:
-            handler: EventKeyHandler = next(
-                (
-                    handler for bucket_prefix, handler in bucket_prefix_to_ruleshandler.items()
-                    if event.bucket_id.startswith(bucket_prefix)
-                ),
-                None
-            )
+            # Search `EventKeyHandler` by 2 criteria:
+            # 1) event bucket ID starts with handler 'bucket_id',
+            # 2) handler key exists in event data.
+            handler: EventKeyHandler = None
+            for bucket_prefix, bucket_handlers in bucket_prefix_to_ruleshandler.items():
+                if event.bucket_id.startswith(bucket_prefix):
+                    for bucket_handler in bucket_handlers:
+                        if bucket_handler.key in event.data:
+                            handler = bucket_handler
+                            break
             if not handler:
                 LOG.info(f"Can't find handler for {event}")
                 _increment_metric(metrics, 'events without handlers', cur_interval)
-                continue
+                continue  # It is OK, some events (inside interval) may don't have handlers intentionally.
+            # Find rule by event data. Note that it may be sorted out by priority afterwards.
             rule, descriptions = handler.get_rule(event)
             if rule:
                 # Keep only rule with the highest priority.
                 if interval_handler is None or rule.priority > interval_handler.rule.priority:
-                    description = "->".join(descriptions)
-                    interval_handler = IntervalHandler(cur_interval, rule, event, descriptions, description)
+                    interval_handler = IntervalHandler(
+                        [cur_interval], rule, event, descriptions, "->".join(descriptions)
+                    )
         # Update metric with Rule name - including "skip", "reveal rules" and etc.
         _increment_metric(metrics, str(interval_handler.rule), cur_interval)
         # Decide whether to count this interval or not and update metrics.
@@ -763,20 +781,29 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                      + " Events:\n  " + "\n  ".join(str(x) for x in cur_interval.events))
             _increment_metric(metrics, 'intervals without rules', cur_interval)
             continue
+        if deferred_interval is not None:
+            interval_handler.intervals += [deferred_interval]
+            _increment_metric(metrics, 'intervals merged to next rule', cur_interval)
+            deferred_interval = None
         if interval_handler.rule.skip:
-            LOG.debug(f"Skipping {interval_handler.interval} because of {interval_handler.rule} priority is highest"
+            LOG.debug(f"Skipping {_intervals_duration(interval_handler.intervals)} {len(interval_handler.intervals)}"
+                      f" intervals(s) because of {interval_handler.rule} priority is highest"
                       f" for {interval_handler.event}.")
-            _increment_metric(metrics, 'skipped by rule intervals', cur_interval)
+            _increment_metric(metrics, 'intervals with rule to skip', cur_interval)
             continue
         if interval_handler.rule.reveal_rule:
             LOG.info(f"Need to reveal rule for interval {cur_interval.to_str(only_time=True)} with events:"
                      + "  \n" +  "\n  ".join(str(x) for x in cur_interval.events))
-            _increment_metric(metrics, 'need to reveal rule intervals', cur_interval)
+            _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
         # is_fresh = cur_interval.prev is None or cur_interval.prev.end_time != cur_interval.start_time
         # Update 'total_intervals' metric.
         _increment_metric(metrics, 'total intervals', cur_interval)
+        # Defer interval if need. Note that `activity_counter` shouldn't be touched by this rule.
+        if interval_handler.rule.merge_next:
+            deferred_interval = cur_interval
+            continue
         # Update 'activities counter'.
-        activity_counter[interval_handler.description] += interval_handler.interval.get_duration()
+        activity_counter[interval_handler.description] += _intervals_duration(interval_handler.intervals)
     # TODO Apply `round_to` with distributing small buckets into wider ones.
     return activity_counter, metrics
 
@@ -788,55 +815,71 @@ MIN_DURATION_SEC = 15 * 60  # 0.25 hours
 RULES = {
     # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
     # data={app: str, title: str}.
-    "aw-watcher-window": EventKeyHandler("app", [
-        Rule("zoom", 900),
-        Rule("Slack", 890, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
-            Rule("Slack | .*", 889),
-            Rule(".*screen share", 890),
-        ])),
-        # Skype doesn't provide info that it is a meeting.
-        Rule("Skype", 880),
-        Rule("unknown", 2),  # Means that window manager was unable to gather data (for Discord, etc.)
-        Rule("flameshot", 520),  # Screenshot tool.
-        Rule("jetbrains-idea", 40),  # IDE. TODO ~2 seconds after "afk" watcher events -> are not counted!
-        Rule("Double Commander", 35),  # File manager.
-        Rule("smplayer", 36),  # Video player.
-        Rule("FeatherPad", 37),  # Text editor.
-    ]),
+    "aw-watcher-window": [
+        EventKeyHandler("app", [
+            Rule("zoom", 900),
+            Rule("Slack", 890, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
+                Rule("Slack \| (.*?) \|.*", 889, to_string=lambda x: f"Slack {x.group(1)}"),
+                Rule("(.*) screen share", 890, to_string=lambda x: f"Slack {x.group(1)}"),
+            ])),
+            # Skype doesn't provide info that it is a meeting.
+            Rule("Skype", 880),
+            Rule("unknown", 2, merge_next=True),  # Means that OS windows manager was unable to gather data.
+            Rule("flameshot", 520),  # Screenshot tool.
+            Rule("jetbrains-idea", 40),  # IDE. TODO ~2 seconds after "afk" watcher events -> are not counted!
+            Rule("Double Commander", 35),  # File manager.
+            Rule("smplayer", 36),  # Video player.
+            Rule("FeatherPad", 37),  # Text editor.
+            Rule("discord", 38),
+        ]),
+    ],
     # Passive watcher, always provides value, even if user AFK.
     # But "change value" event most probably shows activity (excluding web pages which change title periodically).
     # data={url: str, title: str, audible: bool, incognito: bool, tabCount: int}.
-    "aw-watcher-web": EventKeyHandler("url", [
-        Rule("https://vimbox\.skyeng\.ru/.*", 501, skip=True), # English lesson, may look like AFK.
-        Rule("https://gitlab\.akvelon\.net:9443/.*", 41, to_string=lambda _: "Akvelon GitLab"),
-        Rule("https://akvelon\.atlassian\.net/wiki/.*", 42, to_string=lambda _: "Akvelon Wiki"),
-        Rule("https://gitlab\.intapp\.com/.*", 43, to_string=lambda _: "Intapp GitLab"),
-        Rule("https://wiki\.intapp\.com/wiki/.*", 44, to_string=lambda _: "Intapp Wiki"),
-        Rule("https://mail\.akvelon\.com/.*", 45, to_string=lambda _: "Akvelon Mail"),
-        Rule("https://intapp\.atlassian\.net/browse/.*", 46, to_string=lambda _: "Intapp Jira"),
-        Rule("https://intapp\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
-        Rule("https://www\.google\.com/.*", 48, to_string=lambda _: "www.google.com"),
-        Rule("about:blank", 520, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
-            Rule("intapp\.atlassian\.net/browse/.*", 521, to_string=lambda _: "Intapp Jira"),
-            Rule("zoom\.us/j/.*", 521, to_string=lambda _: "zoom"),
-            Rule("logs\.(devops|us\.dev\.kube)\.intapp\.com.*", 530, to_string=lambda _: "Intapp Logs"),
-            Rule("metrics\.(devops|us\.dev\.kube)\.intapp\.com.*", 531, to_string=lambda _: "Intapp Metrics"),
-            Rule("gitlab\.akvelon\.net:9443/.*", 41, to_string=lambda _: "Akvelon GitLab"),
-        ])),
-        Rule("https://signin\.intapp\.com/", 49, to_string=lambda _: "Intapp SignIn"),
-        Rule("https://intapp\.zendesk\.com/.*", 100, to_string=lambda _: "Intapp Zendesk"),
-        Rule("https://docs\.google\.com/spreadsheets/.*", 101, to_string=lambda _: "Google Spreadsheets"),
-        Rule("https://translate\.google.*", 102, to_string=lambda _: "Google Translate"),
-        Rule("https://logs\.(devops|us\.dev\.kube)\.intapp\.com.*", 530, to_string=lambda _: "Intapp Logs"),
-        Rule("https://metrics\.(devops|us\.dev\.kube)\.intapp\.com.*", 531, to_string=lambda _: "Intapp Metrics"),
-        Rule("file:///.*", 532, to_string=lambda _: "Local file in browser"),
-    ]),
+    "aw-watcher-web": [
+        EventKeyHandler("url", [
+            Rule("https://(vimbox|student)\.skyeng\.ru/.*", 501, skip=True), # English lesson, may look like AFK.
+            Rule("https://gitlab\.akvelon\.net:9443/.*", 41, to_string=lambda _: "Akvelon GitLab"),
+            Rule("https://akvelon\.atlassian\.net/wiki/.*", 42, to_string=lambda _: "Akvelon Wiki"),
+            Rule("https://gitlab\.intapp\.com/.*", 43, to_string=lambda _: "Intapp GitLab"),
+            Rule("https://wiki\.intapp\.com/wiki/.*", 44, to_string=lambda _: "Intapp Wiki"),
+            Rule("https://mail\.akvelon\.com/.*", 45, to_string=lambda _: "Akvelon Mail"),
+            Rule("https://intapp\.atlassian\.net/browse/.*", 46, to_string=lambda _: "Intapp Jira"),
+            Rule("https://intapp\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
+            Rule("https://www\.google\.com/.*", 48, to_string=lambda _: "www.google.com"),
+            Rule("about:blank", 520, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
+                Rule("intapp\.atlassian\.net/browse/.*", 521, to_string=lambda _: "Intapp Jira"),
+                Rule("zoom\.us/j/.*", 521, to_string=lambda _: "zoom"),
+                Rule("logs\.(devops|us\.dev\.kube)\.intapp\.com.*", 530, to_string=lambda _: "Intapp Logs"),
+                Rule("metrics\.(devops|us\.dev\.kube)\.intapp\.com.*", 531, to_string=lambda _: "Intapp Metrics"),
+                Rule("gitlab\.akvelon\.net:9443/.*", 41, to_string=lambda _: "Akvelon GitLab"),
+                Rule("New Tab", 42, merge_next=True),
+                Rule("wiki\.intapp\.com/wiki/.*", 44, to_string=lambda _: "Intapp Wiki"),
+                Rule("intapp\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
+                Rule("(.+?)/.*", 3, to_string=lambda x: x.group(1))  # Should be the last as "uncategorized site"
+            ])),
+            Rule("https://signin\.intapp\.com/", 49, to_string=lambda _: "Intapp SignIn"),
+            Rule("https://intapp\.zendesk\.com/.*", 100, to_string=lambda _: "Intapp Zendesk"),
+            Rule("https://docs\.google\.com/spreadsheets/.*", 101, to_string=lambda _: "Google Spreadsheets"),
+            Rule("https://translate\.google.*", 102, to_string=lambda _: "Google Translate"),
+            Rule("https://logs\.(devops|us\.dev\.kube)\.intapp\.com.*", 530, to_string=lambda _: "Intapp Logs"),
+            Rule("https://metrics\.(devops|us\.dev\.kube)\.intapp\.com.*", 531, to_string=lambda _: "Intapp Metrics"),
+            Rule("file:///.*", 532, to_string=lambda _: "Local file in browser"),
+            Rule("https?://(.+?)/.*", 3, to_string=lambda x: x.group(1))  # Should be the last as "uncategorized site"
+        ]),
+    ],
     # Passive watcher, always provides value, even if user AFK. But "change value" event shows activity/focus on.
     # data={file: str, projectPath: str, language: str, editor: const, editorVersion: const, eventType: const}
-    "aw-watcher-idea": EventKeyHandler("file", {
-        # Rule() TODO it is different for IDEA - need to handle only "switch to" intervals because watcher is strange.
-        # Also keys are not stable in it, for example 'project' may be absent.
-    }),
+    # Need to handle only "switch to" intervals because watcher is strange.
+    # Also keys are not stable in it, for example 'project' may be absent.
+    "aw-watcher-idea": [
+        EventKeyHandler("project", [
+            Rule(".*", 100, to_string=lambda x: f"IDEA project '{x.group(0)}'")
+        ]),
+        EventKeyHandler("file", [
+            Rule(".*", 100, to_string=lambda x: f"IDEA file '{x.group(0)}'")
+        ])
+    ],
 }
 
 
