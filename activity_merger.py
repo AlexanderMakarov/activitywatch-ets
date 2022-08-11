@@ -325,7 +325,7 @@ class Rule:
     :param priority: Priority of the rule, greater value => more chance to be used among other rules on interval.
     Better to use unique priority values, otherwise conflicts will be solved unpredictably.
     Note that default priority for "afk" watcher 'afk' state is `AFK_RULE_PRIORITY` (500?), 'not-afk' rule - 1,
-    for "watchdog" "enabled" state - `WATCHDOG_RULE_RRIRITY` (1000?). These constants are also used to compound
+    for "watchdog" "enabled" state - `WATCHDOG_RULE_PRIORITY` (1000?). These constants are also used to compound
     intervals into "activities".
     :param subhandler: `EventKeyHandler` for the different key of event with its own set of rules.
     It allows to take into consideration several keys of the event.
@@ -1002,12 +1002,14 @@ RULES = {
 
 def main():
 
-    # TODO ask date
+    # TODO ask date, by default today
     # daystart = datetime.datetime.combine(datetime.datetime.now().date(), datetime.time())
     # dayend = daystart + datetime.timedelta(days=1)
-    # TODO support logging levels.
+    # TODO need separate configuration file.
+    # TODO need interactive way to merge activities
+    # TODO need mixing of Jira/Outlook/watchdog events.
 
-    client = aw_client.ActivityWatchClient("activity_merger")
+    client = aw_client.ActivityWatchClient("activity_merger.py")
     buckets = client.get_buckets()
     LOG.info(f"Buckets: {buckets.keys()}")
     # Build time-ordered linked list of intervals by provided events.
