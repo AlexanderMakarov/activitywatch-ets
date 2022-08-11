@@ -8,11 +8,19 @@ from typing import Any, List, Dict, Optional, Tuple, Callable
 import re
 
 
-# Which tolerance to use when comparing events. Mostly from different watchers.
-EVENTS_COMPARE_TOLERANCE_SEC = 1
-TOLERANCE = datetime.timedelta(0, 1, 0)  # 1 sec
+# Tolerance to use when comparing events. Events shorter than this value are ignored.
+# If duration between start and end of different events if equal or less then they are treated adjacent.
+EVENTS_COMPARE_TOLERANCE_TIMEDELTA = datetime.timedelta(0, 1, 0)  # 1 sec
+# Default priority of "afk" event. All events with equal or higher priority are treated as "independent"
+# and may form separate activities.
+AFK_RULE_PRIORITY = 500
+# Default priority of "watchdog" watcher, aka maximum priority.
+WATCHDOG_RULE_PRIORITY = 1000
+# Which activity treat as too long for additional logging.
+TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS = datetime.timedelta(2, 0, 0).seconds  # 2 hours
 # Timezone to show dates.
-CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo
+CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo  # Use system timezone.
+# Common logger.
 LOG: logging.Logger = logging.getLogger(__name__)
 
 
@@ -34,15 +42,31 @@ def event_to_str(event: Event):
            f"{event_data_to_str(event)})"
 
 
+def from_start_to_end_to_str(obj) -> str:
+    return f"{obj.start_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
+           f"..{obj.end_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"
+
+
+def seconds_to_int_timedelta(seconds: float) -> str:
+    return datetime.timedelta(seconds=int(seconds))
+
+
 class Interval:
     """
-    Linked list node with start and end time.
+    Interval in time when at least one full `Event` happened. Used to make time-ordered linked list.
     :param start_time: Interval start time.
     :param end_time: Interval end time.
     :param events: List of `Event`-s happened in this interval.
     """
 
     def __init__(self, start_time: datetime.datetime, end_time: datetime.datetime, prev=None, next=None) -> None:
+        """
+        Default constructor.
+        :param start_time: Interval start time.
+        :param end_time: Interval end time.
+        :param prev: Previous interval in linked list of time-ordered intervals.
+        :param next: Next interval in linked list of time-ordered intervals.
+        """
         if start_time >= end_time:
             assert False, f"Wrong interval boundaries - start time {start_time} is after or equal end time"\
                           f" {end_time}, prev={prev}, next={next}"
@@ -77,16 +101,15 @@ class Interval:
         :param debug: Flag to add all events information. If `False` then puts only the last one.
         :return: String representation of the interval.
         """
-        result = f"{self.start_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
-                 f"..{self.end_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}:"
+        result = from_start_to_end_to_str(self)
         if only_time:
-            return f"{result} total {self.get_duration()} sec"
+            return f"{result} ({seconds_to_int_timedelta(self.get_duration())}):"
         if len(self.events) > 0:
             if debug:
                 events_str = ";".join((event_data_to_str(x) for x in self.events))
-                return f"{result} {len(self.events)} events={events_str}"
+                return f"{result}: {len(self.events)} events={events_str}"
             else:
-                return f"{result} {len(self.events)} events, last={event_data_to_str(self.events[-1])}"
+                return f"{result}: {len(self.events)} events, last={event_data_to_str(self.events[-1])}"
 
     def get_duration(self) -> float:
         """
@@ -299,10 +322,11 @@ class Rule:
     """
     Structure which represents how to compare related event with others.
     :param key_pattern: Regexp pattern to handle intervals of. Make sense only in scope of specific `EventKeyHandler`.
-    :param priority: Priority of the rule, greater value => more chance to be used among remained rules.
-    Better to use unique priority values, otherwise conflicts will be solved inpredictably.
-    Note that default priority for "afk" watcher 'afk' state is 500, 'not-afk' rule - 1,
-    for "watchdog" "enabled" state - 1000.
+    :param priority: Priority of the rule, greater value => more chance to be used among other rules on interval.
+    Better to use unique priority values, otherwise conflicts will be solved unpredictably.
+    Note that default priority for "afk" watcher 'afk' state is `AFK_RULE_PRIORITY` (500?), 'not-afk' rule - 1,
+    for "watchdog" "enabled" state - `WATCHDOG_RULE_RRIRITY` (1000?). These constants are also used to compound
+    intervals into "activities".
     :param subhandler: `EventKeyHandler` for the different key of event with its own set of rules.
     It allows to take into consideration several keys of the event.
     :param to_string: Lambda which produces rule description from "key pattern" regexp `re.Match`. If `None` then uses
@@ -330,11 +354,12 @@ class Rule:
 
 class EventKeyHandler:
     """
-    Class to handle one `Event` key with different `Rule`-s.
+    Structure which binds multiple `Rule`-s to one `Event`'s specific key values (by regexp).
+    In spite of it supports case with absent key in event data it is better to separate `EventKeyHandler`-s
+    per bucket because set of keys differs between differnt bucket events.
     """
 
-    def __init__(self, key: str, rules: List[Rule], to_str_keys: Optional[List[str]] = None,
-                 tolerance: datetime.timedelta=TOLERANCE) -> None:
+    def __init__(self, key: str, rules: List[Rule], to_str_keys: Optional[List[str]] = None) -> None:
         """
         Default constructor.
         :param key: Key from ActivityWatch event to choose rules basing on.
@@ -375,11 +400,13 @@ class EventKeyHandler:
 
 def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timedelta) -> Interval:
     """
-    Recursively updates event down starting after specified interval.
+    Recursively applies event down on `Interval`'s linked list starting after given interval.
+    In other words it appends specified event to all `Intervals` later when event covers them and slaces last
+    `Interval` on 2 if event ends inside it. 
     :param event: Event to apply.
     :param interval: Interval to start apply after.
     :param tolerance: Tolerance to match events boundaries to intervals.
-    :return: Last resulting interval.
+    :return: Interval where given event ended.
     """
     # Recursive implementation makes stack overflow.
     while interval.next:
@@ -398,13 +425,13 @@ def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timed
 
 def apply_events(events: List[Event], interval: Interval, tolerance: datetime.timedelta) -> Dict[str, int]:
     """
-    Applies events to the specified linked list of intervals.
-    Expected that this list contains from "afk" and "watchdog" watchers, i.e. events out of bounds of existing
-    intervals should be ignored.
+    Applies events to the specified linked list of intervals with appending events to `Interval`-s and slicing if need.
+    Doesn't expands boundaries of `Interval`-s list because assumes that list is built from "afk" and "watchdog"
+    watchers events, i.e. events out of bounds of existing intervals should be ignored.
     :param events: List of events to apply.
     :param interval: Node of linked list to apply events onto. Out parameter.
     :param tolerance: Tolerance to match events boundaries to intervals.
-    :return: Dictionary of metrics obtained on applying events.
+    :return: Dictionary of metrics which allows to estimate contrubution of given bunch of events.
     """
     # Metrics to measure each bucket importance.
     metrics = {
@@ -545,7 +572,7 @@ def check_and_print_intervals(interval: Interval, max_events_per_interval: int, 
 def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime.datetime, end_time: datetime.datetime,
                         buckets: List[str], tolerance: datetime.timedelta) -> Interval:
     """
-    Gets events from specified buckets, prints report by them and returns linked list of `Interval`-s.
+    Gets events from specified buckets, prints report by them and returns time-ordered linked list of `Interval`-s.
     :param awc: ActivityWatch client to use.
     :param start_time: Start time for the report.
     :param end_time: End time for the report.
@@ -656,7 +683,8 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
 @dataclasses.dataclass
 class RuleResult:
     """
-    Structure to represent rule output as an analyzed intervals, event and information why all of them were chosen.
+    Structure to represent rule output like covered intervals, source event and information why all of them were
+    chosen to be connected under one `Rule`.
     :param rule: `Rule` which produced this instance.
     :param event: `Event` choosen by `Rule`.
     :param description: Description of underlying interval.
@@ -670,19 +698,26 @@ class RuleResult:
     intervals: List[Interval]
     values: List[str]
 
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}(rule={self.rule}, description={self.description})"
+
 
 @dataclasses.dataclass
-class ActivitiesSlice:
+class Activity:
     """
-    List of adjacent activities.
+    One or few `RuleResult`-s separated as independent activity.
     """
 
     start_time: datetime.datetime
     end_time: datetime.datetime
-    activities: Dict[str, float]
+    rule_results: List[RuleResult]
+    description: str
+    # Note that 'end_time minus start_time' doesn't work due to possible gaps between intervals.
+    duration: float
 
-    def str_duration(self) -> str:
-        return (self.end_time - self.start_time)
+    def __repr__(self) -> str:
+        return f"{seconds_to_int_timedelta((self.duration))} "\
+               f"({from_start_to_end_to_str(self)}) {self.description}"
 
 
 def _increment_metric(metrics: Dict[str, Tuple[int, float]], metric_name: str, interval: Interval):
@@ -691,7 +726,8 @@ def _increment_metric(metrics: Dict[str, Tuple[int, float]], metric_name: str, i
 
 
 def _intervals_duration(intervals: List[Interval]):
-    return (intervals[-1].end_time - intervals[0].start_time).total_seconds()
+    # Note that 'last end minus first start' doesn't work due to possible gaps between intervals.
+    return sum(x.get_duration() for x in intervals)
 
 
 def _find_out_rule_for_interval(
@@ -727,47 +763,79 @@ def _find_out_rule_for_interval(
     return rule_result
 
 
+@dataclasses.dataclass
+class RuleResultsWindow:
+    """
+    Subsidiary class to make sliding window on `Interval`-s linked list which accumulates `RuleResult`-s directly or
+    supposingly belonging to one specific `Activity`.
+    """
+    rule_results: List[RuleResult]
+    priority: int
+    description: str
+    duration: float
+
+    def to_str(self, debug=False) -> str:
+        repr = f"{seconds_to_int_timedelta(self.duration)} with priority={self.priority}"
+        if debug:
+            events = dict((x.event.timestamp, x.event) for x in self.rule_results)
+            events_str = "\n  ".join(
+                f"{seconds_to_int_timedelta(x.duration.total_seconds())} {event_data_to_str(x)}"
+                for x in events.values()
+            )
+            return f"{repr}, description='{self.description}' and {len(events)} events:" + "\n  " + events_str
+        else:
+            return f"{repr} and {len(self.rule_results)} rule results"
+
+    def append(self, rule_result: RuleResult):
+        self.rule_results.append(rule_result)
+        self.duration += _intervals_duration(rule_result.intervals)
+        # If new rule has more priority than all existing in window then update windows priority and description.
+        if rule_result.rule.priority >= self.priority:
+            self.priority = rule_result.rule.priority
+            self.description = rule_result.description
+
+    def to_activity(self) -> Activity:
+        start_time = self.rule_results[0].intervals[0].start_time
+        end_time = self.rule_results[-1].intervals[-1].end_time
+        tmp = set(x.description for x in self.rule_results)
+        description = ", ".join(sorted(tmp))
+        return Activity(start_time, end_time, list(self.rule_results), description, self.duration)
+
+
+def _is_new_activity(window: RuleResultsWindow, rule_result: RuleResult, round_to: float) -> bool:
+    current_rule = rule_result.rule
+    # Don't separate activities for rules with the same priority or same description.
+    if current_rule.priority == window.priority and rule_result.description != window.description:
+        return False
+    # Separate all "indipendent" activities as soon as they appear.
+    if current_rule.priority >= AFK_RULE_PRIORITY:
+        return rule_result.description != window.description
+    # TODO Apply `round_to` with distributing small buckets into wider ones.
+    return False
+
+
 def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, List[EventKeyHandler]]
-        ) -> Tuple[List[ActivitiesSlice], collections.Counter, Dict[str, Tuple[int, float]]]:
+        ) -> Tuple[List[Activity], collections.Counter, Dict[str, Tuple[int, float]]]:
     """
     :param interval: Linked list of intervals to analyze.
     :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
     :param rules: User-specific map of event bucket name prefix to list of `EventKeyHandler`-s to handle data intervals.
     :return: Tuple of:
-    1 - Timescale sliced on few parts with descriptions.
-    2 - Counter of interval description to duration.
-    3 - Map of metrics to estimate report quality/coverage and adjust rules.
+    1 - List of assembled `Activity`-es.
+    2 - `Counter` of interval description-s to theirs durations. Aka `Activity`-es built by naive "equal" strategy.
+    3 - Map of metrics to estimate report quality/coverage.
     """
-
-    # Expected output:
-    # A) Worked at intervals: A, B, C
-    # B) TOTAL worked
-    # C) Unknown = ZZZ
-    # D) 2h = window "xxx"
-    #   1h = browser "XXX" site
-    #   1.75h = IDEA on projectPath
-    #   0.25 = meeting in Zoom from XXX to YYY
-    #   0.25 = meeting in Slack with ZZZ from XXX to YYY
-    #   0.25 = Skype conversations in durations A, B, C
-    # E) Gaps between events - to measure activities with turned off laptop (offline meetings, lunches, etc.) 
-
-    # B: It is "aw-watcher-afk" data with not_afk plus "aw-watchdog" events.
-    total_not_afk: float = 0.0
-    # A: It are intervals where not_afk or '"not_afk": True' or "aw-stopwatch" data.
-    aw_active_intervals: List[Tuple[datetime.datetime, datetime.datetime]] = []
-    # D: It is A with more specific activity aggregated by this activity.
-    tasks: Dict[str, float] = {}
     # Assemble full set of EventKeyHandler-s from predifined ones and custom.
     bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]] = dict(custom_rules)
     if "aw-watcher-afk" not in bucket_prefix_to_ruleshandler:
         bucket_prefix_to_ruleshandler["aw-watcher-afk"] = [EventKeyHandler('status', [
-            Rule("afk", 500, skip=True),
+            Rule("afk", AFK_RULE_PRIORITY, skip=True),
             Rule("not-afk", 1, is_placeholder=True)
         ])]
     if "aw-stopwatch" not in bucket_prefix_to_ruleshandler:
         bucket_prefix_to_ruleshandler["aw-stopwatch"] = [EventKeyHandler('label', [
             Rule(".*", 0, subhandler=EventKeyHandler('running', [
-                Rule("true", 1000),
+                Rule("true", WATCHDOG_RULE_PRIORITY),
                 Rule("false", 0, skip=True)  # Even if it is the only event in interval it carries no activity.
             ]))
         ])]
@@ -775,8 +843,8 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     # Go to the first interval.
     cur_interval: Interval = interval.iterate_prev()
     # Make containers for outputs.
-    activity_counter = collections.Counter()
-    slices = List[Tuple[datetime.datetime, datetime.datetime, float, List[str]]]  # TODO fill in
+    rules_counter = collections.Counter()
+    activities: List[Activity] = []
     metrics = {  # Put default metrics. Next it will be appended by per-rule metrics.
         'total intervals': (0, 0),
         'events without handlers': (0, 0),
@@ -789,7 +857,8 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     cur_interval = Interval(cur_interval.start_time, cur_interval.end_time, None, cur_interval)
     # Iterate all intervals, find rules for all events in it and choose highest by prioirty to handle interval to
     # build slices, activity_counter, metrics.
-    deferred_intervals = []
+    deferred_intervals: List[Interval] = []  # `Interval`-s deffered as "append to next independent rule".
+    window: RuleResultsWindow = None
     while cur_interval.next:
         cur_interval = cur_interval.next
         rule_result = _find_out_rule_for_interval(cur_interval, metrics, bucket_prefix_to_ruleshandler)
@@ -801,6 +870,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             continue
         # Update per-rule-name metric. It should include all rules (i.e. "skip", "placeholder", etc.).
         _increment_metric(metrics, str(rule_result.rule), cur_interval)
+        duration = _intervals_duration(rule_result.intervals)
         # Append deferred intervals if there are such.
         if deferred_intervals is not None:
             rule_result.intervals += deferred_intervals
@@ -808,15 +878,17 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             deferred_intervals = []
         # Check if rule says skip interval from the report.
         if rule_result.rule.skip:
-            LOG.debug(f"Skipping {_intervals_duration(rule_result.intervals)} {len(rule_result.intervals)}"
+            LOG.debug(f"Skipping {duration:.1f} sec {len(rule_result.intervals)}"
                       f" intervals(s) because of {rule_result.rule} priority is highest"
                       f" for {rule_result.event}.")
             _increment_metric(metrics, 'intervals with rule to skip', cur_interval)
             continue
         # Check if rule is a placeholder and provide all information about interval to write appropriate rule for it. 
         if rule_result.rule.is_placeholder:
-            LOG.info(f"Need to reveal rule for interval {cur_interval.to_str(only_time=True)} with events:"
-                     + "  \n" +  "\n  ".join(str(x) for x in cur_interval.events))
+            LOG.info("Need to reveal rule for interval %s with %d events:\n  %s"
+                     % (cur_interval.to_str(only_time=True), len(cur_interval.events),
+                        "\n  ".join(str(x) for x in cur_interval.events))
+                    )
             _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
         # is_fresh = cur_interval.prev is None or cur_interval.prev.end_time != cur_interval.start_time
         # Update 'total_intervals' metric.
@@ -825,10 +897,27 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
         if rule_result.rule.merge_next:
             deferred_intervals.append(cur_interval)
             continue
-        # Update 'activities counter'.
-        activity_counter[rule_result.description] += _intervals_duration(rule_result.intervals)
-    # TODO Apply `round_to` with distributing small buckets into wider ones.
-    return slices, activity_counter, metrics
+        # Update 'rules counter'.
+        rules_counter[rule_result.description] += duration
+        # -----------
+        is_start_new_window = True  # By default start new window.
+        if window is not None:
+            # Decide if current `RuleResult` is separate activity from previous ones and need to create `Activity` from
+            # items accumulated in `activity_window` so far.
+            if _is_new_activity(window, rule_result, round_to):
+                if window.duration < round_to:
+                    LOG.info(f"On handling {rule_result} separated too small window {window.to_str(True)}")
+                    # TODO _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
+                activities.append(window.to_activity())
+            else:
+                window.append(rule_result)
+                # if window.duration > TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS:
+                #     LOG.info(f"Too long window {window.to_str(False)} after checking {rule_result}.")
+                #     # TODO _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
+                is_start_new_window = False
+        if is_start_new_window:
+            window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
+    return activities, rules_counter, metrics
 
 
 # Min duration one activity events sum to show.
@@ -840,7 +929,10 @@ RULES = {
     # data={app: str, title: str}.
     "aw-watcher-window": [
         EventKeyHandler("app", [
-            Rule("zoom", 900),
+            Rule("zoom", 900, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
+                Rule("Zoom Meeting", 900, to_string=lambda _: "Zoom Meeting"),
+                Rule(".*", 200, merge_next=True)
+            ])),
             Rule("Slack", 890, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
                 Rule("Slack \| (.*?) \|.*", 889, to_string=lambda x: f"Slack {x.group(1)}"),
                 Rule("(.*) screen share", 890, to_string=lambda x: f"Slack {x.group(1)}"),
@@ -873,8 +965,8 @@ RULES = {
             Rule("about:blank", 520, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
                 Rule("intapp\.atlassian\.net/browse/.*", 521, to_string=lambda _: "Intapp Jira"),
                 Rule("zoom\.us/j/.*", 521, to_string=lambda _: "zoom"),
-                Rule("logs\.(devops|us\.dev\.kube)\.intapp\.com.*", 530, to_string=lambda _: "Intapp Logs"),
-                Rule("metrics\.(devops|us\.dev\.kube)\.intapp\.com.*", 531, to_string=lambda _: "Intapp Metrics"),
+                Rule("logs\.(devops|us\.dev\.kube)\.intapp\.com.*", 401, to_string=lambda _: "Intapp Logs"),
+                Rule("metrics\.(devops|us\.dev\.kube)\.intapp\.com.*", 400, to_string=lambda _: "Intapp Metrics"),
                 Rule("gitlab\.akvelon\.net:9443/.*", 41, to_string=lambda _: "Akvelon GitLab"),
                 Rule("New Tab", 42, merge_next=True),
                 Rule("wiki\.intapp\.com/wiki/.*", 44, to_string=lambda _: "Intapp Wiki"),
@@ -918,20 +1010,27 @@ def main():
     client = aw_client.ActivityWatchClient("activity_merger")
     buckets = client.get_buckets()
     LOG.info(f"Buckets: {buckets.keys()}")
+    # Build time-ordered linked list of intervals by provided events.
     interval = report_from_buckets(
         client,
         datetime.datetime(2022, 2, 11),
         datetime.datetime(2022, 2, 12),
         buckets,
-        TOLERANCE
+        EVENTS_COMPARE_TOLERANCE_TIMEDELTA
     )
-    slices, activity_counter, metrics = analyze_intervals(interval, MIN_DURATION_SEC, RULES)
+    # Convert (assemble) intervals list into activities.
+    activities, activity_counter, metrics = analyze_intervals(interval, MIN_DURATION_SEC, RULES)
+    # Print metrics as is.
     LOG.info(f"Metrics from intervals analysis ({len(metrics)}):" + "\n  "
              + "\n  ".join(f"{v[0]:4} on {datetime.timedelta(seconds=v[1])} - {k}" for k, v in metrics.items()))
-    LOG.info("Total found %d common activities:\n  %s" % (
-        len(activity_counter),
-        "\n  ".join(f"{datetime.timedelta(seconds=v)} {k}" for k, v in activity_counter.most_common()))
-    )
+    # Pring only "less than MIN_DURATION_SEC" from "dumb" activities.
+    dumb_activities = [
+        f"{seconds_to_int_timedelta(v)} {k}" for k, v in activity_counter.most_common() if v >= MIN_DURATION_SEC
+    ]
+    LOG.info("There were %d equal activities. Longer than %d are:\n  %s"
+             % (len(activity_counter), MIN_DURATION_SEC, "\n  ".join(dumb_activities)))
+    # Print all activities as is.
+    LOG.info("Assembled %d activities:\n  %s" % (len(activities), "\n  ".join(str(x) for x in activities)))
 
 
 def setup_logging():
