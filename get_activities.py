@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import datetime
 import logging
+import argparse
 import aw_client
 
 from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES
@@ -9,11 +10,23 @@ from activity_merger.domain.merger import report_from_buckets
 from activity_merger.domain.analyzer import analyze_intervals
 
 
-def main():
+def valid_date(s):  # https://stackoverflow.com/a/25470943
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        msg = "not a valid date: {0!r}".format(s)
+        raise argparse.ArgumentTypeError(msg)
 
-    # TODO ask date, by default today
-    # daystart = datetime.datetime.combine(datetime.datetime.now().date(), datetime.time())
-    # dayend = daystart + datetime.timedelta(days=1)
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Calls ActivityWatcher for all available events on specified date, "
+                    "merges all events by specified rules into linked list of some activities and"
+                    "then separates this list into 'ready to import' actvities."
+    )
+    parser.add_argument('date', nargs='?', type=valid_date, default=datetime.datetime.now().date(),
+                        help="Date to build activities for in format 'YYYY-mm-dd'. By-default today.")
+    args = parser.parse_args()
     # TODO need interactive way to merge activities
     # TODO need mixing of Jira/Outlook/watchdog events.
 
@@ -23,6 +36,7 @@ def main():
     # Build time-ordered linked list of intervals by provided events.
     interval = report_from_buckets(
         client,
+        # TODO args.date, args.date + datetime.timedelta(days=1),
         datetime.datetime(2022, 2, 11),
         datetime.datetime(2022, 2, 12),
         buckets,
