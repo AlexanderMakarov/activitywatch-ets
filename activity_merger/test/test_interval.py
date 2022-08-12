@@ -1,9 +1,10 @@
 import unittest
 import datetime
 from parameterized import parameterized
-from activity_merger import Interval
 from aw_core.models import Event
 from typing import List, Tuple
+
+from ..domain.interval import Interval
 
 
 def _build_datetime(seed: int) -> datetime.datetime:
@@ -205,4 +206,5 @@ class TestInterval(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    print("Run 'test.py' from root folder.")
+    exit(1)
