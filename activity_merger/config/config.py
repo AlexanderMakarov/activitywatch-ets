@@ -97,5 +97,5 @@ AFK_RULE_PRIORITY = 500
 WATCHDOG_RULE_PRIORITY = 1000
 # Timezone to show dates.
 CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo  # Use system timezone.
-# Common logger.
-LOG: logging.Logger = logging.getLogger("activity_merger")
+# Default logger. Used for cases when script is called as a library.
+LOG: logging.Logger = logging.getLogger(__name__)

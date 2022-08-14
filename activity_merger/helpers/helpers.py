@@ -1,6 +1,18 @@
 import datetime
+import logging
 from ..domain.input_entities import Event
 from ..config.config import CURRENT_TIMEZONE
+
+
+def setup_logging():
+    logging.addLevelName(logging.WARNING, "WARN")
+    logging.addLevelName(logging.DEBUG, "DEBU")
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s.%(msecs)03d %(levelname)-4s: %(message)s',
+        datefmt="%H:%M:%S"
+    )
+    return logging.getLogger()
 
 
 def event_data_to_str(event: Event):
