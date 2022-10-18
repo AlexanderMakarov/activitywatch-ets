@@ -23,6 +23,13 @@ BUCKET_ID = NAME
 MAX_SCROLL_BACK = 31
 
 
+# JS snippet to get location in browser as a hint on mouse move.
+# document.onmousemove = function(e){
+# let r = e.target.getBoundingClientRect();
+# e.target.title = e.target.innerHTML+"#x="+r.x+"y="+r.y;
+# };
+
+
 def start_firefox_under_existing_profile(profile: str, page: str,  headless: bool = True) -> WebDriver:
     options = webdriver.FirefoxOptions()
     firefox_args = [ # moz:firefoxOptions
@@ -42,15 +49,16 @@ def call_web_element_with_fail_handling(description: str, container: WebElement,
         check_result_not_empty: bool = True) -> Any:
     assert container, f"call_web_element_with_fail_handling: Can't get {description} from empty container: {container}"
     try:
+        result = None
         if check_result_not_empty:
             result = func(container)
+            # Note that is case of 'find_elements' we have to check array so don't rely on NoSuchElementException.
+            assert result, f"Can't find {description} on {container}"
         else:
             try:
-                return func(container)
+                result = func(container)
             except NoSuchElementException:
                 pass  # We don't care if element wasn't found.
-        # Note that is case of 'find_elements' we have to check array so don't rely on NoSuchElementException.
-        assert result, f"Can't find {description} on {container}"
         return result
     except Exception as e:
         container.screenshot(SCREENSHOT_FAIL_NAME)
@@ -93,12 +101,12 @@ def _find_start_and_duration(hour_points: List[Tuple[int, float]], event_div: We
         if is_find_start:
             if hour_point[1] < start_y:
                 continue  # Just iterate until find hour where event started.
-            index_started_in = i
+            index_started_in = i if hour_point[1] == start_y else i - 1
             is_find_start = False
-            index_ended_in = i  # Start with assumption that events ends in the same hour.
+            index_ended_in = index_started_in  # Start with assumption that event ends in the same hour.
         if hour_point[1] > end_y:  # Just iterate until find where event ended.
             break
-        index_ended_in = i  # If event not ended on start of this hour then it ended in it or later.
+        index_ended_in = i
     if index_started_in is None:
         assert False, f"Can't find start hour for element '{event_name}' with y coordinate {start_y}"\
                       f" among hours: {hour_points}"
@@ -192,6 +200,7 @@ def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
             "/div[@role='presentation' and not(contains(@style,'none'))]"
     )
     events_container = next(x for x in events_containers if x.size['height'] > 100)
+    driver.implicitly_wait(1)  # Wait until all events are rendered on the container. Immediate check returns only first event(s).
     events_container.screenshot(SCREENSHOT_NAME)
     LOG.info(f"Page of required day is opened, scrapping events. See screenshot {SCREENSHOT_NAME}")  # TODO headless
     # Note that these div-s also contains elements with calendar name(s).
@@ -200,7 +209,7 @@ def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
         events_container,
         lambda x: x.find_elements(
             By.XPATH,
-            "//div[(contains(@class,'calendarBusy') or contains(@class,'calendarTentative'))]/.."
+            ".//div[(contains(@class,'calendarBusy') or contains(@class,'calendarTentative'))]/.."
         )
     )
     events: List[Event] = []
@@ -237,7 +246,7 @@ def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
             probable_event_div,
             lambda x: x.find_element(
                 By.XPATH,
-                "//div[contains(@class,'calendarTentative') or contains(@class,'calendarFree')]"
+                ".//div[contains(@class,'calendarTentative') or contains(@class,'calendarFree')]"
             ),
             False
         )
@@ -248,7 +257,7 @@ def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
         event_data_container = call_web_element_with_fail_handling(
             "div with event data",
             probable_event_div,
-            lambda x: x.find_element(By.XPATH, "//div[contains(@class,'contentDiv') and count(span)=3]"),
+            lambda x: x.find_element(By.XPATH, ".//div[count(span)=3]"),
             False
         )
         if not event_data_container:
@@ -268,14 +277,14 @@ def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
            'sender': event_elements[2].text
         }))
 
-    LOG.info(events_container.page_source)
+    LOG.info(events_container.get_attribute('innerHTML'))
     # LOG.info("Assembled %d activities:\n  %s" % (len(activities), "\n  ".join(str(x) for x in activities)))
     return events
 
 
 def main():
     # TODO ask date
-    events = get_events_from_owa("TODO", back_days=2)
+    events = get_events_from_owa("TODO", back_days=1)
     LOG.info(f"Parsed {len(events)} from {PAGE_URL}" + "\n  " + "\n  ".join(str(x) for x in events))
     # load events into ActivityWatcher
 
