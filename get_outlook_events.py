@@ -20,7 +20,7 @@ from activity_merger.domain.input_entities import Event
 NAME = 'outlook_aw_events_scraper'
 SCREENSHOT_NAME = f"{NAME}-events-screenshot.png"
 SCREENSHOT_FAIL_NAME = f"{NAME}-fail-screenshot.png"
-PAGE_URL = 'https://mail.akvelon.com/owa/#path=/calendar/view/Day'
+CALENDAR_TODAY_URL_SUFFIX = "/#path=/calendar/view/Day"
 BUCKET_ID = f'{NAME}_{socket.gethostname()}'
 MAX_SCROLL_BACK = 31
 
@@ -81,55 +81,6 @@ def _wait_on_page(driver: WebDriver, xpath: str) -> Any:
         raise e
 
 
-def _find_start_and_duration(hour_points: List[Tuple[int, float]], event_div: WebElement, event_name: str,
-        date: datetime.datetime) -> Tuple[datetime.datetime, datetime.timedelta]:
-    """
-    Roughly (by web element coordinates) finds out start and duration of event.
-    :param hour_points: List of tuples [hour value, relevant div rectangle dict].
-    :param element: Web element to find hour for.
-    :return: Tuple [event start, event duration].
-    """
-    start_y = event_div.rect['y']
-    end_y = start_y + event_div.rect['height'] 
-    # There are following option here:
-    # 1) Event starts on hour start, ends inside it.
-    # 2) Event starts on hour start, ends in some following hour.
-    # 3) Event starts inside hour, ends inside it.
-    # 4) Event starts inside hour,ends in some following hour.
-    index_started_in = None
-    index_ended_in = None
-    is_find_start = True
-    for i, hour_point in enumerate(hour_points):  # Here are always 24 elements, it is fast.
-        if is_find_start:
-            if hour_point[1] < start_y:
-                continue  # Just iterate until find hour where event started.
-            index_started_in = i if hour_point[1] == start_y else i - 1
-            is_find_start = False
-            index_ended_in = index_started_in  # Start with assumption that event ends in the same hour.
-        if hour_point[1] > end_y:  # Just iterate until find where event ended.
-            break
-        index_ended_in = i
-    if index_started_in is None:
-        assert False, f"Can't find start hour for element '{event_name}' with y coordinate {start_y}"\
-                      f" among hours: {hour_points}"
-    if index_ended_in is None:
-        assert False, f"Can't find end hour for element '{event_name}' with bottom y coordinate {end_y}"\
-                      f" among hours: {hour_points}"
-    # Measure size of hour in pixels.
-    hour_height = hour_points[1][1] - hour_points[0][1]
-    # Calculate start time.
-    hour_started_in = hour_points[index_started_in]
-    start_hour_ratio = float(start_y - hour_started_in[1]) / hour_height
-    start_time = datetime.datetime(year=date.year, month=date.month, day=date.hour, hour=hour_started_in[0],
-                                   minute=int(start_hour_ratio * 60), second=0)
-    # Calculate end time.
-    hour_ended_in = hour_points[index_ended_in]
-    end_hour_ratio = float(end_y - hour_ended_in[1]) / hour_height
-    end_time = datetime.datetime(year=date.year, month=date.month, day=date.hour, hour=hour_ended_in[0],
-                                 minute=int(end_hour_ratio * 60), second=0)
-    return start_time, end_time - start_time
-
-
 def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
     if back_days > 0 or date_label is not None:
         SCROLL_BACK_XPATH_SELECTOR = "span[contains(@class,'ms-Icon--chevronLeft')]"
@@ -168,39 +119,120 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
             scroll_back.click()
             scrolls_back += 1
 
-def get_events_from_owa(profile_abs_path: str, headless: bool = False, back_days: int = 0,
-        date: datetime.datetime = datetime.datetime.today().astimezone(),
-        date_label: str = None) -> List[Event]:
+
+def _get_hour_points(container_web_element: WebElement):
+    hour_spans = call_web_element_with_fail_handling(
+        "containers of hours",
+        container_web_element,
+        lambda x: x.find_elements(
+            By.XPATH,
+            ".//span[contains(@class,'ms-font-m')"
+            " and contains(@class,'semilight')"
+            " and contains(@class,'ms-font-color-neutralPrimary')]"
+        )
+    )
+    # Note that WebElement.rect/location are based on Element.getBoundingClientRect() though are adding padding
+    # and border-width. See https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect
+    # Also not that "padding-top" is returned as "10px" so need to parse only digits.
+    hour_points = [
+        (
+            int(x.text),
+            x.rect['y'] + int(''.join(c for c in x.value_of_css_property("padding-top") if c.isdigit()))
+        )
+        for x in hour_spans if x.text.isnumeric()
+    ]
+    if len(hour_points) < 24:
+        LOG.error(container_web_element.get_attribute('innerHTML'))
+        assert False, "Can't find all 24 'hour' points on the screen."
+    return hour_points
+
+
+def _find_start_and_duration(hour_points: List[Tuple[int, float]], event_div: WebElement, event_name: str,
+        event_date: datetime.datetime) -> Tuple[datetime.datetime, datetime.timedelta]:
+    """
+    Roughly (by web element coordinates) finds out start and duration of event.
+    :param hour_points: List of tuples [hour value, relevant div rectangle dict].
+    :param event_div: Web element to find hour for.
+    :param event_name: Name of the element for logs.
+    :param event_date: Date to set for event.
+    :return: Tuple [event start, event duration].
+    """
+    start_y = event_div.rect['y']
+    end_y = start_y + event_div.rect['height'] 
+    # There are following option here:
+    # 1) Event starts on hour start, ends inside it.
+    # 2) Event starts on hour start, ends in some following hour.
+    # 3) Event starts inside hour, ends inside it.
+    # 4) Event starts inside hour,ends in some following hour.
+    index_started_in = None
+    index_ended_in = None
+    is_find_start = True
+    for i, hour_point in enumerate(hour_points):  # Here are always 24 elements, it is fast.
+        if is_find_start:
+            if hour_point[1] < start_y:
+                continue  # Just iterate until find hour where event started.
+            index_started_in = i if hour_point[1] == start_y else i - 1
+            is_find_start = False
+            index_ended_in = index_started_in  # Start with assumption that event ends in the same hour.
+        if hour_point[1] > end_y:  # Just iterate until find where event ended.
+            break
+        index_ended_in = i
+    if index_started_in is None:
+        assert False, f"Can't find start hour for element '{event_name}' with y coordinate {start_y}"\
+                      f" among hours: {hour_points}"
+    if index_ended_in is None:
+        assert False, f"Can't find end hour for element '{event_name}' with bottom y coordinate {end_y}"\
+                      f" among hours: {hour_points}"
+    # Measure size of hour in pixels.
+    hour_height = hour_points[1][1] - hour_points[0][1]
+    # Calculate start time.
+    hour_started_in = hour_points[index_started_in]
+    start_hour_ratio = float(start_y - hour_started_in[1]) / hour_height
+    start_time = datetime.datetime(year=event_date.year, month=event_date.month, day=event_date.day,
+                                   hour=hour_started_in[0], minute=int(start_hour_ratio * 60), second=0).astimezone()
+    # Calculate end time.
+    hour_ended_in = hour_points[index_ended_in]
+    end_hour_ratio = float(end_y - hour_ended_in[1]) / hour_height
+    end_time = datetime.datetime(year=event_date.year, month=event_date.month, day=event_date.day,
+                                 hour=hour_ended_in[0], minute=int(end_hour_ratio * 60), second=0).astimezone()
+    return start_time, end_time - start_time
+
+
+def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool,
+        events_date: datetime.datetime = None, back_days: int = 0, date_label: str = None) -> List[Event]:
     """
     Scapes events from OWA page. Starts Firefox browser with OWA page "Calendar for a day" in headless mode (if need),
     scrolls to requered date if need, finds all events
     and calculates theirs start date and duration by coordinates on the screen.
     Requires Firefox profile to be opened already with OWA page authorized - it doesn't handle authentication.
-    :param profile_abs_path: Absolute path to Firefox profile. On Linux looks like 
-    '/home/{username}/.mozilla/firefox/808favcvs.default-release/'.
+    :param profile_abs_path: Absolute path to Firefox profile.
+    On Linux looks like '/home/{username}/.mozilla/firefox/808favcvs.default-release/'.
+    :param owa_url: URL to Web (MS Office Web Apps) Outlook. Page where email is opens.
+    May look like 'https://mail.company.com/owa'.
     :param headless: Flag to open Firefox window in the headless mode. Doesn't make it faster at all.
+    :param events_date: Date to set for events. Calculated based on "today" if 'back days' parameter is specified.
+    Should contain time zone info and match date in "date label" parameter.
     :param back_days: Optional. Number of days back.
-    :param date: Date to set for events. Should contain time zone info. Optional if 'back days' parameter specified.
-    Should match date in "date label" parameter.
-    :param date_label: Label of page for "tap back until" logic. Replaces or supports 'back_days' parameter.
+    :param date_label: Date label on page for "tap back until open" logic.
+    Value depends from language, regions, settings, etc. Replaces or supports 'back_days' parameter.
     Should match 'date' parameter.
     :return: List of `Event`-s parsed for specified date.
     """
-    profile_abs_path = '/home/i4ellendger/.mozilla/firefox/21357bye.default-release/' # TODO remove
     LOG.info(f"Starting Firefox with profile '{profile_abs_path}'."
              " Note that you need to have OWA opened and authenticated under this profile, otherwise it would fail.")
-    # In "with UI" mode some parsing on my machine takes 65s, in headless - the same 65s. 
-    driver = start_firefox_under_existing_profile(profile_abs_path, PAGE_URL, headless)
-    LOG.info(f"Firefox started, waiting loading of '{PAGE_URL}'. Don't scroll/click on it's window!")
-
-    # Set 'date' to search if not specified.
-    if date is None:
+    # In "with UI" mode some parsing on my machine takes 65s, in headless - the same 65s.
+    page_url = owa_url + CALENDAR_TODAY_URL_SUFFIX
+    driver = start_firefox_under_existing_profile(profile_abs_path, page_url, headless)
+    LOG.info(
+        f"Firefox started, waiting loading of '{page_url}'. Don't scroll/click on it's window!")
+    # Set 'events_date' to search if not specified.
+    if events_date is None:
         if back_days > 0:
-            date = datetime.datetime((datetime.datetime.today() - datetime.timedelta(days=back_days)).total_seconds())
+            events_date = datetime.datetime.today().astimezone() - datetime.timedelta(days=back_days)
     # Check that first need scroll to day and perform scrolls.
     _scroll_to_day(back_days, date_label, driver)
     # Start parse events.
-    # Note that page may contian few containers, espectially if there are no events this day.
+    # Note that page may contian few containers, espectially if t)here are no events this day.
     events_containers = _wait_on_page(
         driver,
         "//div[contains(@class,'scrollContainer') and not(contains(@style,'none'))]"
@@ -218,34 +250,9 @@ def get_events_from_owa(profile_abs_path: str, headless: bool = False, back_days
         events_container,
         lambda x: x.find_elements(By.XPATH, f".//{TYPE_DIV_XPATH_SELECTOR}/..")
     )
+    hour_points: List[int, float] = _get_hour_points(events_container)
     events: List[Event] = []
-    hour_points: List[Tuple[int, float]] = None
     for probable_event_div in probable_event_divs:
-        # Search "hour" elements at left column first time.
-        if hour_points is None:
-            hour_spans = call_web_element_with_fail_handling(
-                "containers of event rectangles",
-                probable_event_div,
-                lambda x: x.find_elements(
-                    By.XPATH,
-                    "//span[contains(@class,'ms-font-m')"
-                        " and contains(@class,'semilight')"
-                        " and contains(@class,'ms-font-color-neutralPrimary')]"
-                )
-            )
-            # Note that WebElement.rect/location are based on Element.getBoundingClientRect() though are adding padding
-            # and border-width. See https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect
-            # Also not that "padding-top" is returned as "10px" so need to parse only digits.
-            hour_points = [
-                (
-                    int(x.text),
-                    x.rect['y'] + int(''.join(c for c in x.value_of_css_property("padding-top") if c.isdigit()))
-                )
-                for x in hour_spans if x.text.isnumeric()
-            ]
-            if len(hour_points) < 24:
-                LOG.error(probable_event_div.get_attribute('innerHTML'))
-                assert False, "Can't find all 24 'hour' points on the screen."
         # Search for the "time" rectangle of event.
         event_div = call_web_element_with_fail_handling(
             '"time" rectangle',
@@ -258,29 +265,21 @@ def get_events_from_owa(profile_abs_path: str, headless: bool = False, back_days
             continue
         # Search for event data container. They are wrapped into 'div' next to 'event_div' with 2 types of structure:
         # 1) Series of events - inside 2 div-s where 1st contains 3 span-s with name, location, sender.
-        event_data_container1 = call_web_element_with_fail_handling(
+        # 2) One time event - inside 1 span with name, 2 div-s where 1st contains 2 span-s with location, sender.
+        event_data_container = call_web_element_with_fail_handling(
             "div with event data",
             probable_event_div,
             lambda x: x.find_element(By.XPATH, ".//div[(count(span)=3) or (count(span)=1 and count(div)=2)]"),
             False
         )
-        # 2) One time event - inside 1 span with name, 2 div-s where 1st contains 2 span-s with location, sender.
-        if not event_data_container1:
-            event_data_container2 = call_web_element_with_fail_handling(
-                "div with event data",
-                probable_event_div,
-                lambda x: x.find_element(By.XPATH, ".//div[count(span)=1 and count(div)=2]"),
-                False
-            )
-        if not event_data_container1 and not event_data_container2:
+        if not event_data_container:
             LOG.info(f"Skipping '{probable_event_div.text}' because event data is not placed in it.")
             continue
         # Event is found - grab/calculate data from it.
-        event_text = event_data_container1.text if event_data_container1 else event_data_container2.text
-        LOG.info(f"Found event '{event_text}' in rect {event_div.rect}.")
+        LOG.info(f"Found event '{event_data_container.text}' in rect {event_div.rect}.")
         event_elements: List[WebElement] = call_web_element_with_fail_handling(
             "elements of event",
-            event_data_container1 if event_data_container1 else event_data_container2,
+            event_data_container,
             lambda x: x.find_elements(By.XPATH, ".//span")  # In both cases elements are placed in span-s in order.
         )
         div_classes = event_div.get_attribute("class")
@@ -291,7 +290,7 @@ def get_events_from_owa(profile_abs_path: str, headless: bool = False, back_days
             event_type = "free"
         elif "calendarBusy" in div_classes:
             event_type = "busy"
-        start_time, duration = _find_start_and_duration(hour_points, event_div, event_text, date)
+        start_time, duration = _find_start_and_duration(hour_points, event_div, event_data_container.text, events_date)
         # Assemble event.
         events.append(Event(BUCKET_ID, start_time, duration, {
             'type': event_type,
@@ -313,14 +312,15 @@ def upload_events(events: List[Event]):
 
 
 def main():
-    # TODO ask date
-    events = get_events_from_owa("TODO", back_days=2, headless=False)
+    # TODO ask arguments
+    profile_abs_path = '/home/i4ellendger/.mozilla/firefox/21357bye.default-release/'
+    events = get_events_from_owa(profile_abs_path, "https://mail.akvelon.com/owa/", True, back_days=2)
     # events = []
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 10, 0).astimezone(), duration=datetime.timedelta(seconds=5280), data={'type': 'busy', 'name': 'Armenian language classes', 'location': 'Zoom', 'sender': 'Ekaterina Cheshuina'}))
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 12, 0).astimezone(), duration=datetime.timedelta(seconds=840), data={'type': 'tentative', 'name': 'PLAN team stand up', 'location': 'https://intapp.zoom.us/j/96652217786?pwd=MFFodUpnbis0VXdwM1c5STlSK0FtQT09', 'sender': 'Ivan Volkov'}))
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 15, 0).astimezone(), duration=datetime.timedelta(seconds=3480), data={'type': 'busy', 'name': 'Discuss results of PPT-4898 (Define approach to migrate jobs to SpringBatch)', 'location': 'https://us04web.zoom.us/j/73290816495?pwd=9WAMmHb2rQTVKa1J9ehJsrIeQfXZjP.1', 'sender': 'Alexey Semenov'}))
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 20, 0).astimezone(), duration=datetime.timedelta(seconds=1680), data={'type': 'busy', 'name': 'FW: [EXTERNAL] Weekly Cloud Release Meeting', 'location': '', 'sender': 'ENG - Cloud Status Team'}))
-    LOG.info(f"Parsed {len(events)} from {PAGE_URL}" + "\n  " + "\n  ".join(str(x) for x in events))
+    LOG.info(f"Parsed {len(events)} events:" + "\n  " + "\n  ".join(str(x) for x in events))
     # Load events into ActivityWatcher
     data = upload_events(events)
     LOG.info(data)
