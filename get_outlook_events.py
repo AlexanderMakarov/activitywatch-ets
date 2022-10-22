@@ -8,7 +8,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException
+import socket
 import aw_client
+import aw_core.models as awmodels
 
 from activity_merger.config.config import LOG
 from activity_merger.helpers.helpers import setup_logging
@@ -19,7 +21,7 @@ NAME = 'outlook_aw_events_scraper'
 SCREENSHOT_NAME = f"{NAME}-events-screenshot.png"
 SCREENSHOT_FAIL_NAME = f"{NAME}-fail-screenshot.png"
 PAGE_URL = 'https://mail.akvelon.com/owa/#path=/calendar/view/Day'
-BUCKET_ID = NAME
+BUCKET_ID = f'{NAME}_{socket.gethostname()}'
 MAX_SCROLL_BACK = 31
 
 
@@ -141,8 +143,9 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
                     "'Current day' label",
                     scroll_area,
                     lambda x: x.find_element(
-                        By.XPATH,
-                        "button[contains(@class,'o365button')]/span[contains(@class,'o365buttonLabel')]"
+                        By.XPATH,  # Note that page may contains a lot of elements with only one visible.
+                        "button[contains(@class,'o365button')]"
+                            "/span[contains(@class,'o365buttonLabel') and not(contains(@style,'none'))]"
                     ),
                     False
                 )
@@ -157,24 +160,27 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
             scroll_back: WebElement = call_web_element_with_fail_handling(
                 "'Open previous day' button",
                 scroll_area,
-                lambda x: x.find_element(By.XPATH, f"button/{SCROLL_BACK_XPATH_SELECTOR}")
+                lambda x: x.find_element(By.XPATH, f"button/{SCROLL_BACK_XPATH_SELECTOR}/..")
             )
             current_day_desc = f"'{date_label_span.text}'" if date_label_span else "<first_or_undefined>"
-            LOG.info(f"From {current_day_desc} page clicking on '{scroll_back.text}' button"
+            LOG.info(f"From {current_day_desc} page clicking on '{scroll_back.get_attribute('ariaLabel')}' button"
                      f"(rect={scroll_back.rect}) to shift on previous day.")
             scroll_back.click()
             scrolls_back += 1
 
-def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
-        date: datetime.datetime = datetime.datetime.today(), date_label: str = None) -> List[Event]:
+def get_events_from_owa(profile_abs_path: str, headless: bool = False, back_days: int = 0,
+        date: datetime.datetime = datetime.datetime.today().astimezone(),
+        date_label: str = None) -> List[Event]:
     """
-    Scapes events from OWA page. Starts Firefox browser with OWA page "Calendar for a day" in headless mode, scrolls to
-    requered date if need, finds all events and calculates theirs start date and duration by coordinates on the screen.
+    Scapes events from OWA page. Starts Firefox browser with OWA page "Calendar for a day" in headless mode (if need),
+    scrolls to requered date if need, finds all events
+    and calculates theirs start date and duration by coordinates on the screen.
     Requires Firefox profile to be opened already with OWA page authorized - it doesn't handle authentication.
     :param profile_abs_path: Absolute path to Firefox profile. On Linux looks like 
     '/home/{username}/.mozilla/firefox/808favcvs.default-release/'.
+    :param headless: Flag to open Firefox window in the headless mode. Doesn't make it faster at all.
     :param back_days: Optional. Number of days back.
-    :param date:  Date to set for events. Optional if 'back days' parameter specified.
+    :param date: Date to set for events. Should contain time zone info. Optional if 'back days' parameter specified.
     Should match date in "date label" parameter.
     :param date_label: Label of page for "tap back until" logic. Replaces or supports 'back_days' parameter.
     Should match 'date' parameter.
@@ -183,8 +189,9 @@ def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
     profile_abs_path = '/home/i4ellendger/.mozilla/firefox/21357bye.default-release/' # TODO remove
     LOG.info(f"Starting Firefox with profile '{profile_abs_path}'."
              " Note that you need to have OWA opened and authenticated under this profile, otherwise it would fail.")
-    driver = start_firefox_under_existing_profile(profile_abs_path, PAGE_URL, False)  # TODO True
-    LOG.info(f"Firefox started, waiting loading of '{PAGE_URL}'. Don't scroll/click page!")
+    # In "with UI" mode some parsing on my machine takes 65s, in headless - the same 65s. 
+    driver = start_firefox_under_existing_profile(profile_abs_path, PAGE_URL, headless)
+    LOG.info(f"Firefox started, waiting loading of '{PAGE_URL}'. Don't scroll/click on it's window!")
 
     # Set 'date' to search if not specified.
     if date is None:
@@ -202,15 +209,14 @@ def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
     events_container = next(x for x in events_containers if x.size['height'] > 100)
     driver.implicitly_wait(1)  # Wait until all events are rendered on the container. Immediate check returns only first event(s).
     events_container.screenshot(SCREENSHOT_NAME)
-    LOG.info(f"Page of required day is opened, scrapping events. See screenshot {SCREENSHOT_NAME}")  # TODO headless
-    # Note that these div-s also contains elements with calendar name(s).
+    LOG.info(f"Page of required day is opened, scrapping events. See screenshot {SCREENSHOT_NAME}.")
+    # Note that these div-s also contains elements with calendar(s) name.
+    TYPE_DIV_XPATH_SELECTOR = "div[contains(@class,'calendarBusy') or contains(@class,'calendarTentative')"\
+                                  " or contains(@class,'calendarBusy')]"
     probable_event_divs: List[WebElement] = call_web_element_with_fail_handling(
         "probable containers of event rectangles",
         events_container,
-        lambda x: x.find_elements(
-            By.XPATH,
-            ".//div[(contains(@class,'calendarBusy') or contains(@class,'calendarTentative'))]/.."
-        )
+        lambda x: x.find_elements(By.XPATH, f".//{TYPE_DIV_XPATH_SELECTOR}/..")
     )
     events: List[Event] = []
     hour_points: List[Tuple[int, float]] = None
@@ -244,49 +250,80 @@ def get_events_from_owa(profile_abs_path: str, back_days: int = 0,
         event_div = call_web_element_with_fail_handling(
             '"time" rectangle',
             probable_event_div,
-            lambda x: x.find_element(
-                By.XPATH,
-                ".//div[contains(@class,'calendarTentative') or contains(@class,'calendarFree')]"
-            ),
+            lambda x: x.find_element(By.XPATH, f".//{TYPE_DIV_XPATH_SELECTOR}"),
             False
         )
         if not event_div:
-            LOG.info(f"Skipping {probable_event_div} because event rectangle is not placed in it.")
+            LOG.info(f"Skipping '{probable_event_div.text}' because event rectangle is not placed in it.")
             continue
-        # Search for event data container.
-        event_data_container = call_web_element_with_fail_handling(
+        # Search for event data container. They are wrapped into 'div' next to 'event_div' with 2 types of structure:
+        # 1) Series of events - inside 2 div-s where 1st contains 3 span-s with name, location, sender.
+        event_data_container1 = call_web_element_with_fail_handling(
             "div with event data",
             probable_event_div,
-            lambda x: x.find_element(By.XPATH, ".//div[count(span)=3]"),
+            lambda x: x.find_element(By.XPATH, ".//div[(count(span)=3) or (count(span)=1 and count(div)=2)]"),
             False
         )
-        if not event_data_container:
-            LOG.info(f"Skipping {probable_event_div} because event data is not placed in it.")
+        # 2) One time event - inside 1 span with name, 2 div-s where 1st contains 2 span-s with location, sender.
+        if not event_data_container1:
+            event_data_container2 = call_web_element_with_fail_handling(
+                "div with event data",
+                probable_event_div,
+                lambda x: x.find_element(By.XPATH, ".//div[count(span)=1 and count(div)=2]"),
+                False
+            )
+        if not event_data_container1 and not event_data_container2:
+            LOG.info(f"Skipping '{probable_event_div.text}' because event data is not placed in it.")
             continue
         # Event is found - grab/calculate data from it.
-        LOG.info(f"Found event '{event_data_container.text}' in rect {event_div.rect}")
-        start_time, duration = _find_start_and_duration(hour_points, event_div, event_data_container.text, date)
+        event_text = event_data_container1.text if event_data_container1 else event_data_container2.text
+        LOG.info(f"Found event '{event_text}' in rect {event_div.rect}.")
         event_elements: List[WebElement] = call_web_element_with_fail_handling(
             "elements of event",
-            event_data_container,
-            lambda x: x.find_elements(By.TAG_NAME, "span")
+            event_data_container1 if event_data_container1 else event_data_container2,
+            lambda x: x.find_elements(By.XPATH, ".//span")  # In both cases elements are placed in span-s in order.
         )
+        div_classes = event_div.get_attribute("class")
+        event_type = None  # Value of class from TYPE_DIV_XPATH_SELECTOR.
+        if "calendarTentative" in div_classes:
+            event_type = "tentative"
+        elif "calendarFree" in div_classes:
+            event_type = "free"
+        elif "calendarBusy" in div_classes:
+            event_type = "busy"
+        start_time, duration = _find_start_and_duration(hour_points, event_div, event_text, date)
+        # Assemble event.
         events.append(Event(BUCKET_ID, start_time, duration, {
-           'name': event_elements[0].text,
-           'location': event_elements[1].text,
-           'sender': event_elements[2].text
+            'type': event_type,
+            'name': event_elements[0].text,
+            'location': event_elements[1].text,
+            'sender': event_elements[2].text,
         }))
-
-    LOG.info(events_container.get_attribute('innerHTML'))
-    # LOG.info("Assembled %d activities:\n  %s" % (len(activities), "\n  ".join(str(x) for x in activities)))
+    driver.quit()
     return events
+
+
+def upload_events(events: List[Event]):
+    # Convert into ActivityWatch clients.
+    aw_events = [awmodels.Event(timestamp=x.timestamp, duration=x.duration, data=x.data) for x in events]
+    # Build client, check than bucket is created and insert events.
+    client = aw_client.ActivityWatchClient(NAME)
+    client.create_bucket(BUCKET_ID, event_type="owa365.calendar.event")  # Will return 304 if bucket exists.
+    return client.insert_events(BUCKET_ID, aw_events)
 
 
 def main():
     # TODO ask date
-    events = get_events_from_owa("TODO", back_days=1)
+    events = get_events_from_owa("TODO", back_days=2, headless=False)
+    # events = []
+    # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 10, 0).astimezone(), duration=datetime.timedelta(seconds=5280), data={'type': 'busy', 'name': 'Armenian language classes', 'location': 'Zoom', 'sender': 'Ekaterina Cheshuina'}))
+    # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 12, 0).astimezone(), duration=datetime.timedelta(seconds=840), data={'type': 'tentative', 'name': 'PLAN team stand up', 'location': 'https://intapp.zoom.us/j/96652217786?pwd=MFFodUpnbis0VXdwM1c5STlSK0FtQT09', 'sender': 'Ivan Volkov'}))
+    # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 15, 0).astimezone(), duration=datetime.timedelta(seconds=3480), data={'type': 'busy', 'name': 'Discuss results of PPT-4898 (Define approach to migrate jobs to SpringBatch)', 'location': 'https://us04web.zoom.us/j/73290816495?pwd=9WAMmHb2rQTVKa1J9ehJsrIeQfXZjP.1', 'sender': 'Alexey Semenov'}))
+    # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 20, 0).astimezone(), duration=datetime.timedelta(seconds=1680), data={'type': 'busy', 'name': 'FW: [EXTERNAL] Weekly Cloud Release Meeting', 'location': '', 'sender': 'ENG - Cloud Status Team'}))
     LOG.info(f"Parsed {len(events)} from {PAGE_URL}" + "\n  " + "\n  ".join(str(x) for x in events))
-    # load events into ActivityWatcher
+    # Load events into ActivityWatcher
+    data = upload_events(events)
+    LOG.info(data)
 
 
 if __name__ == '__main__':
