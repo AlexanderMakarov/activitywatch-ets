@@ -86,6 +86,7 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
         scroll_area = None
         date_label_span = None
         scrolls_back = 0
+        current_day_desc = "<first_or_undefined>"
         while scrolls_back < OWA_MAX_SCROLL_BACK:
             if scroll_area:  # Check label only after the first iteration.
                 date_label_span: WebElement = call_web_element_with_fail_handling(
@@ -98,8 +99,10 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
                     ),
                     False
                 )
-                if date_label and date_label_span and date_label_span.text == date_label:
-                    break
+                if date_label_span:
+                    current_day_desc = date_label_span.text
+                    if date_label and date_label_span.text == date_label:
+                        break
             if scrolls_back == back_days:
                 if date_label:  # I.e. if label was checked but doesn't match.
                     raise AssertionError(f"After {scrolls_back} days back '{date_label} wasn't found.")
@@ -111,11 +114,11 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
                 scroll_area,
                 lambda x: x.find_element(By.XPATH, f"button/{SCROLL_BACK_XPATH_SELECTOR}/..")
             )
-            current_day_desc = f"'{date_label_span.text}'" if date_label_span else "<first_or_undefined>"
             LOG.info(f"From {current_day_desc} page clicking on '{scroll_back.get_attribute('ariaLabel')}' button"
                      f"(rect={scroll_back.rect}) to shift on previous day.")
             scroll_back.click()
             scrolls_back += 1
+    LOG.info(f"Finishing on {current_day_desc} page.")
 
 
 def _get_hour_points(container_web_element: WebElement):
@@ -272,7 +275,7 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
     return events
 
 
-def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool,
+def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool = False,
         events_date: datetime.datetime = None, back_days: int = 0, date_label: str = None) -> List[Event]:
     """
     Scapes events from OWA page. Starts Firefox browser with OWA page "Calendar for a day" in headless mode (if need),
@@ -292,6 +295,7 @@ def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool,
     Should match 'date' parameter.
     :return: List of `Event`-s parsed for specified date.
     """
+    # Check input parameters.
     assert profile_abs_path, "Firefox profile folder path is not specified."
     assert owa_url, "OWA365/Web Outlook URL is not specified."
     if back_days is not None:
@@ -311,7 +315,7 @@ def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool,
     # Set 'events_date' to search if not specified.
     if events_date is None:
         if back_days > 0:
-            events_date = datetime.datetime.today().astimezone() - datetime.timedelta(days=back_days)
+            events_date = datetime.datetime.today().astimezone() - datetime.timedelta(days=back_days).date()
         else:
             assert False, "Both date for events and positive 'back days' parameters are not specified."
     # Check that first need scroll to day and perform scrolls.
@@ -337,10 +341,6 @@ def upload_events(events: List[Event]):
 
 
 def main():
-    # TODO remove
-    FIREFOX_PROFILE_PATH = '/home/i4ellendger/.mozilla/firefox/21357bye.default-release/'
-    OWA_URL = "https://mail.akvelon.com/owa/"
-    #
     parser = argparse.ArgumentParser(
         description="Opens Firefox (headless if need) under specified profile (see '--profile-path' parameter)"
                     " with given Office 365 Email/Calendar page (aka OWA), scrolls to specified date in Calendar,"
@@ -348,9 +348,9 @@ def main():
                     " Firefox opened in another window and be logged in here in order to pass all authentication"
                     " questions for the script."
     )
-    parser.add_argument('date', nargs='?', type=valid_date, default=datetime.datetime.now().astimezone().date(),
-                        help="Date to get OWA365/Web Outlook Calendar events for in format 'YYYY-mm-dd'."
-                             "By-default today. Calculated if set 'back days' argument.")
+    parser.add_argument('date', nargs='?', type=valid_date,
+                        help="Date to set for OWA365/Web Outlook Calendar events in format 'YYYY-mm-dd'."
+                             "If set 'back days' argument then is calculated basing on today.")
     parser.add_argument('-b', '--back-days', type=int,
                         help="How many days need to scroll back from today to reach day to scrape Calendar events."
                              f" Max to {OWA_MAX_SCROLL_BACK}.")

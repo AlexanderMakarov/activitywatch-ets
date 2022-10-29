@@ -4,10 +4,10 @@ import socket
 from ..domain.input_entities import EventKeyHandler, Rule
 
 
-# ---------- PERSONAL SETTINGS ---------- 
-# Min duration one activity events sum to show.
+# ---------- PERSONAL SETTINGS ---------- Certanly of very probable to change settings.
+# How short may be activity.
 MIN_DURATION_SEC = 15 * 60  # 0.25 hours
-# Which activity treat as too long for additional logging.
+# How long activity may be.
 TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS = datetime.timedelta(2, 0, 0).seconds  # 2 hours
 # List of rules describing "watcher" event activity and priority if different "watcher" events happened simultaneously.
 # Keys matche bucket names start. If there will be few buckets with ID starting from key then all will be handled.
@@ -87,13 +87,13 @@ RULES = {
         ])
     ],
 }
-# Absolute path to Firefox profile folder.
+# Absolute path to Firefox profile folder to grab OWA events under.
 # On Linux it looks like '/home/{username}/.mozilla/firefox/{some_id}.default-release/'.
 FIREFOX_PROFILE_PATH: str = None
 # URL to home page of Web (MS Office Web Apps) Outlook. May look like 'https://mail.company.com/owa'.
 OWA_URL: str = None
 
-# ---------- FINE TUNING SETTINGS ---------- 
+# ---------- FINE TUNING SETTINGS ---------- Settings which a sutable for regular user.
 # Tolerance to use when comparing events. Events shorter than this value are ignored.
 # If duration between start and end of different events if equal or less then they are treated adjacent.
 EVENTS_COMPARE_TOLERANCE_TIMEDELTA = datetime.timedelta(0, 1, 0)  # 1 sec
