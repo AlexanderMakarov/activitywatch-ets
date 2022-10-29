@@ -1,5 +1,6 @@
 import datetime
 import logging
+import argparse
 from ..domain.input_entities import Event
 from ..config.config import CURRENT_TIMEZONE
 
@@ -34,3 +35,11 @@ def from_start_to_end_to_str(obj) -> str:
 
 def seconds_to_int_timedelta(seconds: float) -> str:
     return datetime.timedelta(seconds=int(seconds))
+
+
+def valid_date(s):  # https://stackoverflow.com/a/25470943
+    try:
+        return datetime.datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        msg = "not a valid date: {0!r}".format(s)
+        raise argparse.ArgumentTypeError(msg)

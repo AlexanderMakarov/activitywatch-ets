@@ -5,18 +5,10 @@ import aw_client
 from typing import List
 
 from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES
-from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta
+from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date
 from activity_merger.domain.merger import report_from_buckets
 from activity_merger.domain.analyzer import analyze_intervals
 from activity_merger.domain.output_entities import Activity
-
-
-def valid_date(s):  # https://stackoverflow.com/a/25470943
-    try:
-        return datetime.strptime(s, "%Y-%m-%d")
-    except ValueError:
-        msg = "not a valid date: {0!r}".format(s)
-        raise argparse.ArgumentTypeError(msg)
 
 
 def convert_aw_events_to_activities(start_date: datetime.datetime) -> List[Activity]:

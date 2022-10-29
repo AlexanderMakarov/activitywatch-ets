@@ -1,6 +1,8 @@
 import datetime
 import logging
+import socket
 from ..domain.input_entities import EventKeyHandler, Rule
+
 
 # ---------- PERSONAL SETTINGS ---------- 
 # Min duration one activity events sum to show.
@@ -85,6 +87,11 @@ RULES = {
         ])
     ],
 }
+# Absolute path to Firefox profile folder.
+# On Linux it looks like '/home/{username}/.mozilla/firefox/{some_id}.default-release/'.
+FIREFOX_PROFILE_PATH: str = None
+# URL to home page of Web (MS Office Web Apps) Outlook. May look like 'https://mail.company.com/owa'.
+OWA_URL: str = None
 
 # ---------- FINE TUNING SETTINGS ---------- 
 # Tolerance to use when comparing events. Events shorter than this value are ignored.
@@ -99,3 +106,9 @@ WATCHDOG_RULE_PRIORITY = 1000
 CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo  # Use system timezone.
 # Default logger. Used for cases when script is called as a library.
 LOG: logging.Logger = logging.getLogger(__name__)
+# ActivityWatch client name and screenshots prefix for OWA365/Web Outlook Calendar events.
+OWA_SCRAPER_NAME = 'outlook_aw_events_scraper'
+# ActivityWatch bucket ID for OWA365/Web Outlook Calendar events.
+OWA_BUCKET_ID = f'{OWA_SCRAPER_NAME}_{socket.gethostname()}'
+# Max number of "scroll back" operations on OWA365/Web Outlook Calendar page.
+OWA_MAX_SCROLL_BACK = 31

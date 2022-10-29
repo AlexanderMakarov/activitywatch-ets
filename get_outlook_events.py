@@ -11,18 +11,16 @@ from selenium.common.exceptions import NoSuchElementException
 import socket
 import aw_client
 import aw_core.models as awmodels
+import argparse
 
-from activity_merger.config.config import LOG
-from activity_merger.helpers.helpers import setup_logging
+from activity_merger.config.config import LOG, FIREFOX_PROFILE_PATH, OWA_SCRAPER_NAME, OWA_URL, OWA_BUCKET_ID, OWA_MAX_SCROLL_BACK
+from activity_merger.helpers.helpers import setup_logging, valid_date
 from activity_merger.domain.input_entities import Event
 
 
-NAME = 'outlook_aw_events_scraper'
-SCREENSHOT_NAME = f"{NAME}-events-screenshot.png"
-SCREENSHOT_FAIL_NAME = f"{NAME}-fail-screenshot.png"
+SCREENSHOT_NAME = f"{OWA_SCRAPER_NAME}-events-screenshot.png"
+SCREENSHOT_FAIL_NAME = f"{OWA_SCRAPER_NAME}-fail-screenshot.png"
 CALENDAR_TODAY_URL_SUFFIX = "/#path=/calendar/view/Day"
-BUCKET_ID = f'{NAME}_{socket.gethostname()}'
-MAX_SCROLL_BACK = 31
 
 
 # JS snippet to get location in browser as a hint on mouse move.
@@ -88,7 +86,7 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
         scroll_area = None
         date_label_span = None
         scrolls_back = 0
-        while scrolls_back < MAX_SCROLL_BACK:
+        while scrolls_back < OWA_MAX_SCROLL_BACK:
             if scroll_area:  # Check label only after the first iteration.
                 date_label_span: WebElement = call_web_element_with_fail_handling(
                     "'Current day' label",
@@ -198,40 +196,13 @@ def _find_start_and_duration(hour_points: List[Tuple[int, float]], event_div: We
     return start_time, end_time - start_time
 
 
-def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool,
-        events_date: datetime.datetime = None, back_days: int = 0, date_label: str = None) -> List[Event]:
+def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -> List[Event]:
     """
-    Scapes events from OWA page. Starts Firefox browser with OWA page "Calendar for a day" in headless mode (if need),
-    scrolls to requered date if need, finds all events
-    and calculates theirs start date and duration by coordinates on the screen.
-    Requires Firefox profile to be opened already with OWA page authorized - it doesn't handle authentication.
-    :param profile_abs_path: Absolute path to Firefox profile.
-    On Linux looks like '/home/{username}/.mozilla/firefox/808favcvs.default-release/'.
-    :param owa_url: URL to Web (MS Office Web Apps) Outlook. Page where email is opens.
-    May look like 'https://mail.company.com/owa'.
-    :param headless: Flag to open Firefox window in the headless mode. Doesn't make it faster at all.
-    :param events_date: Date to set for events. Calculated based on "today" if 'back days' parameter is specified.
-    Should contain time zone info and match date in "date label" parameter.
-    :param back_days: Optional. Number of days back.
-    :param date_label: Date label on page for "tap back until open" logic.
-    Value depends from language, regions, settings, etc. Replaces or supports 'back_days' parameter.
-    Should match 'date' parameter.
-    :return: List of `Event`-s parsed for specified date.
+    Scapes events from the page currently opened in the given WebDriver.
+    :param driver: 'WebDriver' to scrape data from page opened in.
+    :param events_date: Date to set for the events scraped.
+    :return: List of scraped events.
     """
-    LOG.info(f"Starting Firefox with profile '{profile_abs_path}'."
-             " Note that you need to have OWA opened and authenticated under this profile, otherwise it would fail.")
-    # In "with UI" mode some parsing on my machine takes 65s, in headless - the same 65s.
-    page_url = owa_url + CALENDAR_TODAY_URL_SUFFIX
-    driver = start_firefox_under_existing_profile(profile_abs_path, page_url, headless)
-    LOG.info(
-        f"Firefox started, waiting loading of '{page_url}'. Don't scroll/click on it's window!")
-    # Set 'events_date' to search if not specified.
-    if events_date is None:
-        if back_days > 0:
-            events_date = datetime.datetime.today().astimezone() - datetime.timedelta(days=back_days)
-    # Check that first need scroll to day and perform scrolls.
-    _scroll_to_day(back_days, date_label, driver)
-    # Start parse events.
     # Note that page may contian few containers, espectially if t)here are no events this day.
     events_containers = _wait_on_page(
         driver,
@@ -292,29 +263,113 @@ def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool,
             event_type = "busy"
         start_time, duration = _find_start_and_duration(hour_points, event_div, event_data_container.text, events_date)
         # Assemble event.
-        events.append(Event(BUCKET_ID, start_time, duration, {
+        events.append(Event(OWA_BUCKET_ID, start_time, duration, {
             'type': event_type,
             'name': event_elements[0].text,
             'location': event_elements[1].text,
             'sender': event_elements[2].text,
         }))
+    return events
+
+
+def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool,
+        events_date: datetime.datetime = None, back_days: int = 0, date_label: str = None) -> List[Event]:
+    """
+    Scapes events from OWA page. Starts Firefox browser with OWA page "Calendar for a day" in headless mode (if need),
+    scrolls to requered date if need, finds all events
+    and calculates theirs start date and duration by coordinates on the screen.
+    Requires Firefox profile to be opened already with OWA page authorized - it doesn't handle authentication.
+    :param profile_abs_path: Absolute path to Firefox profile.
+    On Linux looks like '/home/{username}/.mozilla/firefox/808favcvs.default-release/'.
+    :param owa_url: URL to Web (MS Office Web Apps) Outlook. Page where email is opens.
+    May look like 'https://mail.company.com/owa'.
+    :param headless: Flag to open Firefox window in the headless mode. Doesn't make it faster at all.
+    :param events_date: Date to set for events. Calculated based on "today" if 'back days' parameter is specified.
+    Should contain time zone info and match date in "date label" parameter.
+    :param back_days: Optional. Number of days to scroll back from today.
+    :param date_label: Date label on page for "tap back until open" logic.
+    Value depends on language, region, OWA365 settings, etc. Replaces or supports 'back_days' parameter.
+    Should match 'date' parameter.
+    :return: List of `Event`-s parsed for specified date.
+    """
+    assert profile_abs_path, "Firefox profile folder path is not specified."
+    assert owa_url, "OWA365/Web Outlook URL is not specified."
+    if back_days is not None:
+        assert isinstance(back_days, int),\
+            f"'back days' value should be an integer."
+        assert 0 <= back_days < OWA_MAX_SCROLL_BACK,\
+            f"'back days' value ({back_days}) should be positive and not more than limit {OWA_MAX_SCROLL_BACK}."
+    else:
+        assert date_label and events_date,\
+            f"Either 'back days' or 'events_data' and 'date_label' should be specified to put date for events."
+    LOG.info(f"Starting Firefox with profile '{profile_abs_path}'."
+             " Note that you need to have OWA opened and authenticated under this profile, otherwise it would fail.")
+    # In "with UI" mode some parsing on my machine takes 65s, in headless - the same 65s.
+    page_url = owa_url + CALENDAR_TODAY_URL_SUFFIX
+    driver = start_firefox_under_existing_profile(profile_abs_path, page_url, headless)
+    LOG.info(f"Firefox started, waiting loading of '{page_url}'. Don't scroll/click on it's window!")
+    # Set 'events_date' to search if not specified.
+    if events_date is None:
+        if back_days > 0:
+            events_date = datetime.datetime.today().astimezone() - datetime.timedelta(days=back_days)
+        else:
+            assert False, "Both date for events and positive 'back days' parameters are not specified."
+    # Check that first need scroll to day and perform scrolls.
+    _scroll_to_day(back_days, date_label, driver)
+    # Parse events. TODO parse few days.
+    events = scrape_events_from_page(driver, events_date)
     driver.quit()
     return events
 
 
 def upload_events(events: List[Event]):
+    """
+    Takes list of `Event`-s, converts them into ActivityWatch events and uploads them into dedicated
+    `OWA_BUCKET_ID` bucket in ActivityWatch.
+    :param events: List of events to upload.
+    """
     # Convert into ActivityWatch clients.
     aw_events = [awmodels.Event(timestamp=x.timestamp, duration=x.duration, data=x.data) for x in events]
     # Build client, check than bucket is created and insert events.
-    client = aw_client.ActivityWatchClient(NAME)
-    client.create_bucket(BUCKET_ID, event_type="owa365.calendar.event")  # Will return 304 if bucket exists.
-    return client.insert_events(BUCKET_ID, aw_events)
+    client = aw_client.ActivityWatchClient(OWA_SCRAPER_NAME)
+    client.create_bucket(OWA_BUCKET_ID, event_type="owa365.calendar.event")  # Will return 304 if bucket exists.
+    client.insert_events(OWA_BUCKET_ID, aw_events)  # Actually returns None.
 
 
 def main():
-    # TODO ask arguments
-    profile_abs_path = '/home/i4ellendger/.mozilla/firefox/21357bye.default-release/'
-    events = get_events_from_owa(profile_abs_path, "https://mail.akvelon.com/owa/", True, back_days=2)
+    # TODO remove
+    FIREFOX_PROFILE_PATH = '/home/i4ellendger/.mozilla/firefox/21357bye.default-release/'
+    OWA_URL = "https://mail.akvelon.com/owa/"
+    #
+    parser = argparse.ArgumentParser(
+        description="Opens Firefox (headless if need) under specified profile (see '--profile-path' parameter)"
+                    " with given Office 365 Email/Calendar page (aka OWA), scrolls to specified date in Calendar,"
+                    " parses all found events in it and loads them into ActivityWatch. Note that you need to have"
+                    " Firefox opened in another window and be logged in here in order to pass all authentication"
+                    " questions for the script."
+    )
+    parser.add_argument('date', nargs='?', type=valid_date, default=datetime.datetime.now().astimezone().date(),
+                        help="Date to get OWA365/Web Outlook Calendar events for in format 'YYYY-mm-dd'."
+                             "By-default today. Calculated if set 'back days' argument.")
+    parser.add_argument('-b', '--back-days', type=int,
+                        help="How many days need to scroll back from today to reach day to scrape Calendar events."
+                             f" Max to {OWA_MAX_SCROLL_BACK}.")
+    parser.add_argument('-l', '--date-label', type=str,
+                        help="Date label on page for 'tap back until open' logic. Value depends on language, region,"
+                             "OWA365 settings, etc. Replaces or supports 'back_days' parameter."
+                             "Should match 'date' parameter.")
+    parser.add_argument('--headless', action='store_true',
+                        help="Flag to open Firefox window in the headless mode. Doesn't make parsing faster"
+                             "but eliminates risk to click something on the page and break parsing.")
+    parser.add_argument('-p', '--profile-path', type=str, default=FIREFOX_PROFILE_PATH,
+                        help="Absolute path to Firefox profile folder. On Linux it looks like "
+                             "'/home/{username}/.mozilla/firefox/{some_id}.default-release/'.")
+    parser.add_argument('-u', '--owa-url', type=str, default=OWA_URL,
+                        help="URL to Web (MS Office Web Apps) Outlook. Page where email box opens."
+                             "May look like 'https://mail.company.com/owa'.")
+    args = parser.parse_args()
+    events = get_events_from_owa(args.profile_path, args.owa_url, args.headless, events_date=args.date, 
+                                 back_days=args.back_days, date_label=args.date_label)
     # events = []
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 10, 0).astimezone(), duration=datetime.timedelta(seconds=5280), data={'type': 'busy', 'name': 'Armenian language classes', 'location': 'Zoom', 'sender': 'Ekaterina Cheshuina'}))
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 12, 0).astimezone(), duration=datetime.timedelta(seconds=840), data={'type': 'tentative', 'name': 'PLAN team stand up', 'location': 'https://intapp.zoom.us/j/96652217786?pwd=MFFodUpnbis0VXdwM1c5STlSK0FtQT09', 'sender': 'Ivan Volkov'}))
@@ -322,8 +377,8 @@ def main():
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 20, 0).astimezone(), duration=datetime.timedelta(seconds=1680), data={'type': 'busy', 'name': 'FW: [EXTERNAL] Weekly Cloud Release Meeting', 'location': '', 'sender': 'ENG - Cloud Status Team'}))
     LOG.info(f"Parsed {len(events)} events:" + "\n  " + "\n  ".join(str(x) for x in events))
     # Load events into ActivityWatcher
-    data = upload_events(events)
-    LOG.info(data)
+    upload_events(events)
+    LOG.info("Uploaded all events into ActivityWatch.")
 
 
 if __name__ == '__main__':
