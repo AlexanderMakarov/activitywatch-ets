@@ -6,7 +6,7 @@ import difflib
 import jira
 
 from activity_merger.config.config import LOG, JIRA_SCRAPER_NAME, JIRA_BUCKET_ID, JIRA_URL, JIRA_LOGIN_EMAIL,\
-                                          JIRA_LOGIN_API_TOKEN, JIRA_PROJECTS, JIRA_ISSUES_MAX
+    JIRA_LOGIN_API_TOKEN, JIRA_PROJECTS, JIRA_ISSUES_MAX, EVENTS_COMPARE_TOLERANCE_TIMEDELTA
 from activity_merger.helpers.helpers import setup_logging, valid_date, ensure_datetime, upload_events
 from activity_merger.domain.input_entities import Event
 
@@ -92,7 +92,7 @@ def _parse_event_from_story_without_duration(story: jira.resources.PropertyHolde
         else:
             unsupported_fields.add(field)
         # Make separate event for each change in issue - flat events are easier to handle.
-        events.append(Event(JIRA_BUCKET_ID, created, datetime.timedelta(seconds=1), {
+        events.append(Event(JIRA_BUCKET_ID, created, None, {
             'jira_id': jira_id,
             'field': field,
             'change_desc': change_desc,
@@ -108,6 +108,7 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
     :param author_email: Account email to filter activities by.
     :return: List of events based on Jira issues activites performed by specific account.
     """
+    # First generate as much events as possible and without right duration.
     events: List[Event] = []
     unsupported_fields = set()
     for issue in issues:
@@ -123,15 +124,36 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
         " During parsing handled with 'default' behavior following unknown fields from Jira issues: "\
             + str(unsupported_fields)
     LOG.info(f"Parsed {len(events)} events from {len(issues)} issues.{unsupported_desc}")
-    # Due to events created on "per issue" basis they has a lot of intersections.
-    # Need to adjust theirs 'duration' to make one consequitive line.
+    # Here events created on "per issue" basis though have a lot of intersections. Also theirs
+    # 'timestamp' field contains "end of event" datetime and duration may be happen shorter than tolerance.
+    # Need to merge them and adjust theirs 'duration' to make one consequitive line of "not too short" events.
+    # Note that do this for more than 2 events is hard and may make no sense. TODO consider remove it.
     events = sorted(events, key=lambda x: x.timestamp)
     # As an start for the first event use start of the day.
     event_start: datetime.datetime = ensure_datetime(events[0].timestamp.date())
-    result_events = []  # Note that Event is immutable.
+    result_events = []
+    pending_event = None
     for event in events:
-        result_events.append(Event(JIRA_BUCKET_ID, event_start, event.timestamp - event_start, event.data))
-        event_start = event.timestamp
+        duration = event.timestamp - event_start
+        # Check that we need extend current event and may adjust pending event.
+        if pending_event and duration <= EVENTS_COMPARE_TOLERANCE_TIMEDELTA \
+                and pending_event.data['jira_id'] == event.data['jira_id']\
+                and pending_event.duration > 2 * EVENTS_COMPARE_TOLERANCE_TIMEDELTA:
+            # If same Jira ticket event was performed before and has enough duration to fit one more then
+            # cut some duraion from previous event...
+            pending_duration = pending_event.duration - EVENTS_COMPARE_TOLERANCE_TIMEDELTA
+            result_events.append(Event(JIRA_BUCKET_ID, event_start, pending_duration, pending_event.data))
+            # ... and extend duration for the current one.
+            event_start = pending_event.timestamp + pending_duration
+            pending_event = Event(JIRA_BUCKET_ID, event_start, event.timestamp - event_start, event.data)
+        else:
+            if pending_event:
+                result_events.append(pending_event)
+            pending_event = Event(JIRA_BUCKET_ID, event_start, duration, event.data)
+        # Calculate start of the next event.
+        event_start = pending_event.timestamp + pending_event.duration
+    if pending_event:
+        result_events.append(pending_event)
     return result_events
 
 

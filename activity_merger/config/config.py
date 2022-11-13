@@ -104,7 +104,7 @@ JIRA_PROJECTS: str = None
 
 # ---------- FINE TUNING SETTINGS ---------- Settings which a sutable for regular user.
 # Tolerance to use when comparing events. Events shorter than this value are ignored.
-# If duration between start and end of different events if equal or less then they are treated adjacent.
+# If duration between start and end of different events is equal or less then they are treated adjacent.
 EVENTS_COMPARE_TOLERANCE_TIMEDELTA = datetime.timedelta(0, 1, 0)  # 1 sec
 # Default priority of "afk" event. All events with equal or higher priority are treated as "independent"
 # and may form separate activities.

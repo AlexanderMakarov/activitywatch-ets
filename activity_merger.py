@@ -656,8 +656,8 @@ def report_from_buckets(awc: aw_client.ActivityWatchClient, start_time: datetime
         if raw_events:
             LOG.info(f"Applying '{bucket_id}' {len(raw_events)} events with.")
             # Note that some watchers (like IDEA watcher from few windows) makes events covering each other,
-            # i.e. not adjusted. But on each focus change it do generates new event.
-            # So first sort all events and cut to make adjusted.
+            # i.e. not adjacent. But on each focus change it do generates new event.
+            # So first sort all events and cut to make adjacent.
             raw_events.sort(key=lambda e: e.timestamp)
             prev_event = None
             events = []  # Convert all events into inner named tuple with more fields.

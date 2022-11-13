@@ -226,7 +226,6 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
         LOG.info("No AFK bucket found. Stopping here - no more events expected.")
         return None
     if cur_interval:
-        # cur_interval.merge_all_adjacent_with_same_data()  # Remove duplicates.
         check_and_print_intervals(cur_interval, buckets_cnt, "AFK")
     else:
         LOG.info("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
@@ -243,8 +242,7 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
         events = [Event(bucket_id, x.id, x.timestamp, x.duration, x.data) for x in events]
         for event in events:  # TODO implement and put before AFK events handling.
             if cur_interval:
-                # Events are sorted here.
-                interval = cur_interval.new_after(event)
+                interval = cur_interval.new_after(event)  # Assume events are sorted here.
             else:
                 interval = Interval(event.timestamp, event.timestamp + event.duration)
                 interval.events.append(event)
@@ -265,8 +263,8 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
         if raw_events:
             LOG.info(f"Applying '{bucket_id}' {len(raw_events)} events with.")
             # Note that some watchers (like IDEA watcher from few windows) makes events covering each other,
-            # i.e. not adjusted. But on each focus change it do generates new event.
-            # So first sort all events and cut to make adjusted.
+            # i.e. not adjacent. But on each focus change it do generates new event.
+            # So first sort all events and cut to make adjacent in scope of a bucket.
             raw_events.sort(key=lambda e: e.timestamp)
             prev_event = None
             events = []  # Convert all events into inner named tuple with more fields.
