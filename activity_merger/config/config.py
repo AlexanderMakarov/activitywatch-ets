@@ -92,6 +92,15 @@ RULES = {
 FIREFOX_PROFILE_PATH: str = None
 # URL to home page of Web (MS Office Web Apps) Outlook. May look like 'https://mail.company.com/owa'.
 OWA_URL: str = None
+# URL to Jira main page. May look like 'https://company.jira.net'.
+JIRA_URL: str = None
+# Email to log in into Jira.
+JIRA_LOGIN_EMAIL: str = None
+# API Token to login into Jira.
+# See https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/
+JIRA_LOGIN_API_TOKEN: str = None
+# Comma-separated list of Jira project ID's to scrape events from.
+JIRA_PROJECTS: str = None
 
 # ---------- FINE TUNING SETTINGS ---------- Settings which a sutable for regular user.
 # Tolerance to use when comparing events. Events shorter than this value are ignored.
@@ -112,3 +121,9 @@ OWA_SCRAPER_NAME = 'outlook_aw_events_scraper'
 OWA_BUCKET_ID = f'{OWA_SCRAPER_NAME}_{socket.gethostname()}'
 # Max number of "scroll back" operations on OWA365/Web Outlook Calendar page.
 OWA_MAX_SCROLL_BACK = 31
+# ActivityWatch client name for Jira-based events.
+JIRA_SCRAPER_NAME = 'jira_aw_events_scraper'
+# ActivityWatch bucket ID for Jira-based events.
+JIRA_BUCKET_ID = f'{JIRA_SCRAPER_NAME}_{socket.gethostname()}'
+# Number of issues to ask Jira API for.
+JIRA_ISSUES_MAX = 100
