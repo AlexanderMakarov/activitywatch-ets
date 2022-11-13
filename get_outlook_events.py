@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import datetime
-from typing import Dict, List, Callable, Any, Tuple
+from typing import List, Callable, Any, Tuple
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By
@@ -8,13 +8,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException
-import socket
-import aw_client
-import aw_core.models as awmodels
 import argparse
 
-from activity_merger.config.config import LOG, FIREFOX_PROFILE_PATH, OWA_SCRAPER_NAME, OWA_URL, OWA_BUCKET_ID, OWA_MAX_SCROLL_BACK
-from activity_merger.helpers.helpers import setup_logging, valid_date
+from activity_merger.config.config import LOG, FIREFOX_PROFILE_PATH, OWA_SCRAPER_NAME, OWA_URL, OWA_BUCKET_ID,\
+                                          OWA_MAX_SCROLL_BACK
+from activity_merger.helpers.helpers import setup_logging, valid_date, upload_events
 from activity_merger.domain.input_entities import Event
 
 
@@ -326,20 +324,6 @@ def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool = Fa
     return events
 
 
-def upload_events(events: List[Event]):
-    """
-    Takes list of `Event`-s, converts them into ActivityWatch events and uploads them into dedicated
-    `OWA_BUCKET_ID` bucket in ActivityWatch.
-    :param events: List of events to upload.
-    """
-    # Convert into ActivityWatch clients.
-    aw_events = [awmodels.Event(timestamp=x.timestamp, duration=x.duration, data=x.data) for x in events]
-    # Build client, check than bucket is created and insert events.
-    client = aw_client.ActivityWatchClient(OWA_SCRAPER_NAME)
-    client.create_bucket(OWA_BUCKET_ID, event_type="owa365.calendar.event")  # Will return 304 if bucket exists.
-    client.insert_events(OWA_BUCKET_ID, aw_events)  # Actually returns None.
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Opens Firefox (headless if need) under specified profile (see '--profile-path' parameter)"
@@ -367,6 +351,8 @@ def main():
     parser.add_argument('-u', '--owa-url', type=str, default=OWA_URL,
                         help="URL to Web (MS Office Web Apps) Outlook. Page where email box opens."
                              "May look like 'https://mail.company.com/owa'.")
+    parser.add_argument('-r', '--replace', dest='is_replace_bucket', action='store_true',
+                        help=f"Flag to replace all events in ActivityWatch {OWA_BUCKET_ID} bucket.")
     args = parser.parse_args()
     events = get_events_from_owa(args.profile_path, args.owa_url, args.headless, events_date=args.date, 
                                  back_days=args.back_days, date_label=args.date_label)
@@ -375,9 +361,9 @@ def main():
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 12, 0).astimezone(), duration=datetime.timedelta(seconds=840), data={'type': 'tentative', 'name': 'PLAN team stand up', 'location': 'https://intapp.zoom.us/j/96652217786?pwd=MFFodUpnbis0VXdwM1c5STlSK0FtQT09', 'sender': 'Ivan Volkov'}))
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 15, 0).astimezone(), duration=datetime.timedelta(seconds=3480), data={'type': 'busy', 'name': 'Discuss results of PPT-4898 (Define approach to migrate jobs to SpringBatch)', 'location': 'https://us04web.zoom.us/j/73290816495?pwd=9WAMmHb2rQTVKa1J9ehJsrIeQfXZjP.1', 'sender': 'Alexey Semenov'}))
     # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 20, 0).astimezone(), duration=datetime.timedelta(seconds=1680), data={'type': 'busy', 'name': 'FW: [EXTERNAL] Weekly Cloud Release Meeting', 'location': '', 'sender': 'ENG - Cloud Status Team'}))
-    LOG.info(f"Parsed {len(events)} events:" + "\n  " + "\n  ".join(str(x) for x in events))
+    LOG.info(f"Ready to upload {len(events)} events:" + "\n  " + "\n  ".join(str(x) for x in events))
     # Load events into ActivityWatcher
-    upload_events(events)
+    upload_events(events, OWA_SCRAPER_NAME, "owa365.calendar.event", OWA_BUCKET_ID, args.is_replace_bucket)
     LOG.info("Uploaded all events into ActivityWatch.")
 
 

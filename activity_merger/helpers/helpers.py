@@ -1,8 +1,11 @@
 import datetime
 import logging
 import argparse
+from typing import List
 from ..domain.input_entities import Event
 from ..config.config import CURRENT_TIMEZONE
+import aw_client
+import aw_core.models as awmodels
 
 
 def setup_logging():
@@ -43,3 +46,34 @@ def valid_date(s):  # https://stackoverflow.com/a/25470943
     except ValueError:
         msg = "not a valid date: {0!r}".format(s)
         raise argparse.ArgumentTypeError(msg)
+
+
+def ensure_datetime(d):  # https://stackoverflow.com/a/29840081/1535127
+    """
+    Takes a date or a datetime as input, outputs a datetime.
+    :param d: Datetime or date.
+    :return: Always datetime in current time zone.
+    """
+    if isinstance(d, datetime.datetime):
+        return d
+    return datetime.datetime(d.year, d.month, d.day).astimezone(CURRENT_TIMEZONE)
+
+
+def upload_events(events: List[Event], aw_client_name: str, event_type: str, bucket_id: str, is_replace: bool = False):
+    """
+    Takes list of `Event`-s, converts them into ActivityWatch events, creates new ActivityWatch client, removes bucket
+    if need, creates bucket and uploads events into it.
+    :param events: List of events to upload.
+    :param aw_client_name: Name of client for ActivityWatch.
+    :param event_type: Type of event to set for the bucket. Means nothing.
+    :param bucket_id: Name of bucket to put events into or recreate.
+    :param is_replace: Flag to force remove bucket first.
+    """
+    # Convert into ActivityWatch clients.
+    aw_events = [awmodels.Event(timestamp=x.timestamp, duration=x.duration, data=x.data) for x in events]
+    # Build client, check than bucket is created and insert events.
+    client = aw_client.ActivityWatchClient(aw_client_name)
+    if is_replace:
+        client.delete_bucket(bucket_id, True)
+    client.create_bucket(bucket_id, event_type=event_type)  # Will return 304 if bucket exists.
+    client.insert_events(bucket_id, aw_events)  # Actually returns None.
