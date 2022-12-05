@@ -93,14 +93,14 @@ RULES = {
 FIREFOX_PROFILE_PATH: str = None
 # URL to home page of Web (MS Office Web Apps) Outlook. May look like 'https://mail.company.com/owa'.
 OWA_URL: str = None
-# URL to Jira main page. May look like 'https://company.jira.net'.
+# URL to Jira main/host page. May look like 'https://company.jira.net'.
 JIRA_URL: str = None
 # Email to log in into Jira.
 JIRA_LOGIN_EMAIL: str = None
 # API Token to login into Jira.
 # See https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/
 JIRA_LOGIN_API_TOKEN: str = None
-# Comma-separated list of Jira project ID's to scrape events from.
+# Comma-separated list of Jira project ID's to scrape events from. Like "OTD,EDIF".
 JIRA_PROJECTS: str = None
 
 # ---------- FINE TUNING SETTINGS ---------- Settings which a sutable for regular user.

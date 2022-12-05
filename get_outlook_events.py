@@ -353,18 +353,16 @@ def main():
                              "May look like 'https://mail.company.com/owa'.")
     parser.add_argument('-r', '--replace', dest='is_replace_bucket', action='store_true',
                         help=f"Flag to replace all events in ActivityWatch {OWA_BUCKET_ID} bucket.")
+    parser.add_argument('--dry-run', dest='is_dry_run', action='store_true',
+                        help=f"Flag to just log events but don't upload into ActivityWatch.")
     args = parser.parse_args()
     events = get_events_from_owa(args.profile_path, args.owa_url, args.headless, events_date=args.date, 
                                  back_days=args.back_days, date_label=args.date_label)
-    # events = []
-    # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 10, 0).astimezone(), duration=datetime.timedelta(seconds=5280), data={'type': 'busy', 'name': 'Armenian language classes', 'location': 'Zoom', 'sender': 'Ekaterina Cheshuina'}))
-    # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 12, 0).astimezone(), duration=datetime.timedelta(seconds=840), data={'type': 'tentative', 'name': 'PLAN team stand up', 'location': 'https://intapp.zoom.us/j/96652217786?pwd=MFFodUpnbis0VXdwM1c5STlSK0FtQT09', 'sender': 'Ivan Volkov'}))
-    # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 15, 0).astimezone(), duration=datetime.timedelta(seconds=3480), data={'type': 'busy', 'name': 'Discuss results of PPT-4898 (Define approach to migrate jobs to SpringBatch)', 'location': 'https://us04web.zoom.us/j/73290816495?pwd=9WAMmHb2rQTVKa1J9ehJsrIeQfXZjP.1', 'sender': 'Alexey Semenov'}))
-    # events.append(Event(bucket_id='outlook_aw_events_scraper_i4ellendger-Latitude-5511', timestamp=datetime.datetime(2022, 10, 20, 20, 0).astimezone(), duration=datetime.timedelta(seconds=1680), data={'type': 'busy', 'name': 'FW: [EXTERNAL] Weekly Cloud Release Meeting', 'location': '', 'sender': 'ENG - Cloud Status Team'}))
     LOG.info(f"Ready to upload {len(events)} events:" + "\n  " + "\n  ".join(str(x) for x in events))
     # Load events into ActivityWatcher
-    upload_events(events, OWA_SCRAPER_NAME, "owa365.calendar.event", OWA_BUCKET_ID, args.is_replace_bucket)
-    LOG.info("Uploaded all events into ActivityWatch.")
+    if not args.is_dry_run:
+        upload_events(events, OWA_SCRAPER_NAME, "owa365.calendar.event", OWA_BUCKET_ID, args.is_replace_bucket)
+        LOG.info("Uploaded all events into ActivityWatch.")
 
 
 if __name__ == '__main__':

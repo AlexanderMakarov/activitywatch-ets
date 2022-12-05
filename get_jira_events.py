@@ -181,6 +181,8 @@ def main():
                              "May look like 'https://company.jira.net'.")
     parser.add_argument('-r', '--replace', dest='is_replace_bucket', action='store_true',
                         help=f"Flag to replace all events in ActivityWatch {JIRA_BUCKET_ID} bucket.")
+    parser.add_argument('--dry-run', dest='is_dry_run', action='store_true',
+                        help=f"Flag to just log events but don't upload into ActivityWatch.")
     args = parser.parse_args()
     issues = _get_jira_issues(args.server, args.email, args.api_token, args.projects.split(','), args.search_date)
     LOG.info(f"Parsed {len(issues)} issues from Jira [{args.projects}] projects.")
@@ -189,8 +191,9 @@ def main():
     if not events:
         LOG.warn(f"Can't find Jira activity on {args.search_date} for {args.email} account in [{args.projects}] projects.")
     # Load events into ActivityWatcher
-    upload_events(events, JIRA_SCRAPER_NAME, "jira.issue.activity", JIRA_BUCKET_ID, args.is_replace_bucket)
-    LOG.info("Uploaded all events into ActivityWatch.")
+    if not args.is_dry_run:
+        upload_events(events, JIRA_SCRAPER_NAME, "jira.issue.activity", JIRA_BUCKET_ID, args.is_replace_bucket)
+        LOG.info("Uploaded all events into ActivityWatch.")
 
 
 if __name__ == '__main__':

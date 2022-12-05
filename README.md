@@ -85,7 +85,7 @@ Note that for `RULES` configuration it would be great to have:
 
 ## Roadmap
 
-- [ ] Dry run for importers.
+- [x] Dry run for importers.
 - [ ] Why get_outlook_events.py default "today" don't implemented? It doesn't work with back_days=0.
 - [ ] Try it for myself. Adjust `RULES` and code if need.
 - [ ] Use for ETS for a few days. Adjust `RULES`.
