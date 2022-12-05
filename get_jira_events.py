@@ -162,7 +162,7 @@ def main():
         description="Calls JIRA API to get issues updated by given account on given date,"
                     " parses all found events in it and loads them into ActivityWatch."
     )
-    parser.add_argument('-d', '--search-date', dest='search_date', type=valid_date, default=datetime.datetime.now,
+    parser.add_argument('-d', '--search-date', dest='search_date', type=valid_date, default=datetime.datetime.now(),
                         help="Date to look for Jira events in format 'YYYY-mm-dd'. By default is today.")
     parser.add_argument('-p', '--projects', type=str, default=JIRA_PROJECTS,
                         help="Comma-separated list of Jira project ID's to scrape events from."

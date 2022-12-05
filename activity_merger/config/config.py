@@ -89,6 +89,7 @@ RULES = {
 }
 # Absolute path to Firefox profile folder to grab OWA events under.
 # On Linux it looks like '/home/{username}/.mozilla/firefox/{some_id}.default-release/'.
+# May be found by opening 'about:profiles' in Firefox - "Root Directory" value.
 FIREFOX_PROFILE_PATH: str = None
 # URL to home page of Web (MS Office Web Apps) Outlook. May look like 'https://mail.company.com/owa'.
 OWA_URL: str = None

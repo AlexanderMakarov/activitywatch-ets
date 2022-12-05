@@ -21,6 +21,12 @@ List of gneral rules for such adjustments:
 - All timestamps are rounded to seconds.
 Other details and more fine-grained rules may be checked in [config.py](/activity_merger/config/config.py) file.
 
+## Setup
+
+- Install Python 3.6+.
+- Open root folder and run `pip3 install -r requirements.txt`.
+- (only for Outlook Calendar events scraping) Install [geckodriver](https://github.com/mozilla/geckodriver) from GitHub repo [Releases](https://github.com/mozilla/geckodriver/releases) page. For Linux it is just extracting binary into some place in PATH.
+
 ## ActivityWatch extra data.
 
 To add Jira and MS Exchange Calendar events was decided to use "on-demand importers" instead of "real time watchers" because:
@@ -79,6 +85,8 @@ Note that for `RULES` configuration it would be great to have:
 
 ## Roadmap
 
+- [ ] Dry run for importers.
+- [ ] Why get_outlook_events.py default "today" don't implemented? It doesn't work with back_days=0.
 - [ ] Try it for myself. Adjust `RULES` and code if need.
 - [ ] Use for ETS for a few days. Adjust `RULES`.
 - [ ] Remove company-specific data from `RULES`.
