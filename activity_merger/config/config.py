@@ -126,5 +126,5 @@ OWA_MAX_SCROLL_BACK = 31
 JIRA_SCRAPER_NAME = 'jira_aw_events_scraper'
 # ActivityWatch bucket ID for Jira-based events.
 JIRA_BUCKET_ID = f'{JIRA_SCRAPER_NAME}_{socket.gethostname()}'
-# Number of issues to ask Jira API for.
+# Number of issues to ask Jira API for. Note that if ask many days back then this value should be big.
 JIRA_ISSUES_MAX = 100

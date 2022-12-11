@@ -8,7 +8,7 @@ import aw_client
 import aw_core.models as awmodels
 
 
-def setup_logging():
+def setup_logging() -> logging.Logger:
     logging.addLevelName(logging.WARNING, "WARN")
     logging.addLevelName(logging.DEBUG, "DEBU")
     logging.basicConfig(
@@ -19,13 +19,13 @@ def setup_logging():
     return logging.getLogger()
 
 
-def event_data_to_str(event: Event):
+def event_data_to_str(event: Event) -> str:
     if not event:
         return 'null'
     return str(event.data)
 
 
-def event_to_str(event: Event):
+def event_to_str(event: Event) -> str:
     return f"{event.timestamp.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
            f"..{(event.timestamp + event.duration).astimezone(CURRENT_TIMEZONE):%H:%M:%S}("\
            f"{event_data_to_str(event)})"
@@ -40,12 +40,12 @@ def seconds_to_int_timedelta(seconds: float) -> str:
     return datetime.timedelta(seconds=int(seconds))
 
 
-def valid_date(s):  # https://stackoverflow.com/a/25470943
+def valid_date(s) -> datetime.datetime:  # https://stackoverflow.com/a/25470943
     try:
-        return datetime.datetime.strptime(s, "%Y-%m-%d")
-    except ValueError:
+        return datetime.datetime.strptime(s, "%Y-%m-%d").astimezone()
+    except ValueError as e:
         msg = "not a valid date: {0!r}".format(s)
-        raise argparse.ArgumentTypeError(msg)
+        raise argparse.ArgumentTypeError(msg) from e
 
 
 def ensure_datetime(d):  # https://stackoverflow.com/a/29840081/1535127
