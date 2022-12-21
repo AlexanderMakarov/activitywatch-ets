@@ -4,14 +4,17 @@ from typing import List, Set, Tuple
 import argparse
 import difflib
 import jira
+import logging
 
 from activity_merger.config.config import LOG, JIRA_SCRAPER_NAME, JIRA_BUCKET_ID, JIRA_URL, JIRA_LOGIN_EMAIL,\
     JIRA_LOGIN_API_TOKEN, JIRA_PROJECTS, JIRA_ISSUES_MAX, EVENTS_COMPARE_TOLERANCE_TIMEDELTA
-from activity_merger.helpers.helpers import setup_logging, valid_date, ensure_datetime, upload_events
+from activity_merger.helpers.helpers import setup_logging, valid_date, ensure_datetime, upload_events, event_to_str,\
+                                            CURRENT_TIMEZONE
 from activity_merger.domain.input_entities import Event
 
 
 JIRA_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"
+JIRA_TICKET_FIELDS_VARIABLE_UPDATE_COMPLEXITY = {'description', 'summary', 'labels', 'Component'}
 
 
 def _get_jira_issues(server_url: str, email: str, api_token: str, projects: List[str], search_date: datetime)\
@@ -60,7 +63,7 @@ def _parse_events_from_story_without_duration(story: jira.resources.PropertyHold
         field = item.field
         symbols_count = 1  # 1 is default for unsupported fields.
         change_desc = item.toString
-        if field in {'description', 'summary', 'labels', 'Component'}:
+        if field in JIRA_TICKET_FIELDS_VARIABLE_UPDATE_COMPLEXITY:
             new_value = _jira_story_item_field_to_string(item.toString)
             old_value = _jira_story_item_field_to_string(item.fromString)
             # Calculate difference in text. Treat inputs as arrays of characters.
@@ -90,6 +93,15 @@ def _parse_events_from_story_without_duration(story: jira.resources.PropertyHold
             'symbols_count': symbols_count,  # Some gauge of "how many effort was added" TODO
         }))
     return events, unsupported_fields
+
+
+def _format_jira_event_for_log(event: Event) -> str:
+    data = event.data
+    field = data['field']
+    change_desc = f"{data['symbols_count']} changes in '{field}'"
+    if field not in JIRA_TICKET_FIELDS_VARIABLE_UPDATE_COMPLEXITY:
+        change_desc += ": " + data['change_desc']
+    return f"{{{event.timestamp.astimezone(CURRENT_TIMEZONE):%H:%M:%S} {data['jira_id']} {change_desc}}}"
 
 
 def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_date: datetime.datetime) -> List[Event]:
@@ -124,16 +136,19 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
     LOG.info(f"Parsed {len(events)} events from {len(issues)} issues.{unsupported_desc}")
     if len(events) <= 0:
         return []
-    # Here events created on "per issue" basis though have a lot of intersections. Also theirs
-    # 'timestamp' field contains "end of event" datetime and duration may be happen shorter than tolerance.
+    # Here events created on "per issue" basis though doesn't have durations and may intersect. Also theirs 'timestamp'
+    # field contains "end of event" datetime and duration may be shorter than tolerance though they would be skipped.
     # Need to merge them and adjust theirs 'duration' to make one consequitive line of "not too short" events.
-    # Note that do this for more than 2 events is hard and may make no sense. TODO consider remove it.
     events = sorted(events, key=lambda x: x.timestamp)
-    # As an start for the first event use start of the day.
+    if LOG.level <= logging.DEBUG:
+        LOG.debug("Having following events without durations yet:\n  "
+                  + "\n  ".join(_format_jira_event_for_log(x) for x in events))
+        LOG.debug("Calculating duration and adjusting events:")
+    # Assumption: as an start for the first event use start of the day.
     event_start: datetime.datetime = ensure_datetime(events[0].timestamp.date())
     result_events = []
     pending_event = None
-    for event in events:
+    for event in events:  # TODO Need put few JIRA events in one - they happen simultaneously.
         duration = event.timestamp - event_start
         # Check that we need extend current event and may adjust pending event.
         if pending_event and duration <= EVENTS_COMPARE_TOLERANCE_TIMEDELTA \
@@ -142,18 +157,24 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
             # If same Jira ticket event was performed before and has enough duration to fit one more then
             # cut some duraion from previous event...
             pending_duration = pending_event.duration - EVENTS_COMPARE_TOLERANCE_TIMEDELTA
+            if LOG.level <= logging.DEBUG:
+                LOG.debug(f"{_format_jira_event_for_log(event)} cut part of duration from previous"\
+                          f" {_format_jira_event_for_log(pending_event)}.")
             result_events.append(Event(JIRA_BUCKET_ID, event_start, pending_duration, pending_event.data))
             # ... and extend duration for the current one.
             event_start = pending_event.timestamp + pending_duration
             pending_event = Event(JIRA_BUCKET_ID, event_start, event.timestamp - event_start, event.data)
-        else:
-            if pending_event:
-                result_events.append(pending_event)
-            pending_event = Event(JIRA_BUCKET_ID, event_start, duration, event.data)
+        if pending_event:
+            result_events.append(pending_event)
+            if LOG.level <= logging.DEBUG:
+                LOG.debug(f"Built {event_to_str(pending_event)}.")
+        pending_event = Event(JIRA_BUCKET_ID, event_start, duration, event.data)
         # Calculate start of the next event.
         event_start = pending_event.timestamp + pending_event.duration
     if pending_event:
         result_events.append(pending_event)
+        if LOG.level <= logging.DEBUG:
+            LOG.debug(f"Built last {event_to_str(pending_event)}.")
     return result_events
 
 
@@ -161,6 +182,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Calls JIRA API to get issues updated by given account on given date,"
                     " parses all found events in it and loads them into ActivityWatch."
+                    " To see more logs use `export LOGLEVEL=DEBUG` (or `set ...` on Windows)."
     )
     parser.add_argument('-d', '--search-date', dest='search_date', type=valid_date, default=datetime.datetime.now(),
                         help="Date to look for Jira events in format 'YYYY-mm-dd'. By default is today.")
@@ -182,7 +204,8 @@ def main():
                         help="URL to Web (MS Office Web Apps) Outlook. Page where email box opens."
                              "May look like 'https://company.jira.net'.")
     parser.add_argument('-r', '--replace', dest='is_replace_bucket', action='store_true',
-                        help=f"Flag to replace all events in ActivityWatch {JIRA_BUCKET_ID} bucket.")
+                        help=f"Flag to delete ActivityWatch {JIRA_BUCKET_ID} bucket first."
+                             " Removes all previous events in it.")
     parser.add_argument('--dry-run', dest='is_dry_run', action='store_true',
                         help=f"Flag to just log events but don't upload into ActivityWatch.")
     args = parser.parse_args()
@@ -193,7 +216,7 @@ def main():
     issues = _get_jira_issues(args.server, args.email, args.api_token, projects, search_date)
     LOG.info(f"Received {len(issues)} issues from Jira [{args.projects}] projects.")
     events = get_events_from_jira(issues, args.email, search_date)
-    LOG.info(f"Ready to upload {len(events)} events:" + "\n  " + "\n  ".join(str(x) for x in events))
+    LOG.info(f"Ready to upload {len(events)} events:" + "\n  " + "\n  ".join(event_to_str(x) for x in events))
     if not events:
         LOG.warning(f"Can't find Jira activity on {args.search_date} for {args.email} account in "
                     f"[{args.projects}] projects.")

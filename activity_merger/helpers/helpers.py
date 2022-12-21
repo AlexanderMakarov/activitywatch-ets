@@ -1,6 +1,7 @@
 import datetime
 import logging
 import argparse
+import os
 from typing import List
 from ..domain.input_entities import Event
 from ..config.config import CURRENT_TIMEZONE
@@ -9,10 +10,14 @@ import aw_core.models as awmodels
 
 
 def setup_logging() -> logging.Logger:
+    """
+    Configures 'logging' package and retuns new logger.
+    Sets logging level to environment "LOGLEVEL" value or with "INFO".
+    """
     logging.addLevelName(logging.WARNING, "WARN")
-    logging.addLevelName(logging.DEBUG, "DEBU")
+    logging.addLevelName(logging.DEBUG, "DEBU")  # To be 4 chars length as another ones.
     logging.basicConfig(
-        level=logging.INFO,
+        level=os.getenv("LOGLEVEL", "INFO").upper(),
         format='%(asctime)s.%(msecs)03d %(levelname)-4s: %(message)s',
         datefmt="%H:%M:%S"
     )
