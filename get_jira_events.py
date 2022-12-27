@@ -73,6 +73,10 @@ def _parse_events_from_story_without_duration(story: jira.resources.PropertyHold
             old_value = _jira_story_item_field_to_string(item.__dict__['from'])  # 'from' is reserved keyword in Python
             # First calculate difference in symbols length.
             symbols_count = len(new_value) - len(old_value)
+            # Note that in case of removing link toString/fromString may be None.
+            # Also to/from doesn't bring information about type of link (relates to, blocks, caused by, etc.).
+            change_desc = f"{field} changed from '{'' if item.fromString is None else item.fromString}' to "\
+                          f"'{'' if item.toString is None else item.toString}'."
             # Field may be truncuted by simple "press cross icon" so treat deletion as a single keystroke.
             if symbols_count < 0:
                 symbols_count = 1
@@ -138,43 +142,57 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
         return []
     # Here events created on "per issue" basis though doesn't have durations and may intersect. Also theirs 'timestamp'
     # field contains "end of event" datetime and duration may be shorter than tolerance though they would be skipped.
-    # Need to merge them and adjust theirs 'duration' to make one consequitive line of "not too short" events.
+    # Need to sort, set 'duration' and maybe tune 'timestamp' to make one consequitive line of "not too short" events.
     events = sorted(events, key=lambda x: x.timestamp)
     if LOG.level <= logging.DEBUG:
         LOG.debug("Having following events without durations yet:\n  "
                   + "\n  ".join(_format_jira_event_for_log(x) for x in events))
         LOG.debug("Calculating duration and adjusting events:")
+    result_events = []
+    # If try to adjust "previous" only event if new one too short then it is not enough for Jira.
+    # Because one Jira action may trigger few changes by one human action. For example:
+    # - Moving ticket to "Done" triggers Fix Version, resolution, etc. updates in the same ticket.
+    # - Making "relates to" link in one ticket to another makes mirror changes in other ticket.
+    # If make 'data' of one event contain changes for few tickets it would be hard to analyse and merge later.
+    # Therefore buffer any number of events pointing to the same date and next "propagate" them back in time,
+    # cutting duration from "prevous" "long" event.
+    pending_events = []
     # Assumption: as an start for the first event use start of the day.
     event_start: datetime.datetime = ensure_datetime(events[0].timestamp.date())
-    result_events = []
-    pending_event = None
-    for event in events:  # TODO Need put few JIRA events in one - they happen simultaneously.
-        duration = event.timestamp - event_start
-        # Check that we need extend current event and may adjust pending event.
-        if pending_event and duration <= EVENTS_COMPARE_TOLERANCE_TIMEDELTA \
-                and pending_event.data['jira_id'] == event.data['jira_id']\
-                and pending_event.duration > 2 * EVENTS_COMPARE_TOLERANCE_TIMEDELTA:
-            # If same Jira ticket event was performed before and has enough duration to fit one more then
-            # cut some duraion from previous event...
-            pending_duration = pending_event.duration - EVENTS_COMPARE_TOLERANCE_TIMEDELTA
-            if LOG.level <= logging.DEBUG:
-                LOG.debug(f"{_format_jira_event_for_log(event)} cut part of duration from previous"\
-                          f" {_format_jira_event_for_log(pending_event)}.")
-            result_events.append(Event(JIRA_BUCKET_ID, event_start, pending_duration, pending_event.data))
-            # ... and extend duration for the current one.
-            event_start = pending_event.timestamp + pending_duration
-            pending_event = Event(JIRA_BUCKET_ID, event_start, event.timestamp - event_start, event.data)
-        if pending_event:
-            result_events.append(pending_event)
-            if LOG.level <= logging.DEBUG:
-                LOG.debug(f"Built {event_to_str(pending_event)}.")
-        pending_event = Event(JIRA_BUCKET_ID, event_start, duration, event.data)
-        # Calculate start of the next event.
-        event_start = pending_event.timestamp + pending_event.duration
-    if pending_event:
-        result_events.append(pending_event)
-        if LOG.level <= logging.DEBUG:
-            LOG.debug(f"Built last {event_to_str(pending_event)}.")
+    first_pending_start: datetime.datetime = event_start
+    for event in events + [None]:  # Add extra iteration at the end to handle last pending event(s).
+        duration = event.timestamp - event_start if event else datetime.timedelta(milliseconds=0)
+        # Check we have pending events and current one doesn't need to be postponed. Or it is the last iteration.
+        if (pending_events and duration > EVENTS_COMPARE_TOLERANCE_TIMEDELTA) or event is None:
+            # Free buffer using first pending event duration to accomodate all next ones.
+            reversed_buffer = []
+            # Iterate pending events in reversed order to get first pending event as a donor.
+            oldest_in_pending = pending_events[0]
+            for pending in reversed(pending_events):
+                end = pending.timestamp
+                if pending == oldest_in_pending:
+                    # Add all remained duration to the first/oldest event.
+                    start = first_pending_start
+                    if end - start < EVENTS_COMPARE_TOLERANCE_TIMEDELTA:
+                        # Case when last event in a day is too short. Extend its end to be later.
+                        end = start + EVENTS_COMPARE_TOLERANCE_TIMEDELTA
+                else:
+                    # All not oldest events in "pending" are with short duration - extend them to minimum.
+                    start = pending.timestamp - EVENTS_COMPARE_TOLERANCE_TIMEDELTA
+                # Assure that there were no miscalculations above and build full ActivityWatch event.
+                assert end - start >= EVENTS_COMPARE_TOLERANCE_TIMEDELTA,\
+                       f"Can't distribute Jira events duration using as a donor {_format_jira_event_for_log(pending)}."
+                reversed_buffer.append(
+                    Event(JIRA_BUCKET_ID, start, end - start, pending.data)
+                )
+            result_events.extend(reversed(reversed_buffer))  # Don't forget to un-reverse.
+            first_pending_start = end
+            event_start = end
+            pending_events = [event]  # Current event is a donor for the next "pending" events chunk.
+        else:
+            # In both opposite cases need to postpone event creation - it may become a donor for following ones.
+            pending_events.append(event)
+            event_start = event.timestamp
     return result_events
 
 
@@ -212,7 +230,7 @@ def main():
     search_date = args.search_date
     if args.back_days:
         search_date = (datetime.datetime.today().astimezone() - datetime.timedelta(days=args.back_days))
-    projects = [str(x).strip() for x in args.projects.split(',')]  # Clean up.
+    projects = [str(x).strip() for x in args.projects.split(',')]  # Clean up input from extra spaces.
     issues = _get_jira_issues(args.server, args.email, args.api_token, projects, search_date)
     LOG.info(f"Received {len(issues)} issues from Jira [{args.projects}] projects.")
     events = get_events_from_jira(issues, args.email, search_date)
