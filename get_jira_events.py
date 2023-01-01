@@ -168,8 +168,9 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
             reversed_buffer = []
             # Iterate pending events in reversed order to get first pending event as a donor.
             oldest_in_pending = pending_events[0]
+            latest_saved_timestamp = None
             for pending in reversed(pending_events):
-                end = pending.timestamp
+                end = pending.timestamp  # Or earlier.
                 if pending == oldest_in_pending:
                     # Add all remained duration to the first/oldest event.
                     start = first_pending_start
@@ -177,14 +178,17 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
                         # Case when last event in a day is too short. Extend its end to be later.
                         end = start + EVENTS_COMPARE_TOLERANCE_TIMEDELTA
                 else:
-                    # All not oldest events in "pending" are with short duration - extend them to minimum.
-                    start = pending.timestamp - EVENTS_COMPARE_TOLERANCE_TIMEDELTA
+                    # All events except oldest one in "pending" are with short duration - extend them to minimum.
+                    if latest_saved_timestamp:
+                        end = latest_saved_timestamp
+                    start = end - EVENTS_COMPARE_TOLERANCE_TIMEDELTA
                 # Assure that there were no miscalculations above and build full ActivityWatch event.
                 assert end - start >= EVENTS_COMPARE_TOLERANCE_TIMEDELTA,\
                        f"Can't distribute Jira events duration using as a donor {_format_jira_event_for_log(pending)}."
                 reversed_buffer.append(
                     Event(JIRA_BUCKET_ID, start, end - start, pending.data)
                 )
+                latest_saved_timestamp = start  # Use start because we are going back in time.
             result_events.extend(reversed(reversed_buffer))  # Don't forget to un-reverse.
             first_pending_start = end
             event_start = end
