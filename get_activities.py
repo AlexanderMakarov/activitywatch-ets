@@ -20,8 +20,11 @@ def convert_aw_events_to_activities(start_date: datetime.datetime) -> List[Activ
         exit(1)
     LOG.info(f"Buckets: {buckets.keys()}")
     # Build time-ordered linked list of intervals by provided events.
-    interval = report_from_buckets(client, start_date, start_date + datetime.timedelta(days=1),
+    interval = report_from_buckets(client, start_date.date(), start_date.date() + datetime.timedelta(days=1),
         buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)
+    if interval is None:
+        LOG.warn(f"Can't find events/intervals for {start_date.date()}. Doing nothing.")
+        return []
     # Convert (assemble) intervals list into activities.
     activities, activity_counter, metrics = analyze_intervals(interval, MIN_DURATION_SEC, RULES)
     # Print metrics as is.
@@ -40,16 +43,22 @@ def convert_aw_events_to_activities(start_date: datetime.datetime) -> List[Activ
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Calls ActivityWatcher for all available events on specified date, "
+        description="Calls AcivityWatch for all available events on specified date, "
                     "merges all events by specified rules into linked list of some activities and"
                     "then separates this list into 'ready to import' actvities."
     )
-    parser.add_argument('date', nargs='?', type=valid_date, default=datetime.datetime.now().date(),
-                        help="Date to build activities for in format 'YYYY-mm-dd'. By-default today.")
+    parser.add_argument('date', nargs='?', type=valid_date,
+                        help="Date to analyze AcivityWatch events in format 'YYYY-mm-dd'. By-default is today."
+                             "If omit here but set 'back days' argument then date is calculated as today - back_days.")
+    parser.add_argument('-b', '--back-days', type=int,
+                        help="How many days back search events on. I.e. '1' value means 'search for yesterday.")
     args = parser.parse_args()
+    events_date = args.date if args.date else datetime.datetime.today().astimezone()
+    if args.back_days and args.back_days > 0:
+        events_date = (events_date - datetime.timedelta(days=args.back_days))
     # TODO need interactive way to merge activities
     # TODO need mixing of Jira/Outlook/watchdog events.
-    convert_aw_events_to_activities(datetime.datetime(2022, 2, 11))  # TODO args.date
+    convert_aw_events_to_activities(events_date)  # TODO args.date
 
 
 if __name__ == '__main__':
