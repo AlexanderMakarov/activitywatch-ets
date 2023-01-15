@@ -10,6 +10,8 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException
 import argparse
 import contextlib
+import unittest
+import parameterized
 
 from activity_merger.config.config import LOG, FIREFOX_PROFILE_PATH, OWA_SCRAPER_NAME, OWA_URL, OWA_BUCKET_ID,\
                                           OWA_MAX_SCROLL_BACK
@@ -33,7 +35,7 @@ CALENDAR_TODAY_URL_SUFFIX = "/#path=/calendar/view/Day"
 def start_firefox_under_existing_profile(profile: str, page: str,  headless: bool = True) -> WebDriver:
     options = webdriver.FirefoxOptions()
     firefox_args = [ # moz:firefoxOptions
-        '--safe-mode',
+        '--new-instance',  # --safe-mode is dangerous - it uninstalls all plugins from profile!
         '--new-tab', page,
         '--start-maximized',
     ]
@@ -281,6 +283,32 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
     return events
 
 
+def _calculate_events_date_and_scrolls_back(events_date: datetime.datetime, back_days: int, date_label: str)\
+        -> Tuple[datetime.datetime, int]:
+    # Check date or "where to scroll" parameters.
+    if events_date:
+        assert (isinstance(events_date, datetime.datetime) or isinstance(events_date, datetime.date))\
+                and events_date.tzinfo,\
+            f"'events_date' value ({events_date}) should be a date/datetime with timezone info."
+    if back_days or back_days == 0:
+        assert isinstance(back_days, int),\
+            f"'back_days' value ({back_days}) should be an integer."
+        assert 0 <= back_days < OWA_MAX_SCROLL_BACK,\
+            f"'back_days' value ({back_days}) should be positive and not more than limit {OWA_MAX_SCROLL_BACK}."
+    if date_label:
+        assert isinstance(date_label, str),\
+            f"'date_label' value ({date_label}) should be a string with date label."
+    # Calculate date for events.
+    if events_date is None:
+        events_date = datetime.datetime.today().astimezone()
+        if back_days and back_days > 0:
+            events_date = (events_date - datetime.timedelta(days=back_days)).astimezone()
+    if not back_days:
+        back_days = (datetime.datetime.today() - events_date.replace(tzinfo=None)).days
+    events_date = events_date.date()  # Convert to date because for events need to remove "time" part.
+    return events_date, back_days,
+
+
 def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool = False,
         events_date: datetime.datetime = None, back_days: int = 0, date_label: str = None) -> List[Event]:
     """
@@ -293,37 +321,18 @@ def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool = Fa
     :param owa_url: URL to Web (MS Office Web Apps) Outlook. Page where email is opens.
     May look like 'https://mail.company.com/owa'.
     :param headless: Flag to open Firefox window in the headless mode. Doesn't make it faster at all.
-    :param events_date: Optional. Date to set for events. By-default today.
-    Calculated as "today - back_days" if back_days is specified.
-    Should contain time zone info and match date in "date_label" parameter.
-    :param back_days: Optional. Number of days to scroll back from today.
-    :param date_label: Optional. Date label on page to reach with "tap back until open" logic.
-    Value depends on language, region, OWA365 settings, etc. Replaces or supports 'back_days' parameter.
-    Should match 'date' parameter.
+    :param events_date: Optional. Date to set for events and to scroll on. Should contain time zone info.
+    By-default is "today - back_days" (or just "today" if 'back_days' is not provided).
+    :param back_days: Optional. Number of days to scroll back from today to reach required date.
+    :param date_label: Optional. Date label on page to search with "tap back until open" logic.
+    Should match 'date' parameter. If 'back_days' is provided it should match it's value.
+    Value can't be calculated because depends on language, region, OWA365 settings, etc.
     :return: List of `Event`-s parsed for specified date.
     """
     # Check required input parameters.
     assert profile_abs_path, "Firefox profile folder path is not specified."
     assert owa_url, "OWA365/Web Outlook URL is not specified."
-    # Check provided date parameters.
-    if events_date:
-        assert (isinstance(events_date, datetime.datetime) or isinstance(events_date, datetime.date))\
-                and events_date.tzinfo,\
-            f"'events_date' value ({events_date}) should be a date/datetime with timezone info."
-    if back_days is not None:
-        assert isinstance(back_days, int),\
-            f"'back_days' value ({back_days}) should be an integer."
-        assert 0 <= back_days < OWA_MAX_SCROLL_BACK,\
-            f"'back_days' value ({back_days}) should be positive and not more than limit {OWA_MAX_SCROLL_BACK}."
-    if date_label:
-        assert isinstance(date_label, str),\
-            f"'date_label' value ({date_label}) should be a string with date label."
-    # Calculate date for events.
-    if events_date is None:
-        events_date = datetime.datetime.today().astimezone()
-        if back_days and back_days > 0:
-            events_date = (events_date - datetime.timedelta(days=back_days))
-    events_date = events_date.date()  # Convert to date because for events need to remove "time" part.
+    events_date, back_days = _calculate_events_date_and_scrolls_back(events_date, back_days, date_label)
     LOG.info(f"Starting Firefox with profile '{profile_abs_path}'."
              " Note that you need to have OWA opened and authenticated under this profile, otherwise it would fail.")
     # In "with UI" mode some parsing on my machine takes 65s, in headless - the same 65s.
@@ -346,14 +355,15 @@ def main():
     )
     parser.add_argument('date', nargs='?', type=valid_date,
                         help="Date to set for OWA365/Web Outlook Calendar events in format 'YYYY-mm-dd'."
-                             "If omit here but set 'back days' argument then date is calculated as today - back_days.")
+                             " Ovewrites 'back-days' as 'today - date'. If omit here but set 'back-days' argument then"
+                             " date is calculated as 'today - back-days'.")
     parser.add_argument('-b', '--back-days', type=int,
                         help="How many days need to scroll back from today to reach day to scrape Calendar events."
                              f" Max to {OWA_MAX_SCROLL_BACK}.")
     parser.add_argument('-l', '--date-label', type=str,
-                        help="Date label on page for 'scroll days back until open page with this label' logic."
-                             " Value depends on language, region, OWA365 settings, etc."
-                             " Replaces or supports 'back_days' parameter. Should match 'date' parameter.")
+                        help="Date label on OWA page for 'scroll days back until open page with this label' logic."
+                             " Value depends on the language, region, OWA365 settings, etc. It should match 'date'"
+                             " parameter and is just extra check for the day we want to gather events from.")
     parser.add_argument('--headless', action='store_true',
                         help="Flag to open Firefox window in the headless mode. Doesn't make parsing faster"
                              "but eliminates risk to click something on the page and break parsing.")
@@ -380,3 +390,61 @@ def main():
 if __name__ == '__main__':
     LOG = setup_logging()
     main()
+
+
+class TestGetOutlookEvents(unittest.TestCase):
+    today = datetime.datetime.now().astimezone()
+    day_ago = (today - datetime.timedelta(days=1))
+
+    @parameterized.parameterized.expand([
+        (
+            "all None-s",
+            None, None, None,
+            None, today.date(), 0
+        ),
+        (
+            "date_label only",
+            None, None, "some",
+            None, today.date(), 0
+        ),
+        (
+            "wrong events_date",
+            "some", None, None,
+            "'events_date' value \(some\) should be a date/datetime with timezone info.", None, None
+        ),
+        (
+            "events_date is without timezone info",
+            datetime.datetime.now(), None, None,
+            "'events_date' value (.*) should be a date/datetime with timezone info.", None, None
+        ),
+        (
+            "only events_date - use it",
+            day_ago, None, None,
+            None, day_ago.date(), 1
+        ),
+        (
+            "wrong back_days",
+            day_ago, "100500", None,
+            "'back_days' value \(100500\) should be an integer.", None, None
+        ),
+        (
+            "too big back_days",
+            day_ago, 100500, None,
+            f"'back_days' value \(100500\) should be positive and not more than limit {OWA_MAX_SCROLL_BACK}.",
+            None, None
+        ),
+        (
+            "no date_label",
+            day_ago, 2, None,
+            None, day_ago.date(), 2  # back_days doesn't change events_date and vice versa.
+        ),
+    ])
+    def test_calculate_events_date_and_scrolls_back(self, test_name, events_date, back_days, date_label,
+            expected_message, expected_date, expected_back_days):
+        if expected_message:
+            with self.assertRaisesRegex(AssertionError, expected_message, msg=f"'{test_name}' wrong error."):
+                _calculate_events_date_and_scrolls_back(events_date, back_days, date_label)
+        else:
+            actual_date, actual_back_days = _calculate_events_date_and_scrolls_back(events_date, back_days, date_label)
+            self.assertEqual(actual_date, expected_date, f"'{test_name}' wrong actual date.")
+            self.assertEqual(actual_back_days, expected_back_days, f"'{test_name}' wrong actual back_days.")
