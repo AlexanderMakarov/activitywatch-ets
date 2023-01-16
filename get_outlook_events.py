@@ -226,7 +226,7 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
     LOG.info(f"Page of required day is opened, scrapping events. See screenshot {SCREENSHOT_NAME}.")
     # Note that these div-s also contains elements with calendar(s) name.
     TYPE_DIV_XPATH_SELECTOR = "div[contains(@class,'calendarBusy') or contains(@class,'calendarTentative')"\
-                                  " or contains(@class,'calendarBusy')]"
+                              " or contains(@class,'calendarFree')]"
     probable_event_divs: List[WebElement] = call_web_element_with_fail_handling(
         "probable containers of event rectangles",
         events_container,

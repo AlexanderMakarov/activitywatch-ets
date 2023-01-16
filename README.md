@@ -88,7 +88,7 @@ Note that for `RULES` configuration it would be great to have:
 - [x] Dry run for importers.
 - [x] Why get_outlook_events.py default "today" don't implemented? It doesn't work with back_days=0.
 - [x] Fix get_outlook_events.py: removes plugins.
-- [ ] Fix get_outlook_events.py: skips 'free' events.
+- [x] Fix get_outlook_events.py: skips 'free' events.
 - [ ] Complete get_activities.py
 - [ ] Prepare script to run all event importers and get_activities.py at the end for the same date.
 - [ ] Try it for myself. Adjust `RULES` and code if need.
