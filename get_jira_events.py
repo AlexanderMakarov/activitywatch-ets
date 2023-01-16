@@ -206,33 +206,33 @@ def main():
                     " parses all found events in it and loads them into ActivityWatch."
                     " To see more logs use `export LOGLEVEL=DEBUG` (or `set ...` on Windows)."
     )
-    parser.add_argument('-d', '--search-date', dest='search_date', type=valid_date, default=datetime.datetime.now(),
+    parser.add_argument('search_date', nargs='?', type=valid_date, default=datetime.datetime.now().astimezone(),
                         help="Date to look for Jira events in format 'YYYY-mm-dd'. By default is today.")
     parser.add_argument('-b', '--back-days', type=int,
-                        help="How many days back search events on. I.e. '1' value means 'search for yesterday.")
+                        help="Overwrites 'date' if specified. Sets how many days back search events on."
+                             " I.e. '1' value means 'search for yesterday'.")
     parser.add_argument('-p', '--projects', type=str, default=JIRA_PROJECTS,
                         help="Comma-separated list of Jira project ID's to scrape events from."
-                             "Note that Jira API allows to get some limited number of issues at once"
+                             " Note that Jira API allows to get some limited number of issues at once"
                              " and it is a limit for scraping.")
     parser.add_argument('-e', '--email', type=str, default=JIRA_LOGIN_EMAIL,
                         help="Email address to login into Jira.")
-    parser.add_argument(
-        '-a', '--api-token',
-        type=str, default=JIRA_LOGIN_API_TOKEN,
-        help="Jira API token to login. For details see "
-             "https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/."
-    )
+    parser.add_argument('-a', '--api-token', type=str, default=JIRA_LOGIN_API_TOKEN,
+                        help="Jira API token to login. For details see https://support.atlassian.com/atlassian-account"
+                             "/docs/manage-api-tokens-for-your-atlassian-account/.")
     parser.add_argument('-s', '--server', type=str, default=JIRA_URL,
                         help="URL to Web (MS Office Web Apps) Outlook. Page where email box opens."
-                             "May look like 'https://company.jira.net'.")
+                             " May look like 'https://company.jira.net'.")
     parser.add_argument('-r', '--replace', dest='is_replace_bucket', action='store_true',
-                        help=f"Flag to delete ActivityWatch {JIRA_BUCKET_ID} bucket first."
-                             " Removes all previous events in it.")
+                        help=f"Flag to delete ActivityWatch '{JIRA_BUCKET_ID}' bucket first."
+                             " Removes all previous events in it, for all time.")
     parser.add_argument('--dry-run', dest='is_dry_run', action='store_true',
                         help=f"Flag to just log events but don't upload into ActivityWatch.")
     args = parser.parse_args()
     search_date = args.search_date
     if args.back_days:
+        assert args.back_days >= 0,\
+            f"'back_days' value ({args.back_days}) should be positive or 0."
         search_date = (datetime.datetime.today().astimezone() - datetime.timedelta(days=args.back_days))
     projects = [str(x).strip() for x in args.projects.split(',')]  # Clean up input from extra spaces.
     issues = _get_jira_issues(args.server, args.email, args.api_token, projects, search_date)

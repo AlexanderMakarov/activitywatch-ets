@@ -285,12 +285,12 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
 
 def _calculate_events_date_and_scrolls_back(events_date: datetime.datetime, back_days: int, date_label: str)\
         -> Tuple[datetime.datetime, int]:
-    # Check date or "where to scroll" parameters.
+    # Check parameters for validity.
     if events_date:
         assert (isinstance(events_date, datetime.datetime) or isinstance(events_date, datetime.date))\
                 and events_date.tzinfo,\
             f"'events_date' value ({events_date}) should be a date/datetime with timezone info."
-    if back_days or back_days == 0:
+    if back_days:
         assert isinstance(back_days, int),\
             f"'back_days' value ({back_days}) should be an integer."
         assert 0 <= back_days < OWA_MAX_SCROLL_BACK,\
@@ -298,12 +298,12 @@ def _calculate_events_date_and_scrolls_back(events_date: datetime.datetime, back
     if date_label:
         assert isinstance(date_label, str),\
             f"'date_label' value ({date_label}) should be a string with date label."
-    # Calculate date for events.
+    # Calculate events_date and back_days for events.
     if events_date is None:
         events_date = datetime.datetime.today().astimezone()
-        if back_days and back_days > 0:
-            events_date = (events_date - datetime.timedelta(days=back_days)).astimezone()
-    if not back_days:
+    if back_days and back_days > 0:
+        events_date = (datetime.datetime.today() - datetime.timedelta(days=back_days)).astimezone()
+    else:
         back_days = (datetime.datetime.today() - events_date.replace(tzinfo=None)).days
     events_date = events_date.date()  # Convert to date because for events need to remove "time" part.
     return events_date, back_days,
@@ -353,13 +353,13 @@ def main():
                     " parses all found events in it and loads them into ActivityWatch. Note that you need to have"
                     " Firefox opened in another window and be logged in OWA in order to pass authentication."
     )
-    parser.add_argument('date', nargs='?', type=valid_date,
+    parser.add_argument('events_date', nargs='?', type=valid_date, default=datetime.datetime.now().astimezone(),
                         help="Date to set for OWA365/Web Outlook Calendar events in format 'YYYY-mm-dd'."
-                             " Ovewrites 'back-days' as 'today - date'. If omit here but set 'back-days' argument then"
-                             " date is calculated as 'today - back-days'.")
+                             " By default is today.")
     parser.add_argument('-b', '--back-days', type=int,
                         help="How many days need to scroll back from today to reach day to scrape Calendar events."
-                             f" Max to {OWA_MAX_SCROLL_BACK}.")
+                             f" Overwrites EVENTS_DATE if specified. Max to {OWA_MAX_SCROLL_BACK}."
+                             " If is not specified then calculated as 'today - EVENTS_DATE'.")
     parser.add_argument('-l', '--date-label', type=str,
                         help="Date label on OWA page for 'scroll days back until open page with this label' logic."
                              " Value depends on the language, region, OWA365 settings, etc. It should match 'date'"
@@ -374,11 +374,12 @@ def main():
                         help="URL to Web (MS Office Web Apps) Outlook. Page where email box opens."
                              "May look like 'https://mail.company.com/owa'.")
     parser.add_argument('-r', '--replace', dest='is_replace_bucket', action='store_true',
-                        help=f"Flag to replace all events in ActivityWatch {OWA_BUCKET_ID} bucket.")
+                        help=f"Flag to delete ActivityWatch '{OWA_BUCKET_ID}' bucket first."
+                            " Removes all previous events in it, for all time.")
     parser.add_argument('--dry-run', dest='is_dry_run', action='store_true',
                         help="Flag to just parse and log events, don't upload them into ActivityWatch.")
     args = parser.parse_args()
-    events = get_events_from_owa(args.profile_path, args.owa_url, args.headless, events_date=args.date, 
+    events = get_events_from_owa(args.profile_path, args.owa_url, args.headless, events_date=args.events_date, 
                                  back_days=args.back_days, date_label=args.date_label)
     LOG.info(f"Ready to upload {len(events)} events:" + "\n  " + "\n  ".join(str(x) for x in events))
     # Load events into ActivityWatcher
@@ -435,8 +436,13 @@ class TestGetOutlookEvents(unittest.TestCase):
         ),
         (
             "no date_label",
+            day_ago, None, None,
+            None, day_ago.date(), 1
+        ),
+        (
+            "both date and back-days provided",
             day_ago, 2, None,
-            None, day_ago.date(), 2  # back_days doesn't change events_date and vice versa.
+            None, (today - datetime.timedelta(days=2)).date(), 2
         ),
     ])
     def test_calculate_events_date_and_scrolls_back(self, test_name, events_date, back_days, date_label,
