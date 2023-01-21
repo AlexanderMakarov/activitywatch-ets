@@ -385,7 +385,7 @@ def main():
     # Load events into ActivityWatcher
     if not args.is_dry_run:
         upload_events(events, OWA_SCRAPER_NAME, "owa365.calendar.event", OWA_BUCKET_ID, args.is_replace_bucket)
-        LOG.info("Uploaded all events into ActivityWatch.")
+        LOG.info(f"Uploaded all events into local ActivityWatch '{OWA_BUCKET_ID}' bucket.")
 
 
 if __name__ == '__main__':
