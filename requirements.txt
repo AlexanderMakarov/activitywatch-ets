@@ -1,4 +1,5 @@
 aw-client
 requests
 selenium
+parameterized
 jira
