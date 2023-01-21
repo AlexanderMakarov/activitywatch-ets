@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import datetime
+import os
 import argparse
 import aw_client
 from typing import List
@@ -11,8 +12,14 @@ from activity_merger.domain.analyzer import analyze_intervals
 from activity_merger.domain.output_entities import Activity
 
 
-def convert_aw_events_to_activities(start_date: datetime.datetime) -> List[Activity]:
-    client = aw_client.ActivityWatchClient("activity_merger.py")
+def convert_aw_events_to_activities(events_date: datetime.datetime) -> List[Activity]:
+    """
+    Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
+    analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
+    prints them into output.
+    :param events_date: Date to get events on.
+    """
+    client = aw_client.ActivityWatchClient(os.path.basename(__file__))
     try:
         buckets = client.get_buckets()
     except Exception as e:
@@ -20,10 +27,10 @@ def convert_aw_events_to_activities(start_date: datetime.datetime) -> List[Activ
         exit(1)
     LOG.info(f"Buckets: {buckets.keys()}")
     # Build time-ordered linked list of intervals by provided events.
-    interval = report_from_buckets(client, start_date.date(), start_date.date() + datetime.timedelta(days=1),
+    interval = report_from_buckets(client, events_date.date(), events_date.date() + datetime.timedelta(days=1),
         buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)
     if interval is None:
-        LOG.warn(f"Can't find events/intervals for {start_date.date()}. Doing nothing.")
+        LOG.warn(f"Can't find events/intervals for {events_date.date()}. Doing nothing.")
         return []
     # Convert (assemble) intervals list into activities.
     activities, activity_counter, metrics = analyze_intervals(interval, MIN_DURATION_SEC, RULES)
@@ -44,7 +51,7 @@ def convert_aw_events_to_activities(start_date: datetime.datetime) -> List[Activ
 def main():
     parser = argparse.ArgumentParser(
         description="Calls AcivityWatch for all available events on specified date, "
-                    "merges all events by specified rules into linked list of some activities and"
+                    "merges all events by specified rules into linked list of 'intervals' and"
                     "then separates this list into 'ready to import' actvities."
     )
     parser.add_argument('date', nargs='?', type=valid_date,

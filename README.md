@@ -89,8 +89,9 @@ Note that for `RULES` configuration it would be great to have:
 - [x] Why get_outlook_events.py default "today" don't implemented? It doesn't work with back_days=0.
 - [x] Fix get_outlook_events.py: removes plugins.
 - [x] Fix get_outlook_events.py: skips 'free' events.
+- [ ] Debug: write a script to export all buckets data for a specific date.
 - [ ] Complete get_activities.py
-- [ ] Prepare script to run all event importers and get_activities.py at the end for the same date.
+- [ ] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust `RULES` and code if need.
 - [ ] Use for ETS for a few days. Adjust `RULES`.
 - [ ] Remove company-specific data from `RULES`.
