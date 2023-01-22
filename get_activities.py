@@ -23,28 +23,30 @@ def convert_aw_events_to_activities(events_date: datetime.datetime) -> List[Acti
     try:
         buckets = client.get_buckets()
     except Exception as e:
-        LOG.error(f"Can't connect to ActivityWatcher. Please check that it is enabled on localhost.", e)
+        LOG.exception("Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", e,
+                      exc_info=True)
         exit(1)
-    LOG.info(f"Buckets: {buckets.keys()}")
+    LOG.info("Buckets: %s", buckets.keys())
     # Build time-ordered linked list of intervals by provided events.
     interval = report_from_buckets(client, events_date.date(), events_date.date() + datetime.timedelta(days=1),
         buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)
     if interval is None:
-        LOG.warn(f"Can't find events/intervals for {events_date.date()}. Doing nothing.")
+        LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
         return []
     # Convert (assemble) intervals list into activities.
     activities, activity_counter, metrics = analyze_intervals(interval, MIN_DURATION_SEC, RULES)
     # Print metrics as is.
-    LOG.info(f"Metrics from intervals analysis ({len(metrics)}):" + "\n  "
-             + "\n  ".join(f"{v[0]:4} on {datetime.timedelta(seconds=v[1])} - {k}" for k, v in metrics.items()))
+    LOG.info("Metrics from intervals analysis (%s):\n  %s",
+             len(metrics),
+             "\n  ".join(f"{v[0]:4} on {datetime.timedelta(seconds=v[1])} - {k}" for k, v in metrics.items()))
     # Pring only "less than MIN_DURATION_SEC" from "dumb" activities.
     dumb_activities = [
         f"{seconds_to_int_timedelta(v)} {k}" for k, v in activity_counter.most_common() if v >= MIN_DURATION_SEC
     ]
-    LOG.info("There were %d equal activities. Longer than %d are:\n  %s"
-             % (len(activity_counter), MIN_DURATION_SEC, "\n  ".join(dumb_activities)))
+    LOG.info("There were %d equal activities. Longer than %d are:\n  %s",
+             len(activity_counter), MIN_DURATION_SEC, "\n  ".join(dumb_activities))
     # Print all activities as is.
-    LOG.info("Assembled %d activities:\n  %s" % (len(activities), "\n  ".join(str(x) for x in activities)))
+    LOG.info("Assembled %d activities:\n  %s", len(activities), "\n  ".join(str(x) for x in activities))
     return activities
 
 
@@ -55,7 +57,7 @@ def main():
                     "then separates this list into 'ready to import' actvities."
     )
     parser.add_argument('date', nargs='?', type=valid_date,
-                        help="Date to analyze AcivityWatch events in format 'YYYY-mm-dd'. By-default is today."
+                        help="Date to analyze AcivityWatch events in format 'YYYY-mm-dd'. By-default is today. "
                              "If omit here but set 'back days' argument then date is calculated as today - back_days.")
     parser.add_argument('-b', '--back-days', type=int,
                         help="How many days back search events on. I.e. '1' value means 'search for yesterday.")
@@ -65,7 +67,7 @@ def main():
         events_date = (events_date - datetime.timedelta(days=args.back_days))
     # TODO need interactive way to merge activities
     # TODO need mixing of Jira/Outlook/watchdog events.
-    convert_aw_events_to_activities(events_date)  # TODO args.date
+    convert_aw_events_to_activities(events_date)
 
 
 if __name__ == '__main__':
