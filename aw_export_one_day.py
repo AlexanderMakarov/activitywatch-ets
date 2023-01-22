@@ -23,7 +23,7 @@ def main():
     events_date: datetime.datetime = args.date
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
     buckets: dict = client.get_buckets()
-    result = {"buckets": dict()}
+    result = {"buckets": dict()}  # Prepare structure which ActivityWatch produces on its "export all" endpoint.
     LOG.info("Get %d buckets, trying to get events on %s...", len(buckets), events_date)
     for bucket in buckets.values():
         end_date = events_date + datetime.timedelta(days=1)
@@ -31,6 +31,9 @@ def main():
         events = client.get_events(bucket_id, start=events_date, end=end_date)
         LOG.info("Got %d events from '%s' bucket on %s", len(events), bucket_id, events_date)
         if events:
+            for event in events:  # Modify events to "importable" version.
+                event.pop('id')
+                event['duration'] = event.duration.total_seconds()
             bucket['events'] = events
             result['buckets'][bucket_id] = bucket
     file_name = FILE_NAME_PREFIX + str(events_date) + FILE_NAME_SUFFIX
@@ -38,7 +41,7 @@ def main():
         json.dump(result, f, indent=None, default=str)
     LOG.info("Dumped events into '%s' nearby. Use 'Raw Data' tab in ActivityWatch UI to export this data."
              " In case of 'peewee.IntegrityError: UNIQUE constraint failed: bucketmodel.id' error in aw-server logs"
-             " please consider remove buckets which you are going to import.",
+             " please consider removing buckets which you are going to import.",
              file_name)
 
 
