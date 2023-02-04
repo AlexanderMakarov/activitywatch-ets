@@ -186,8 +186,13 @@ def _find_start_and_duration(hour_points: List[Tuple[int, float]], event_div: We
             break
         index_ended_in = i
     if index_started_in is None:
-        assert False, f"Can't find start hour for element '{event_name}' with y coordinate {start_y}"\
-                      f" among hours: {hour_points}"
+        # Check if meeting started after 23:00. It should be within a page anyway.
+        if start_y > hour_points[-1][1]:
+            index_started_in = 23
+            index_ended_in = 23  # We can't see meetings from the next day so assume it ends at midnight.
+        else:
+            assert False, f"Can't find start hour for element '{event_name}' with y coordinate {start_y}"\
+                          f" among hours: {hour_points}"
     if index_ended_in is None:
         assert False, f"Can't find end hour for element '{event_name}' with bottom y coordinate {end_y}"\
                       f" among hours: {hour_points}"
