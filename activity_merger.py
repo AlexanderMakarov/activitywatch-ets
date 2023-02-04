@@ -7,6 +7,8 @@ import dataclasses
 from typing import Any, List, Dict, Optional, Tuple, Callable
 import re
 
+REMOVE
+
 
 # Tolerance to use when comparing events. Events shorter than this value are ignored.
 # If duration between start and end of different events if equal or less then they are treated adjacent.

@@ -26,7 +26,7 @@ def convert_aw_events_to_activities(events_date: datetime.datetime) -> List[Acti
         LOG.exception("Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", e,
                       exc_info=True)
         exit(1)
-    LOG.info("Buckets: %s", buckets.keys())
+    LOG.info("Buckets: [%s]", ", ".join(buckets.keys()))
     # Build time-ordered linked list of intervals by provided events.
     interval = report_from_buckets(client, events_date.date(), events_date.date() + datetime.timedelta(days=1),
         buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)

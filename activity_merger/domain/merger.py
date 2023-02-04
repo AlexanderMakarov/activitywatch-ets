@@ -193,37 +193,44 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     bucket_ids_to_handle = list(buckets.keys())
     buckets_cnt = 0
 
-    # 1) Handle "aw-watcher-afk" bucket events first to build base intervals to determine activity by.
+    # 1) Handle "aw-watcher-afk" bucket(s) events first to build base intervals to determine activity by.
     # "aw-watcher-afk" - active watcher, it doesn't show "active" when user is not.
     # But is doesn't catch mic on meetings so may produce wrong AFK status.
-    # Data contains the only 'status' key with "afk" and "not-afk" values. Make sense extract 100% activities in
-    # periods from "not-afk" to "afk" and in remained intervals if other watchers shows "meeting".
-    # data={status: [afk, not-afk]}
-    bucket_id = next((x for x in bucket_ids_to_handle if x.startswith("aw-watcher-afk")), None)
-    if bucket_id:
-        events: List[object] = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
-        events.sort(key=lambda e: e.timestamp)
-        events = [Event(bucket_id, x.timestamp, x.duration, x.data) for x in events]
-        for event in events:
-            if not cur_interval:
-                cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
-                cur_interval.events.append(event)
-            else:
-                interval_to_put_after = cur_interval.find_closest(event.timestamp, tolerance, by_end_time=True)
-                if interval_to_put_after:
-                    # Doesn't use `Interval.new_after` because it doesn't use event start time i.e. doesn't
-                    # allow gaps in intervals linked list.
-                    interval = Interval(event.timestamp, event.timestamp + event.duration, cur_interval, None)
-                    interval.events.append(event)
-                    cur_interval.set_next(interval)
-                    cur_interval = interval
-                else:
-                    raise AssertionError("Closest previous interval wasn't found during 'AFK' bucket events handling"
-                                         f"on {event_to_str(event)}.")
+    # data={status: Optional[afk, not-afk]} It make sense to convert other watchers events into activities within
+    # "not-afk" periods and ocasionally add activities from other watchers like "meetings" or "out of comp activity".
+    afk_buckets = [x for x in bucket_ids_to_handle if x.startswith("aw-watcher-afk")]
+    # If we have AFK events from few computers then merge them together.
+    events: List = []
+    for bucket_id in afk_buckets:
+        bucket_events = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
+        if bucket_events:
+            events.extend(bucket_events)
+            buckets_cnt += 1
         bucket_ids_to_handle.remove(bucket_id)
-        buckets_cnt += 1
-    else:
-        LOG.info("No AFK bucket found. Stopping here - no more events expected.")
+    events.sort(key=lambda e: e.timestamp)
+    events = [Event(bucket_id, x.timestamp, x.duration, x.data) for x in events]
+    for event in events:
+        d: datetime.timedelta = event.duration
+        if d.total_seconds() <= 0:
+            LOG.info("JFYI: Skipped 0-duration AFK event at %s in '%s' bucket.", event_to_str(event), event.bucket_id)
+            continue
+        if not cur_interval:
+            cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
+            cur_interval.events.append(event)
+        else:
+            interval_to_put_after = cur_interval.find_closest(event.timestamp, tolerance, by_end_time=True)
+            if interval_to_put_after:
+                # Doesn't use `Interval.new_after` because it doesn't use event start time i.e. doesn't
+                # allow gaps in intervals linked list.
+                interval = Interval(event.timestamp, event.timestamp + event.duration, cur_interval, None)
+                interval.events.append(event)
+                cur_interval.set_next(interval)
+                cur_interval = interval
+            else:
+                raise AssertionError("Closest previous interval wasn't found during 'AFK' bucket events handling"
+                                     f"on {event_to_str(event)}.")
+    if buckets_cnt <= 0:
+        LOG.info("No AFK buckets found. Stopping here - no more events expected.")
         return None
     if cur_interval:
         check_and_print_intervals(cur_interval, buckets_cnt, "AFK")

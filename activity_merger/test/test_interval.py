@@ -2,38 +2,9 @@ import unittest
 import datetime
 from parameterized import parameterized
 from aw_core.models import Event
-from typing import List, Tuple
+from . import build_datetime, build_timedelta, build_intervals_linked_list
 
 from ..domain.interval import Interval
-
-
-def _build_datetime(seed: int) -> datetime.datetime:
-    return datetime.datetime(2000, 1, seed, seed, 0, 0).astimezone(datetime.timezone.utc)
-
-
-def _build_timedelta(seed: int) -> datetime.timedelta:
-    return _build_datetime(seed + 1) - _build_datetime(1)
-
-
-def build_intervals_linked_list(data: List[Tuple[int, bool, int]]) -> Interval:
-    """
-    Builds intervals linked list from the list of tuples. Doesn't check parameters.
-    :param data: List of tuples (day of start, flag to return `Interval` from the function, duration).
-    :return: Chosen interval.
-    """
-    result = None
-    previous = None
-    for (seed, is_target, duration) in data:
-        if not previous:
-            previous = Interval(_build_datetime(seed), _build_datetime(seed + duration))
-        else:
-            tmp = Interval(_build_datetime(seed), _build_datetime(seed + duration), previous)
-            previous.next = tmp
-            previous = tmp
-        if is_target:
-            assert result is None, f"Wrong parameters - '{seed}' interval is marked as result but is not first."
-            result = previous
-    return result
 
 
 class TestInterval(unittest.TestCase):
@@ -95,9 +66,9 @@ class TestInterval(unittest.TestCase):
         ),
     ])
     def test_find_closest_by_start(self, test_name, interval, expected_start_seed):
-        target = _build_datetime(5)
+        target = build_datetime(5)
         actual: Interval = interval.find_closest(target, datetime.timedelta(0), False)
-        expected = _build_datetime(expected_start_seed)
+        expected = build_datetime(expected_start_seed)
         self.assertEqual(actual.start_time, expected, f"'{test_name}' case failed.")
 
     @parameterized.expand([
@@ -157,9 +128,9 @@ class TestInterval(unittest.TestCase):
         ),
     ])
     def test_find_closest_by_end(self, test_name, interval: Interval, expected_start_seed):
-        target = _build_datetime(5)
+        target = build_datetime(5)
         actual: Interval = interval.find_closest(target, datetime.timedelta(0), True)
-        expected = _build_datetime(expected_start_seed)
+        expected = build_datetime(expected_start_seed)
         self.assertEqual(actual.start_time, expected, f"'{test_name}' case failed.")
 
     @parameterized.expand([
@@ -168,7 +139,7 @@ class TestInterval(unittest.TestCase):
             build_intervals_linked_list([
                 (3, True, 5),
             ]),
-            Event(1, _build_datetime(5), _build_timedelta(1)),
+            Event(1, build_datetime(5), build_timedelta(1)),
             build_intervals_linked_list([
                 (3, True, 2),
                 (5, False, 1),
@@ -180,7 +151,7 @@ class TestInterval(unittest.TestCase):
             build_intervals_linked_list([
                 (5, True, 5),
             ]),
-            Event(1, _build_datetime(5), _build_timedelta(1)),
+            Event(1, build_datetime(5), build_timedelta(1)),
             build_intervals_linked_list([
                 (5, True, 1),
                 (6, False, 4),
@@ -191,7 +162,7 @@ class TestInterval(unittest.TestCase):
             build_intervals_linked_list([
                 (4, True, 2),
             ]),
-            Event(1, _build_datetime(5), _build_timedelta(1)),
+            Event(1, build_datetime(5), build_timedelta(1)),
             build_intervals_linked_list([
                 (4, True, 1),
                 (5, False, 1),

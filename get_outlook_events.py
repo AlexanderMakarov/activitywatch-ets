@@ -398,6 +398,7 @@ if __name__ == '__main__':
     main()
 
 
+# Tests are placed right here because of Python imports inflexibility.
 class TestGetOutlookEvents(unittest.TestCase):
     today = datetime.datetime.now().astimezone()
     day_ago = (today - datetime.timedelta(days=1))
