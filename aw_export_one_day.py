@@ -17,8 +17,7 @@ def main():
                     " Expected to be used for migrating chunks of data from one machine to another for experiments."
     )
     parser.add_argument('date', nargs='?', type=valid_date,
-                        help="Date to analyze AcivityWatch events in format 'YYYY-mm-dd'. By-default is today. "
-                             "If omit here but set 'back days' argument then date is calculated as today - back_days.")
+                        help="Date to analyze AcivityWatch events in format 'YYYY-mm-dd'.")
     args = parser.parse_args()
     events_date: datetime.datetime = args.date
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
