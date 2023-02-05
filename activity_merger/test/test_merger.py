@@ -1,50 +1,90 @@
 import unittest
 import datetime
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch, call
 from parameterized import parameterized
 from aw_core.models import Event
 from typing import List, Dict
+
 from . import build_datetime, build_timedelta, build_intervals_linked_list
 
+from ..helpers.helpers import event_to_str
 from ..domain.interval import Interval
-from ..domain.merger import report_from_buckets
+from ..domain import merger
 from ..config.config import LOG
 
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("activity_merger.config.config")
 start_time = build_datetime(1)
 end_time = build_datetime(2)
-
+afk_bucket_id = "aw-watcher-afk-foo"
+one_event_inerval = build_intervals_linked_list([(1, True, 1)])
+awc = MagicMock()
+event_0_length = Event('', start_time, build_timedelta(0), None)
+event_1 = Event('', start_time, build_timedelta(1), None)
 
 class TestMerger(unittest.TestCase):
     @parameterized.expand([
+        # (
+        #     "No buckets",
+        #     [],
+        #     {},
+        #     0.0,
+        #     None,
+        #     [],
+        #     [("No AFK buckets found. Stopping here - no more events expected.",)]
+        # ),
+        # (
+        #     "No AFK events",
+        #     [[]],
+        #     {afk_bucket_id: None},
+        #     0.0,
+        #     None,
+        #     [afk_bucket_id],
+        #     [("No AFK buckets found. Stopping here - no more events expected.",)]
+        # ),
+        # (
+        #     "1 AFK 0-length event",
+        #     [[event_0_length]],
+        #     {afk_bucket_id: None},
+        #     0.0,
+        #     None,
+        #     [afk_bucket_id],
+        #     [
+        #         ("JFYI: Skipped 0-duration AFK event at %s in '%s' bucket.", event_to_str(event_0_length), afk_bucket_id),
+        #         ("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
+        #     ]
+        # ),
         (
-            "Simple one event",
-            [Event('', start_time, build_timedelta(0), None)],
-            {"b1": None},
+            "1 AFK event",
+            [[event_1], []],
+            {afk_bucket_id: None},
             0.0,
             build_intervals_linked_list([
                 (1, True, 1)
             ]),
-            ["b1"],
-            [""]
+            [afk_bucket_id],
+            [("After '%s' handling got %s", 'AFK', '1 intervals:\n  01:00:00..02:00:00: 1 events, last={}')]
         ),
     ])
-    @patch.object(LOG, "warning", MagicMock())
-    def test_report_from_buckets(self, test_name: str, get_events_results: List[Event], buckets: Dict[str, object],
+    @patch.object(LOG, "info", MagicMock())
+    @patch.object(merger, "check_and_print_intervals", MagicMock())
+    def test_report_from_buckets(self, test_name: str, get_events_lists_results: List[Event], buckets: Dict[str, object],
                                  tolerance: datetime.timedelta,
                                  expected_interval: Interval, expected_buckets_called: List[str], expected_logs: List[str]):
         # Arrange
-        awc: MagicMock = MagicMock(
-            **{'get_events.return_value': get_events_results})
+        awc.get_events.reset()
+        awc.get_events.side_effect = get_events_lists_results
         # Act
-        actual: Interval = report_from_buckets(awc, start_time, end_time, buckets, tolerance)
+        actual: Interval = merger.report_from_buckets(awc, start_time, end_time, buckets, tolerance)
         # Assert
-        self.assertListEqual(actual.get_range(), expected_interval.get_range(), f"'{test_name}' case failed.")
-        awc.get_events.assert_has_calls(
-            [(x, start_time, end_time) for x in expected_buckets_called])
-        LOG.info.assert_has_calls(expected_logs)
+        err_msg = f"'{test_name}' case failed."
+        if expected_interval:
+            self.assertListEqual(actual.get_range(), expected_interval.get_range(), err_msg)
+        else:
+            self.assertIsNone(actual, err_msg)
+        awc.get_events.assert_has_calls([call(x, start=start_time, end=end_time) for x in expected_buckets_called])
+        LOG.info.assert_has_calls([call(*x) for x in expected_logs])
 
     # @parameterized.expand([
     #     (

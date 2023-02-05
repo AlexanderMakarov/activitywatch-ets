@@ -244,21 +244,23 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     # Make sense measuring duration per unique label from "running=true" to "running=false".
     # data={label: str, running: bool}
     bucket_id = "aw-stopwatch"
-    events: List[object] = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
-    if events:
-        events = [Event(bucket_id, x.id, x.timestamp, x.duration, x.data) for x in events]
-        for event in events:  # TODO implement and put before AFK events handling.
-            if cur_interval:
-                interval = cur_interval.new_after(event)  # Assume events are sorted here.
-            else:
-                interval = Interval(event.timestamp, event.timestamp + event.duration)
-                interval.events.append(event)
-            cur_interval = interval
-        buckets_cnt += 1
-        check_and_print_intervals(cur_interval, buckets_cnt, "stopwatch", True)
-    else:
-        LOG.info("No stopwatch events found.")
-    bucket_ids_to_handle.remove(bucket_id)
+    if bucket_id in bucket_ids_to_handle:
+        events: List[object] = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
+        if events:
+            events = [Event(bucket_id, x.id, x.timestamp, x.duration, x.data) for x in events]
+            for event in events:  # TODO implement and put before AFK events handling.
+                if cur_interval:
+                    # Assume events are sorted here.
+                    interval = cur_interval.new_after(event)
+                else:
+                    interval = Interval(event.timestamp, event.timestamp + event.duration)
+                    interval.events.append(event)
+                cur_interval = interval
+            buckets_cnt += 1
+            check_and_print_intervals(cur_interval, buckets_cnt, "stopwatch", True)
+        else:
+            LOG.info("No stopwatch events found.")
+        bucket_ids_to_handle.remove(bucket_id)
 
     # 3) Iterate through remained buckets by given rules.
     # Assume that they are all "passive" watchers reacting on 3d-party application events which leads to:
