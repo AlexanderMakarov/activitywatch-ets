@@ -4,9 +4,9 @@ import logging
 from unittest.mock import MagicMock, Mock, patch, call
 from parameterized import parameterized
 from aw_core.models import Event
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
-from . import build_datetime, build_timedelta, build_intervals_linked_list
+from . import build_datetime, build_timedelta
 
 from ..helpers.helpers import event_to_str
 from ..domain.interval import Interval
@@ -14,14 +14,29 @@ from ..domain import merger
 from ..config.config import LOG
 
 
+def build_intervals(data: List[Tuple[int, int, List[Event]]]) -> Interval:
+    interval = None
+    for (start, duration, events) in data:
+        if not interval:
+            interval = Interval(build_datetime(start, day=1), build_datetime(start + duration, day=1))
+        else:
+            tmp = Interval(build_datetime(start, day=1), build_datetime(start + duration, day=1), interval)
+            interval.next = tmp
+            interval = tmp
+        interval.events.extend(events)
+    return interval
+
+
 LOG = logging.getLogger("activity_merger.config.config")
-start_time = build_datetime(1)
-end_time = build_datetime(2)
+start_time = build_datetime(1, day=1)
+end_time = build_datetime(2, day=1)
 afk_bucket_id = "aw-watcher-afk-foo"
-one_event_inerval = build_intervals_linked_list([(1, True, 1)])
 awc = MagicMock()
 event_0_length = Event('', start_time, build_timedelta(0), None)
-event_1 = Event('', start_time, build_timedelta(1), None)
+event_1 = Event('', start_time, build_timedelta(1, True), None)
+inerval_for_1_event = build_intervals([(1, 1, [event_1])])
+event_2 = Event('', build_datetime(2, day=1), build_timedelta(1, True), None)
+inerval_for_2_consequtive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2])])
 
 class TestMerger(unittest.TestCase):
     @parameterized.expand([
@@ -55,16 +70,23 @@ class TestMerger(unittest.TestCase):
         #         ("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
         #     ]
         # ),
+        # (
+        #     "1 AFK event",
+        #     [[event_1], []],
+        #     {afk_bucket_id: None},
+        #     0.0,
+        #     inerval_for_1_event,
+        #     [afk_bucket_id],
+        #     []
+        # ),
         (
-            "1 AFK event",
-            [[event_1], []],
+            "2 AFK events same bucket",
+            [[event_1, event_2], []],
             {afk_bucket_id: None},
             0.0,
-            build_intervals_linked_list([
-                (1, True, 1)
-            ]),
+            inerval_for_2_consequtive_events,
             [afk_bucket_id],
-            [("After '%s' handling got %s", 'AFK', '1 intervals:\n  01:00:00..02:00:00: 1 events, last={}')]
+            []
         ),
     ])
     @patch.object(LOG, "info", MagicMock())
