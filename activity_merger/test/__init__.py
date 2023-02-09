@@ -22,25 +22,3 @@ def build_timedelta(seed: int, in_hours=False) -> datetime.timedelta:
     :return: Timedelta with specified difference.
     """
     return build_datetime(seed + 1, 1 if in_hours else None) - build_datetime(1, 1 if in_hours else None)
-
-
-def build_intervals_linked_list(data: List[Tuple[int, bool, int]]) -> Interval:
-    """
-    Builds intervals linked list from the list of tuples. Doesn't check parameters.
-    :param data: List of tuples (day of start, flag to return `Interval` from the function, duration).
-    :param in_hours: Flag to build intervals in hours. By-default in days.
-    :return: Chosen interval.
-    """
-    result = None
-    previous = None
-    for (seed, is_target, duration) in data:
-        if not previous:
-            previous = Interval(build_datetime(seed), build_datetime(seed + duration))
-        else:
-            tmp = Interval(build_datetime(seed), build_datetime(seed + duration), previous)
-            previous.next = tmp
-            previous = tmp
-        if is_target:
-            assert result is None, f"Wrong parameters - '{seed}' interval is marked as result but is not first."
-            result = previous
-    return result
