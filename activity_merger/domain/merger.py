@@ -161,12 +161,13 @@ def check_and_print_intervals(interval: Interval, max_events_per_interval: int, 
         last_bucket_id = None
         for event in interval.events:
             if event.bucket_id == last_bucket_id:
-                raise ValueError("After '%s' bucket events applied few events from same bucket appeared in %s."\
-                                 " Surroundings: %s"
+                raise ValueError("After '%s' bucket events applied few events from the same '%s' bucket appeared"\
+                                 " in %s. Surroundings: %s"
                                  % (last_bucket_name, last_bucket_id, interval,
                                     interval.intervals_to_string(-2, 4, True)))
             last_bucket_id = event.bucket_id
         intervals.append(interval)
+        return False  # Never stop.
 
     interval.iterate_next(check_and_print)
     if level >= logging.WARN:
