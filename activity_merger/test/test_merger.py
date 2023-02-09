@@ -102,7 +102,7 @@ class TestMerger(unittest.TestCase):
             [[event_1], [event_2]],
             {afk_bucket_id: None, afk_bucket_id + "2": None},
             build_timedelta(0),
-            build_intervals([(1, 1, [event_1, event_2])]),
+            build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
             [afk_bucket_id, afk_bucket_id + "2"],
             []
         ),
