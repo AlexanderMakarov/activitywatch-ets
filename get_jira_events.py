@@ -27,7 +27,7 @@ def _get_jira_issues(server_url: str, email: str, api_token: str, projects: List
     connection = jira.JIRA(server=server_url, basic_auth=(email, api_token))
     # end_date = search_date.date() + datetime.timedelta(days=1)
     LOG.info(f"Searching {projects} issues updated during or after {search_date.date()} and touched by {email}.")
-    jql = f"project IN ('{','.join(projects)}') AND updated >= '{search_date.date()}' AND ("\
+    jql = f"project IN ({','.join(projects)}) AND updated >= '{search_date.date()}' AND ("\
           "reporter was currentUser()"\
           " OR commentedBy = currentUser()"\
           " OR assignee was currentUser()"\
