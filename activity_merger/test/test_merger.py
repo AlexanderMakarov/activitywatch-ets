@@ -33,9 +33,9 @@ end_time = build_datetime(2, day=1)
 afk_bucket_id = "aw-watcher-afk-foo"
 awc = MagicMock()
 event_0_length = Event('', start_time, build_timedelta(0), None)
-event_1 = Event('', start_time, build_timedelta(1, True), None)
+event_1 = Event('event_1', start_time, build_timedelta(1, True), None)
 inerval_for_1_event = build_intervals([(1, 1, [event_1])])
-event_2 = Event('', build_datetime(2, day=1), build_timedelta(1, True), None)
+event_2 = Event('event_2', build_datetime(2, day=1), build_timedelta(1, True), None)
 inerval_for_2_consequtive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2])])
 
 class TestMerger(unittest.TestCase):
@@ -44,7 +44,7 @@ class TestMerger(unittest.TestCase):
         #     "No buckets",
         #     [],
         #     {},
-        #     0.0,
+        #     build_timedelta(0),
         #     None,
         #     [],
         #     [("No AFK buckets found. Stopping here - no more events expected.",)]
@@ -53,7 +53,7 @@ class TestMerger(unittest.TestCase):
         #     "No AFK events",
         #     [[]],
         #     {afk_bucket_id: None},
-        #     0.0,
+        #     build_timedelta(0),
         #     None,
         #     [afk_bucket_id],
         #     [("No AFK buckets found. Stopping here - no more events expected.",)]
@@ -62,7 +62,7 @@ class TestMerger(unittest.TestCase):
         #     "1 AFK 0-length event",
         #     [[event_0_length]],
         #     {afk_bucket_id: None},
-        #     0.0,
+        #     build_timedelta(0),
         #     None,
         #     [afk_bucket_id],
         #     [
@@ -74,18 +74,36 @@ class TestMerger(unittest.TestCase):
         #     "1 AFK event",
         #     [[event_1], []],
         #     {afk_bucket_id: None},
-        #     0.0,
+        #     build_timedelta(0),
         #     inerval_for_1_event,
         #     [afk_bucket_id],
         #     []
         # ),
+        # (
+        #     "2 consequitive AFK events same bucket",
+        #     [[event_1, event_2], []],
+        #     {afk_bucket_id: None},
+        #     build_timedelta(0),
+        #     inerval_for_2_consequtive_events,
+        #     [afk_bucket_id],
+        #     []
+        # ),
+        # (
+        #     "2 similar AFK events different buckets",
+        #     [[event_1], [event_1]],
+        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
+        #     build_timedelta(0),
+        #     build_intervals([(1, 1, [event_1, event_1])]),
+        #     [afk_bucket_id, afk_bucket_id + "2"],
+        #     []
+        # ),
         (
-            "2 AFK events same bucket",
-            [[event_1, event_2], []],
-            {afk_bucket_id: None},
-            0.0,
-            inerval_for_2_consequtive_events,
-            [afk_bucket_id],
+            "2 consequitive AFK events different buckets",
+            [[event_1], [event_2]],
+            {afk_bucket_id: None, afk_bucket_id + "2": None},
+            build_timedelta(0),
+            build_intervals([(1, 1, [event_1, event_2])]),
+            [afk_bucket_id, afk_bucket_id + "2"],
             []
         ),
     ])
