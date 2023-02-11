@@ -34,9 +34,15 @@ class Interval:
         return isinstance(__o , Interval) \
                 and self.start_time == __o.start_time \
                 and self.end_time == __o.end_time \
+                and self.compare_events(__o)
+
+    def compare_events(self, interval: 'Interval') -> bool:
+        if len(self.events) != len(interval.events):
+            return False
+        return sorted(self.events) == sorted(interval.events)
 
     def __repr__(self):
-        return self.to_str(False)
+        return self.to_str(debug=False)
 
     def set_prev(self, prev_interval: 'Interval') -> None:
         self.prev = prev_interval
@@ -63,6 +69,8 @@ class Interval:
                 return f"{result}: {len(self.events)} events={events_str}"
             else:
                 return f"{result}: {len(self.events)} events, last={event_data_to_str(self.events[-1])}"
+        else:
+            return f"{result}: no events"
 
     def get_duration(self) -> float:
         """
@@ -213,12 +221,14 @@ class Interval:
         """
         Separates current `Interval` to 2, with earliest part based on the given event.
         I.e. from [0<-self->3] makes [0<-new->1][1<-self->3]. Does nothing if resulting interval duration shorter than
-        given tolerance. Doesn't upadate/set names for both intervals. Doesn't use event start time.
-        :param event: `Event` to split current interval with.
+        given tolerance. If after separation some interval would be less than tolerance then just appends new event.
+        Doesn't use event start time.
+        :param event: `Event` to split current interval with and insert into result.
         :return: Just created interval or current interval if no actions were performed.
         """
         event_end_time = event.timestamp + event.duration
         if abs(self.start_time - event_end_time) <= tolerance or abs(event_end_time - self.end_time) <= tolerance:
+            self.events.append(event)
             return self
         interval = Interval(self.start_time, event_end_time, self.prev, self)
         interval.events.extend(self.events)
@@ -230,13 +240,15 @@ class Interval:
         """
         Separates current `Interval` to 2, with latest part based on the given event.
         I.e. from [0<-self->3] makes [0<-self->2][2<-new->3]. Does nothing if resulting interval duration shorter than
-        given tolerance. Doesn't upadate/set names for both intervals. Doesn't use event end time.
-        :param event: `Event` to split current interval with.
+        given tolerance. If after separation some interval would be less than tolerance then just appends new event.
+        Doesn't use event end time.
+        :param event: `Event` to split current interval with and insert into result.
         :return: Just created interval or current interval if no actions were performed.
         """
         if abs(self.start_time - event.timestamp) <= tolerance or abs(event.timestamp - self.end_time) <= tolerance:
+            self.events.append(event)
             return self
-        interval = Interval(event.timestamp, self.end_time, self, self.next)
+        interval = Interval(event.timestamp, self.end_time, prev=self, next=self.next)
         interval.events.extend(self.events)
         interval.events.append(event)
         self.end_time = interval.start_time
@@ -244,11 +256,11 @@ class Interval:
 
     def separate_new_at_middle(self, event: Event, tolerance: datetime.timedelta) -> 'Interval':
         """
-        Separates current `Interval` to 3, with only middle parh based on given event.
-        I.e. from [0<-self->3] makes [0<-self->1][1<-new->2][2<-self->3].
-        Does nothing if resulting interval duration shorter than given tolerance.
-        Doesn't upadate/set names for all resulting intervals.
-        :param event: `Event` to split current interval with.
+        Separates current `Interval` to 3, with only middle part based on given event.
+        I.e. from [0<-self->3] makes [0<-self->1][1<-new->2][2<-self->3] where "new" contains all current interval
+        events plus new one.
+        Does nothing if some resulting interval duration shorter than given tolerance.
+        :param event: `Event` to split current interval with and insert into result.
         :return: Just created interval in the middle of initial interval or initial interval if no actions were
         performed.
         """
@@ -258,10 +270,10 @@ class Interval:
         event_end_time = event.timestamp + event.duration
         # First separate last part i.e. [0<-self->2][2<-self->3]. Only if it makes sense.
         if abs(self.start_time - event_end_time) > tolerance and abs(event_end_time - self.end_time) > tolerance:
-            last_interval = Interval(event_end_time, self.end_time, self, self.next)
+            last_interval = Interval(event_end_time, self.end_time, prev=self, next=self.next)
             last_interval.events.extend(self.events)
             self.end_time = last_interval.start_time
-        # Next separate current interval with new at the end.
+        # Next separate current interval with new at the end, i.e. to [0<-self->1][1<-new->2][2<-self->3]
         return self.separate_new_at_end(event, tolerance)
 
     def merge_with_next(self):
