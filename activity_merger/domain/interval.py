@@ -195,7 +195,7 @@ class Interval:
         then returns closest interval after.
         :param date: Time to search interval closest to.
         :param by_end_time: Flag to search by interval `end_time`. Otherwise searches by `start_time`.
-        :return: Interval closest before or on the specified time.
+        :return: Closest (by given rules) Interval or just last checked.
         """
         interval = self
         # First check if date is later than current interval (need search it later intervals).

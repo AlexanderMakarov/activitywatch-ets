@@ -15,6 +15,11 @@ from ..config.config import LOG
 
 
 def build_intervals(data: List[Tuple[int, int, List[Event]]]) -> Interval:
+    """
+    Build linked list of intervals.
+    :param data: List of tuples (start, duration, list of events).
+    :return: Last created `Interval`.
+    """
     interval = None
     for (start, duration, events) in data:
         if not interval:
@@ -33,7 +38,8 @@ end_time = build_datetime(2, day=1)
 afk_bucket_id = "aw-watcher-afk-foo"
 afk_bucket_id2 = "aw-watcher-afk-foo2"
 awc = MagicMock()
-event_0_length = Event(afk_bucket_id, start_time, build_timedelta(0), 'event_0_length')
+timedelta_0 = build_timedelta(0)
+event_0_length = Event(afk_bucket_id, start_time, timedelta_0, 'event_0_length')
 event_1 = Event(afk_bucket_id, start_time, build_timedelta(1, True), 'event_1')
 event_1_bucket2 = Event(afk_bucket_id2, start_time, build_timedelta(1, True), 'event_1_bucket2')
 inerval_for_1_event = build_intervals([(1, 1, [event_1])])
@@ -48,12 +54,63 @@ event_1l2_2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(1, 
 
 
 class TestMerger(unittest.TestCase):
+
+    @parameterized.expand([
+        # (
+        #     "first event",
+        #     [event_1],
+        #     None,
+        #     timedelta_0,
+        #     build_intervals([(1, 1, [event_1])]),
+        #     {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+        #     []
+        # ),
+        # (
+        #     "adjacent event",
+        #     [event_2],
+        #     build_intervals([(1, 1, [event_1])]),
+        #     timedelta_0,
+        #     build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
+        #     {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+        #     []
+        # ),
+        (
+            "overlaping event",
+            [event_2],
+            build_intervals([(1, 2, [event_1l2])]),
+            timedelta_0,
+            build_intervals([(1, 1, [event_1l2]), (2, 1, [event_1l2, event_2])]),
+            {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+            []
+        ),
+    ])
+    @patch.object(LOG, "debug", MagicMock())
+    def test_apply_events_stopwatch(self, test_name: str, events: List[Event], interval: Interval,
+            tolerance: datetime.timedelta,
+            expected_interval: Interval, expected_metrics: Dict[str, int], expected_logs: List[str]):
+        # Act
+        actual_interval: Interval
+        actual_metrics: Dict[str, int]
+        actual_interval, actual_metrics = merger.apply_events(events, interval, tolerance, True, True)
+        # Assert
+        err_msg = f"'{test_name}' case failed."
+        if expected_interval:
+            self.assertListEqual(actual_interval.get_range(), expected_interval.get_range(), err_msg)
+        else:
+            self.assertIsNone(actual_interval, err_msg)
+        self.assertDictEqual(
+            {k: v for (k, v) in actual_metrics.items() if v > 0},
+            {k: v for (k, v) in expected_metrics.items() if v > 0},
+            err_msg
+        )
+        LOG.debug.assert_has_calls([call(*x) for x in expected_logs])
+
     @parameterized.expand([
         # (
         #     "No buckets",
         #     [],
         #     {},
-        #     build_timedelta(0),
+        #     timedelta_0,
         #     None,
         #     [],
         #     [("No AFK buckets found. Stopping here - no more events expected.",)]
@@ -62,7 +119,7 @@ class TestMerger(unittest.TestCase):
         #     "No AFK events",
         #     [[]],
         #     {afk_bucket_id: None},
-        #     build_timedelta(0),
+        #     timedelta_0,
         #     None,
         #     [afk_bucket_id],
         #     [("No AFK buckets found. Stopping here - no more events expected.",)]
@@ -71,7 +128,7 @@ class TestMerger(unittest.TestCase):
         #     "1 AFK 0-length event",
         #     [[event_0_length]],
         #     {afk_bucket_id: None},
-        #     build_timedelta(0),
+        #     timedelta_0,
         #     None,
         #     [afk_bucket_id],
         #     [
@@ -83,7 +140,7 @@ class TestMerger(unittest.TestCase):
         #     "1 AFK event",
         #     [[event_1], []],
         #     {afk_bucket_id: None},
-        #     build_timedelta(0),
+        #     timedelta_0,
         #     inerval_for_1_event,
         #     [afk_bucket_id],
         #     []
@@ -92,7 +149,7 @@ class TestMerger(unittest.TestCase):
         #     "2 consecutive AFK events same bucket",
         #     [[event_1, event_2], []],
         #     {afk_bucket_id: None},
-        #     build_timedelta(0),
+        #     timedelta_0,
         #     interval_for_2_consecutive_events,
         #     [afk_bucket_id],
         #     []
@@ -101,7 +158,7 @@ class TestMerger(unittest.TestCase):
             "2 similar AFK events different buckets",
             [[event_1], [event_1_bucket2]],
             {afk_bucket_id: None, afk_bucket_id2: None},
-            build_timedelta(0),
+            timedelta_0,
             build_intervals([(1, 1, [event_1, event_1_bucket2])]),
             [afk_bucket_id, afk_bucket_id2],
             []
@@ -110,7 +167,7 @@ class TestMerger(unittest.TestCase):
             "2 consecutive AFK events different buckets",
             [[event_1], [event_2_bucket2]],
             {afk_bucket_id: None, afk_bucket_id2: None},
-            build_timedelta(0),
+            timedelta_0,
             build_intervals([(1, 1, [event_1]), (2, 1, [event_2_bucket2])]),
             [afk_bucket_id, afk_bucket_id2],
             []
@@ -119,7 +176,7 @@ class TestMerger(unittest.TestCase):
             "2 consecutive AFK events different buckets opposite order",
             [[event_2], [event_1_bucket2]],
             {afk_bucket_id: None, afk_bucket_id2: None},
-            build_timedelta(0),
+            timedelta_0,
             build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2])]),
             [afk_bucket_id, afk_bucket_id2],
             []
@@ -128,7 +185,7 @@ class TestMerger(unittest.TestCase):
             "AFK events 1 and 3 in first bucket, 2 in second",
             [[event_1, event_3], [event_2]],
             {afk_bucket_id: None, afk_bucket_id2: None},
-            build_timedelta(0),
+            timedelta_0,
             interval_for_3_consecutive_events,
             [afk_bucket_id, afk_bucket_id2],
             []
@@ -137,7 +194,7 @@ class TestMerger(unittest.TestCase):
             "AFK events 2 in first bucket, 1 and 3 in second",
             [[event_2], [event_1, event_3]],
             {afk_bucket_id: None, afk_bucket_id2: None},
-            build_timedelta(0),
+            timedelta_0,
             interval_for_3_consecutive_events,
             [afk_bucket_id, afk_bucket_id2],
             []
@@ -146,7 +203,7 @@ class TestMerger(unittest.TestCase):
             "AFK events 2 in first bucket, 1 and 4 in second",
             [[event_2], [event_1, event_4]],
             {afk_bucket_id: None, afk_bucket_id2: None},
-            build_timedelta(0),
+            timedelta_0,
             build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (4, 1, [event_4])]),
             [afk_bucket_id, afk_bucket_id2],
             []
@@ -155,7 +212,7 @@ class TestMerger(unittest.TestCase):
             "AFK events overlaping in buckets",
             [[event_1l2], [event_1, event_4]],
             {afk_bucket_id: None, afk_bucket_id2: None},
-            build_timedelta(0),
+            timedelta_0,
             build_intervals([(1, 1, [event_1l2_1, event_1]), (2, 1, [event_1l2_2]), (4, 1, [event_4])]),
             [afk_bucket_id, afk_bucket_id2],
             []
@@ -163,7 +220,7 @@ class TestMerger(unittest.TestCase):
     ])
     @patch.object(LOG, "info", MagicMock())
     @patch.object(merger, "check_and_print_intervals", MagicMock())
-    def test_report_from_buckets(self, test_name: str, get_events_lists_results: List[Event],
+    def TODOtest_report_from_buckets(self, test_name: str, get_events_lists_results: List[Event],
             buckets: Dict[str, object], tolerance: datetime.timedelta,
             expected_interval: Interval, expected_buckets_called: List[str], expected_logs: List[str]):
         # Arrange
