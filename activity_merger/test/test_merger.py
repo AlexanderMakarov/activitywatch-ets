@@ -3,12 +3,12 @@ import datetime
 import logging
 from unittest.mock import MagicMock, Mock, patch, call
 from parameterized import parameterized
-from aw_core.models import Event
 from typing import List, Dict, Tuple
 
 from . import build_datetime, build_timedelta
 
 from ..helpers.helpers import event_to_str
+from ..domain.input_entities import Event
 from ..domain.interval import Interval
 from ..domain import merger
 from ..config.config import LOG
@@ -31,18 +31,21 @@ LOG = logging.getLogger("activity_merger.config.config")
 start_time = build_datetime(1, day=1)
 end_time = build_datetime(2, day=1)
 afk_bucket_id = "aw-watcher-afk-foo"
+afk_bucket_id2 = "aw-watcher-afk-foo2"
 awc = MagicMock()
-event_0_length = Event('', start_time, build_timedelta(0), None)
-event_1 = Event('event_1', start_time, build_timedelta(1, True), None)
+event_0_length = Event(afk_bucket_id, start_time, build_timedelta(0), 'event_0_length')
+event_1 = Event(afk_bucket_id, start_time, build_timedelta(1, True), 'event_1')
+event_1_bucket2 = Event(afk_bucket_id2, start_time, build_timedelta(1, True), 'event_1_bucket2')
 inerval_for_1_event = build_intervals([(1, 1, [event_1])])
-event_2 = Event('event_2', build_datetime(2, day=1), build_timedelta(1, True), None)
-interval_for_2_consequtive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2])])
-event_3 = Event('event_3', build_datetime(3, day=1), build_timedelta(1, True), None)
-interval_for_3_consequtive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (3, 1, [event_3])])
-event_4 = Event('event_4', build_datetime(4, day=1), build_timedelta(1, True), None)
-event_1l2 = Event('event_1l2', build_datetime(1, day=1), build_timedelta(2, True), None)
-event_1l2_1 = Event('event_1l2', build_datetime(1, day=1), build_timedelta(1, True), None)
-event_1l2_2 = Event('event_1l2', build_datetime(2, day=1), build_timedelta(1, True), None)
+event_2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(1, True), 'event_2')
+event_2_bucket2 = Event(afk_bucket_id2, build_datetime(2, day=1), build_timedelta(1, True), 'event_2_bucket2')
+event_3 = Event(afk_bucket_id, build_datetime(3, day=1), build_timedelta(1, True), 'event_3')
+interval_for_3_consecutive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (3, 1, [event_3])])
+event_4 = Event(afk_bucket_id, build_datetime(4, day=1), build_timedelta(1, True), 'event_4')
+event_1l2 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(2, True), 'event_1l2')
+event_1l2_1 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(1, True), 'event_1l2_1')
+event_1l2_2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(1, True), 'event_1l2_2')
+
 
 class TestMerger(unittest.TestCase):
     @parameterized.expand([
@@ -86,83 +89,83 @@ class TestMerger(unittest.TestCase):
         #     []
         # ),
         # (
-        #     "2 consequitive AFK events same bucket",
+        #     "2 consecutive AFK events same bucket",
         #     [[event_1, event_2], []],
         #     {afk_bucket_id: None},
         #     build_timedelta(0),
-        #     inerval_for_2_consequtive_events,
+        #     interval_for_2_consecutive_events,
         #     [afk_bucket_id],
         #     []
         # ),
-        # (
-        #     "2 similar AFK events different buckets",
-        #     [[event_1], [event_1]],
-        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
-        #     build_timedelta(0),
-        #     build_intervals([(1, 1, [event_1, event_1])]),
-        #     [afk_bucket_id, afk_bucket_id + "2"],
-        #     []
-        # ),
-        # (
-        #     "2 consequitive AFK events different buckets",
-        #     [[event_1], [event_2]],
-        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
-        #     build_timedelta(0),
-        #     interval_for_2_consequtive_events,
-        #     [afk_bucket_id, afk_bucket_id + "2"],
-        #     []
-        # ),
-        # (
-        #     "2 consequitive AFK events different buckets opposite order",
-        #     [[event_2], [event_1]],
-        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
-        #     build_timedelta(0),
-        #     interval_for_2_consequtive_events,
-        #     [afk_bucket_id, afk_bucket_id + "2"],
-        #     []
-        # ),
-        # (
-        #     "AFK events 1 and 3 in first bucket, 2 in second",
-        #     [[event_1, event_3], [event_2]],
-        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
-        #     build_timedelta(0),
-        #     interval_for_3_consequtive_events,
-        #     [afk_bucket_id, afk_bucket_id + "2"],
-        #     []
-        # ),
-        # (
-        #     "AFK events 2 in first bucket, 1 and 3 in second",
-        #     [[event_2], [event_1, event_3]],
-        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
-        #     build_timedelta(0),
-        #     interval_for_3_consequtive_events,
-        #     [afk_bucket_id, afk_bucket_id + "2"],
-        #     []
-        # ),
-        # (
-        #     "AFK events 2 in first bucket, 1 and 4 in second",
-        #     [[event_2], [event_1, event_4]],
-        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
-        #     build_timedelta(0),
-        #     build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (4, 1, [event_4])]),
-        #     [afk_bucket_id, afk_bucket_id + "2"],
-        #     []
-        # ),
+        (
+            "2 similar AFK events different buckets",
+            [[event_1], [event_1_bucket2]],
+            {afk_bucket_id: None, afk_bucket_id2: None},
+            build_timedelta(0),
+            build_intervals([(1, 1, [event_1, event_1_bucket2])]),
+            [afk_bucket_id, afk_bucket_id2],
+            []
+        ),
+        (
+            "2 consecutive AFK events different buckets",
+            [[event_1], [event_2_bucket2]],
+            {afk_bucket_id: None, afk_bucket_id2: None},
+            build_timedelta(0),
+            build_intervals([(1, 1, [event_1]), (2, 1, [event_2_bucket2])]),
+            [afk_bucket_id, afk_bucket_id2],
+            []
+        ),
+        (
+            "2 consecutive AFK events different buckets opposite order",
+            [[event_2], [event_1_bucket2]],
+            {afk_bucket_id: None, afk_bucket_id2: None},
+            build_timedelta(0),
+            build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2])]),
+            [afk_bucket_id, afk_bucket_id2],
+            []
+        ),
+        (
+            "AFK events 1 and 3 in first bucket, 2 in second",
+            [[event_1, event_3], [event_2]],
+            {afk_bucket_id: None, afk_bucket_id2: None},
+            build_timedelta(0),
+            interval_for_3_consecutive_events,
+            [afk_bucket_id, afk_bucket_id2],
+            []
+        ),
+        (
+            "AFK events 2 in first bucket, 1 and 3 in second",
+            [[event_2], [event_1, event_3]],
+            {afk_bucket_id: None, afk_bucket_id2: None},
+            build_timedelta(0),
+            interval_for_3_consecutive_events,
+            [afk_bucket_id, afk_bucket_id2],
+            []
+        ),
+        (
+            "AFK events 2 in first bucket, 1 and 4 in second",
+            [[event_2], [event_1, event_4]],
+            {afk_bucket_id: None, afk_bucket_id2: None},
+            build_timedelta(0),
+            build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (4, 1, [event_4])]),
+            [afk_bucket_id, afk_bucket_id2],
+            []
+        ),
         (
             "AFK events overlaping in buckets",
             [[event_1l2], [event_1, event_4]],
-            {afk_bucket_id: None, afk_bucket_id + "2": None},
+            {afk_bucket_id: None, afk_bucket_id2: None},
             build_timedelta(0),
             build_intervals([(1, 1, [event_1l2_1, event_1]), (2, 1, [event_1l2_2]), (4, 1, [event_4])]),
-            [afk_bucket_id, afk_bucket_id + "2"],
+            [afk_bucket_id, afk_bucket_id2],
             []
         ),
     ])
     @patch.object(LOG, "info", MagicMock())
     @patch.object(merger, "check_and_print_intervals", MagicMock())
-    def test_report_from_buckets(self, test_name: str, get_events_lists_results: List[Event], buckets: Dict[str, object],
-                                 tolerance: datetime.timedelta,
-                                 expected_interval: Interval, expected_buckets_called: List[str], expected_logs: List[str]):
+    def test_report_from_buckets(self, test_name: str, get_events_lists_results: List[Event],
+            buckets: Dict[str, object], tolerance: datetime.timedelta,
+            expected_interval: Interval, expected_buckets_called: List[str], expected_logs: List[str]):
         # Arrange
         awc.get_events.reset()
         awc.get_events.side_effect = get_events_lists_results
@@ -176,110 +179,6 @@ class TestMerger(unittest.TestCase):
             self.assertIsNone(actual, err_msg)
         awc.get_events.assert_has_calls([call(x, start=start_time, end=end_time) for x in expected_buckets_called])
         LOG.info.assert_has_calls([call(*x) for x in expected_logs])
-
-    # @parameterized.expand([
-    #     (
-    #         "Simple the only interval",
-    #         build_intervals_linked_list([
-    #             (1, True, 1)
-    #         ]),
-    #         1
-    #     ),
-    #     (
-    #         "The same interval",
-    #         build_intervals_linked_list([
-    #             (1, False, 1),
-    #             (4, True, 1),
-    #             (6, False, 1),
-    #         ]),
-    #         4
-    #     ),
-    #     (
-    #         "Exact Interval right before",
-    #         build_intervals_linked_list([
-    #             (4, False, 1),
-    #             (6, True, 1),
-    #             (7, False, 1),
-    #         ]),
-    #         4
-    #     ),
-    #     (
-    #         "Exact Interval right after",
-    #         build_intervals_linked_list([
-    #             (1, False, 1),
-    #             (2, True, 1),
-    #             (4, False, 1),
-    #         ]),
-    #         4
-    #     ),
-    #     (
-    #         "Exact Interval far after",
-    #         build_intervals_linked_list([
-    #             (2, True, 1),
-    #             (3, False, 1),
-    #             (4, False, 1),
-    #             (5, False, 1),
-    #         ]),
-    #         4
-    #     ),
-    #     (
-    #         "Exact Interval far before",
-    #         build_intervals_linked_list([
-    #             (3, False, 1),
-    #             (4, False, 1),
-    #             (6, False, 1),
-    #             (7, True, 1),
-    #         ]),
-    #         4
-    #     ),
-    # ])
-    # def test_find_closest_by_end(self, test_name, interval: Interval, expected_start_seed):
-    #     target = _build_datetime(5)
-    #     actual: Interval = interval.find_closest(target, datetime.timedelta(0), True)
-    #     expected = _build_datetime(expected_start_seed)
-    #     self.assertEqual(actual.start_time, expected, f"'{test_name}' case failed.")
-
-    # @parameterized.expand([
-    #     (
-    #         "Event at middle",
-    #         build_intervals_linked_list([
-    #             (3, True, 5),
-    #         ]),
-    #         Event(1, _build_datetime(5), _build_timedelta(1)),
-    #         build_intervals_linked_list([
-    #             (3, True, 2),
-    #             (5, False, 1),
-    #             (6, False, 2),
-    #         ]),
-    #     ),
-    #     (
-    #         "Event start equal interval start",
-    #         build_intervals_linked_list([
-    #             (5, True, 5),
-    #         ]),
-    #         Event(1, _build_datetime(5), _build_timedelta(1)),
-    #         build_intervals_linked_list([
-    #             (5, True, 1),
-    #             (6, False, 4),
-    #         ]),
-    #     ),
-    #     (
-    #         "Event end equal interval end",
-    #         build_intervals_linked_list([
-    #             (4, True, 2),
-    #         ]),
-    #         Event(1, _build_datetime(5), _build_timedelta(1)),
-    #         build_intervals_linked_list([
-    #             (4, True, 1),
-    #             (5, False, 1),
-    #         ]),
-    #     ),
-    # ])
-    # def test_separate_new_at_middle(self, test_name: str, interval: Interval, event: Event,
-    #         expected_interval_offset_2_num_4: Interval):
-    #     actual: Interval = interval.separate_new_at_middle(event, datetime.timedelta(0))
-    #     self.assertListEqual(actual.get_range(-2, 4), expected_interval_offset_2_num_4.get_range(-2, 4),
-    #             f"'{test_name}' case failed.")
 
 
 if __name__ == '__main__':

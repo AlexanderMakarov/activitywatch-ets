@@ -201,15 +201,17 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     # "not-afk" periods and ocasionally add activities from other watchers like "meetings" or "out of comp activity".
     afk_buckets = [x for x in bucket_ids_to_handle if x.startswith("aw-watcher-afk")]
     # If we have AFK events from few computers then merge them together.
+    # Firstly make list of all events from all buckets. Convert them to inner light 'Event's with bucket_id attached.
     events: List = []
     for bucket_id in afk_buckets:
         bucket_events = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
         if bucket_events:
-            events.extend(bucket_events)
+            events.extend([Event(bucket_id, x.timestamp, x.duration, x.data) for x in bucket_events])
             buckets_cnt += 1
         bucket_ids_to_handle.remove(bucket_id)
+    # Secondly sort them by start time and iterate to make intervals.
+    # If events from few buckets (aka few computers) overlap then TODO
     events.sort(key=lambda e: e.timestamp)
-    events = [Event(bucket_id, x.timestamp, x.duration, x.data) for x in events]
     for event in events:
         d: datetime.timedelta = event.duration
         if d.total_seconds() <= 0:
