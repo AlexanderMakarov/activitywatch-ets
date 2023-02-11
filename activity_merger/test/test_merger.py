@@ -36,7 +36,13 @@ event_0_length = Event('', start_time, build_timedelta(0), None)
 event_1 = Event('event_1', start_time, build_timedelta(1, True), None)
 inerval_for_1_event = build_intervals([(1, 1, [event_1])])
 event_2 = Event('event_2', build_datetime(2, day=1), build_timedelta(1, True), None)
-inerval_for_2_consequtive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2])])
+interval_for_2_consequtive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2])])
+event_3 = Event('event_3', build_datetime(3, day=1), build_timedelta(1, True), None)
+interval_for_3_consequtive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (3, 1, [event_3])])
+event_4 = Event('event_4', build_datetime(4, day=1), build_timedelta(1, True), None)
+event_1l2 = Event('event_1l2', build_datetime(1, day=1), build_timedelta(2, True), None)
+event_1l2_1 = Event('event_1l2', build_datetime(1, day=1), build_timedelta(1, True), None)
+event_1l2_2 = Event('event_1l2', build_datetime(2, day=1), build_timedelta(1, True), None)
 
 class TestMerger(unittest.TestCase):
     @parameterized.expand([
@@ -97,12 +103,57 @@ class TestMerger(unittest.TestCase):
         #     [afk_bucket_id, afk_bucket_id + "2"],
         #     []
         # ),
+        # (
+        #     "2 consequitive AFK events different buckets",
+        #     [[event_1], [event_2]],
+        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
+        #     build_timedelta(0),
+        #     interval_for_2_consequtive_events,
+        #     [afk_bucket_id, afk_bucket_id + "2"],
+        #     []
+        # ),
+        # (
+        #     "2 consequitive AFK events different buckets opposite order",
+        #     [[event_2], [event_1]],
+        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
+        #     build_timedelta(0),
+        #     interval_for_2_consequtive_events,
+        #     [afk_bucket_id, afk_bucket_id + "2"],
+        #     []
+        # ),
+        # (
+        #     "AFK events 1 and 3 in first bucket, 2 in second",
+        #     [[event_1, event_3], [event_2]],
+        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
+        #     build_timedelta(0),
+        #     interval_for_3_consequtive_events,
+        #     [afk_bucket_id, afk_bucket_id + "2"],
+        #     []
+        # ),
+        # (
+        #     "AFK events 2 in first bucket, 1 and 3 in second",
+        #     [[event_2], [event_1, event_3]],
+        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
+        #     build_timedelta(0),
+        #     interval_for_3_consequtive_events,
+        #     [afk_bucket_id, afk_bucket_id + "2"],
+        #     []
+        # ),
+        # (
+        #     "AFK events 2 in first bucket, 1 and 4 in second",
+        #     [[event_2], [event_1, event_4]],
+        #     {afk_bucket_id: None, afk_bucket_id + "2": None},
+        #     build_timedelta(0),
+        #     build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (4, 1, [event_4])]),
+        #     [afk_bucket_id, afk_bucket_id + "2"],
+        #     []
+        # ),
         (
-            "2 consequitive AFK events different buckets",
-            [[event_1], [event_2]],
+            "AFK events overlaping in buckets",
+            [[event_1l2], [event_1, event_4]],
             {afk_bucket_id: None, afk_bucket_id + "2": None},
             build_timedelta(0),
-            build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
+            build_intervals([(1, 1, [event_1l2_1, event_1]), (2, 1, [event_1l2_2]), (4, 1, [event_4])]),
             [afk_bucket_id, afk_bucket_id + "2"],
             []
         ),
