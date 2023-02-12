@@ -21,8 +21,8 @@ class Interval:
         :param next: Next interval in linked list of time-ordered intervals.
         """
         if start_time >= end_time:
-            assert False, f"Wrong interval boundaries - start time {start_time} is after or equal end time"\
-                          f" {end_time}, prev={prev}, next={next}"
+            raise ValueError(f"Wrong interval boundaries - start time {start_time} is after or equal end time"\
+                             f" {end_time}, prev={prev}, next={next}")
         self.start_time = start_time
         self.end_time = end_time
         self.set_prev(prev)
@@ -211,7 +211,8 @@ class Interval:
         :param event: Event which causes new interval creation.
         :return: Just created interval.
         """
-        assert self.next is None, f"'{self}'.new_after is called while 'next' exists: f{self.next}."
+        if self.next is not None:
+            raise ValueError(f"'{self}'.new_after is called while 'next' exists: f{self.next}.")
         interval = Interval(self.end_time, event.timestamp + event.duration, self, None)
         interval.events.append(event)
         self.set_next(interval)
