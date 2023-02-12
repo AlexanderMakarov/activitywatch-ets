@@ -34,7 +34,8 @@ RULES = {
             Rule("Double Commander", 35),  # File manager.
             Rule("smplayer", 36),  # Video player.
             Rule("FeatherPad", 37),  # Text editor.
-            Rule("discord", 38),
+            Rule("gedit", 38),  # Text editor.
+            Rule("discord", 39),
         ]),
     ],
     # Passive watcher, always provides value, even if user AFK.
@@ -43,32 +44,32 @@ RULES = {
     "aw-watcher-web": [
         EventKeyHandler("url", [
             Rule("https://(vimbox|student)\.skyeng\.ru/.*", 501, skip=True), # English lesson, may look like AFK.
-            Rule("https://gitlab\.akvelon\.net:9443/.*", 41, to_string=lambda _: "Akvelon GitLab"),
-            Rule("https://akvelon\.atlassian\.net/wiki/.*", 42, to_string=lambda _: "Akvelon Wiki"),
-            Rule("https://gitlab\.intapp\.com/.*", 43, to_string=lambda _: "Intapp GitLab"),
-            Rule("https://wiki\.intapp\.com/wiki/.*", 44, to_string=lambda _: "Intapp Wiki"),
-            Rule("https://mail\.akvelon\.com/.*", 45, to_string=lambda _: "Akvelon Mail"),
-            Rule("https://intapp\.atlassian\.net/browse/.*", 46, to_string=lambda _: "Intapp Jira"),
-            Rule("https://intapp\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
+            Rule("https://(armenian-language\.org)/.*", 502, skip=True), # Armenian class lesson, may look like AFK.
+            Rule("https://gitlab\.company\.net:9443/.*", 41, to_string=lambda _: "company GitLab"),
+            Rule("https://company\.atlassian\.net/wiki/.*", 42, to_string=lambda _: "company Wiki"),
+            Rule("https://company\.atlassian\.net/browse/.*", 43, to_string=lambda _: "company Jira"),
+            Rule("https://wiki\.company\.com/wiki/.*", 44, to_string=lambda _: "company Wiki"),
+            Rule("https://mail\.company\.com/.*", 45, to_string=lambda _: "company Mail"),
+            Rule("https://company\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
             Rule("https://www\.google\.com/.*", 48, to_string=lambda _: "www.google.com"),
             Rule("about:blank", 520, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
-                Rule("intapp\.atlassian\.net/browse/.*", 521, to_string=lambda _: "Intapp Jira"),
+                Rule("company\.atlassian\.net/browse/.*", 521, to_string=lambda _: "company Jira"),
                 Rule("zoom\.us/j/.*", 521, to_string=lambda _: "zoom"),
-                Rule("logs\.(devops|us\.dev\.kube)\.intapp\.com.*", 401, to_string=lambda _: "Intapp Logs"),
-                Rule("metrics\.(devops|us\.dev\.kube)\.intapp\.com.*", 400, to_string=lambda _: "Intapp Metrics"),
-                Rule("gitlab\.akvelon\.net:9443/.*", 41, to_string=lambda _: "Akvelon GitLab"),
+                Rule("logs\.(devops|us\.dev\.kube)\.company\.com.*", 401, to_string=lambda _: "company Logs"),
+                Rule("metrics\.(devops|us\.dev\.kube)\.company\.com.*", 400, to_string=lambda _: "company Metrics"),
+                Rule("gitlab\.company\.net:9443/.*", 41, to_string=lambda _: "company GitLab"),
                 Rule("New Tab", 42, merge_next=True),
-                Rule("wiki\.intapp\.com/wiki/.*", 44, to_string=lambda _: "Intapp Wiki"),
-                Rule("intapp\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
+                Rule("wiki\.company\.com/wiki/.*", 44, to_string=lambda _: "company Wiki"),
+                Rule("company\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
                 # Last item as an "uncategorized site".
                 Rule("(.+?)/.*", 3, to_string=lambda x: f"Firefox '{x.group(1)}'")
             ])),
-            Rule("https://signin\.intapp\.com/", 49, to_string=lambda _: "Intapp SignIn"),
-            Rule("https://intapp\.zendesk\.com/.*", 100, to_string=lambda _: "Intapp Zendesk"),
+            Rule("https://signin\.company\.com/", 49, to_string=lambda _: "company SignIn"),
+            Rule("https://company\.zendesk\.com/.*", 100, to_string=lambda _: "company Zendesk"),
             Rule("https://docs\.google\.com/spreadsheets/.*", 101, to_string=lambda _: "Google Spreadsheets"),
             Rule("https://translate\.google.*", 102, to_string=lambda _: "Google Translate"),
-            Rule("https://logs\.(devops|us\.dev\.kube)\.intapp\.com.*", 530, to_string=lambda _: "Intapp Logs"),
-            Rule("https://metrics\.(devops|us\.dev\.kube)\.intapp\.com.*", 531, to_string=lambda _: "Intapp Metrics"),
+            Rule("https://logs\.(devops|us\.dev\.kube)\.company\.com.*", 530, to_string=lambda _: "company Logs"),
+            Rule("https://metrics\.(devops|us\.dev\.kube)\.company\.com.*", 531, to_string=lambda _: "company Metrics"),
             Rule("file:///.*", 532, to_string=lambda _: "Local file in browser"),
             # Last item as an "uncategorized site".
             Rule("https?://(.+?)/.*", 3, to_string=lambda x: f"Firefox '{x.group(1)}'")
