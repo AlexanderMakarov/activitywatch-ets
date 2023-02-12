@@ -7,7 +7,8 @@ from ..helpers.helpers import event_to_str
 from ..config.config import LOG
 
 
-def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timedelta) -> Interval:
+def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timedelta, is_make_intervals: bool)\
+        -> Interval:
     """
     Recursively applies event down on `Interval`'s linked list starting after given interval.
     In other words it appends specified event to all `Intervals` later when event covers them and slaces last
@@ -15,20 +16,27 @@ def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timed
     :param event: Event to apply.
     :param interval: Interval to start apply after.
     :param tolerance: Tolerance to match events boundaries to intervals.
+    :param is_make_intervals: Flag to make new intervals if there are no existing covering event's time span.
     :return: Interval where given event ended.
     """
-    # Recursive implementation makes stack overflow.
+    # Note that recursive implementation causes stack overflow.
     while interval.next:
         interval = interval.next
-        ends_diff = interval.compare_with_time(event.timestamp + event.duration, tolerance, False)
-        if ends_diff == 0:
+        ends_diff = interval.compare_with_time(event.timestamp + event.duration, tolerance, is_start=False)
+        if ends_diff == 0:  # Event end matches interval end.
             interval.events.append(event)
             return interval
-        elif ends_diff < 0:
+        elif ends_diff < 0:  # Event end within interval.
             interval = interval.separate_new_at_start(event, tolerance)
             return interval
-        else:
+        else:  # Event end after the interval.
             interval.events.append(event)
+    if is_make_intervals and interval.next is None:
+        ends_diff = interval.compare_with_time(event.timestamp + event.duration, tolerance, is_start=False)
+        if ends_diff > 0:
+            tmp = Interval(interval.end_time, event.timestamp + event.duration, interval, None)
+            tmp.events.append(event)
+            interval = tmp
     return interval
 
 
@@ -37,8 +45,11 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
     """
     Applies events to the specified linked list of intervals with appending events to `Interval`-s and splitting
     them on parts if need.
-    Doesn't expands boundaries of `Interval`-s list because assumes that list is built from "afk" and "watchdog"
-    watchers events, i.e. events out of bounds of existing intervals should be ignored.
+    May work in mode when new `Interval`-s are created and when all events should fit into existing intervals
+    time bounds. In both cases splits existing `Interval`-s on borders of each event if need.
+    Also may be instructed to fail when new event overlaps existing interval - it is useful for high priority
+    events, like for Stopwatch - they shouldn't intersect by nature.
+    TODO doesn't support case when new interval covers not only free time interval but some interval before it.
     :param events: List of events to apply.
     :param interval: Node of linked list to apply events onto. Out parameter.
     :param tolerance: Tolerance to match events boundaries to intervals.
@@ -68,20 +79,20 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
         #   [-----]      <- existing interval boundaries (like 'afk')
         # ----------------------------------------------------------- events
         # []|     |       <- 1. skip as 'out of boundaries' or make an interval
-        # [---]   |       <- 2. split interval with new on the start
-        # [-------]       <- 3. just add event to interval
-        # [---------]     <- 4. span event on few intervals or add ones
+        # [---]   |       <- 2. split interval with new on the start and optionaly add new interval at start
+        # [-------]       <- 3. just add event to interval and optionaly add new interval before
+        # [---------]     <- 4. span event on few intervals or add ones at the end
         #   [--]  |        <- 5. split interval with new on the start
         #   [-----]        <- 6. just add event to interval
-        #   [-------]      <- 7. span event on few intervals or add ones
+        #   [-------]      <- 7. span event on few intervals and optionaly add new one
         #   | [-] |         <- 8. split interval on 3
         #   | [---]         <- 9. split interval with new on the end
         #   | [-----]       <- 10. split current interval with new on the end and span event on few intervals
-        #   |     [--]       <- 11. skip as 'out of boundaries' or add new interval
-        #   |     |  [---]   <- 12. skip as 'out of boundaries' or add new interval
+        #   |     [--]      <- 11. skip as 'out of boundaries' or add new interval
+        #   |     |  [---]  <- 12. skip as 'out of boundaries' or add new interval
         event_end = event.timestamp + event.duration
         # Make new interval if it is the first event.
-        if is_make_intervals and interval == None:
+        if is_make_intervals and interval is None:
             interval = Interval(event.timestamp, event.timestamp + event.duration)
             interval.events.append(event)
             metrics['cnt_new_interval'] += 1
@@ -120,7 +131,10 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
             continue
         starts_diff = interval.compare_with_time(event.timestamp, tolerance, True)
         ends_diff = interval.compare_with_time(event_end, tolerance, False)
-        if starts_diff == 0:  # TODO handle last 2 flags
+        if starts_diff == 0:
+            if is_fail_on_overlap:
+                raise ValueError(f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
+                                 " It is not supported for the current bucket type.")
             if ends_diff == 0:
                 # 6) Event matches interval.
                 interval.events.append(event)
@@ -131,9 +145,12 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
                 metrics['cnt_split_one_interval'] += 1
             else:
                 # 7) Event start matches interval and event ends after it.
-                interval = _span_event_down(event, interval, tolerance)
+                interval = _span_event_down(event, interval, tolerance, is_make_intervals)
                 metrics['cnt_split_few_intervals'] += 1
         elif starts_diff > 0:
+            if is_fail_on_overlap:
+                raise ValueError(f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
+                                 " It is not supported for the current bucket type.")
             if ends_diff == 0:
                 # 9) Event starts inside interval and ends matches.
                 interval = interval.separate_new_at_end(event, tolerance)
@@ -145,9 +162,12 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
             else:
                 # 10) Event starts inside interval and ends after it.
                 interval = interval.separate_new_at_end(event, tolerance)
-                interval = _span_event_down(event, interval, tolerance)
+                interval = _span_event_down(event, interval, tolerance, is_make_intervals)
                 metrics['cnt_split_few_intervals'] += 1
         else:
+            if is_fail_on_overlap:
+                raise ValueError(f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
+                                 " It is not supported for the current bucket type.")
             if ends_diff == 0:
                 # 3) Event started before "AFK" and ends exactly on first interval end.
                 interval.events.append(event)
@@ -159,7 +179,7 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
             else:
                 # 4) Event started before "AFK" and ends after first interval.
                 interval.events.append(event)
-                interval = _span_event_down(event, interval, tolerance)
+                interval = _span_event_down(event, interval, tolerance, is_make_intervals)
                 metrics['cnt_split_few_intervals'] += 1
         metrics['cnt_handled_events'] += 1
     return (interval, metrics)

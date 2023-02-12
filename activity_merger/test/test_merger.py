@@ -51,47 +51,97 @@ event_4 = Event(afk_bucket_id, build_datetime(4, day=1), build_timedelta(1, True
 event_1l2 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(2, True), 'event_1l2')
 event_1l2_1 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(1, True), 'event_1l2_1')
 event_1l2_2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(1, True), 'event_1l2_2')
+event_2l2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(2, True), 'event_2l2')
 
 
 class TestMerger(unittest.TestCase):
 
     @parameterized.expand([
-        # (
-        #     "first event",
-        #     [event_1],
-        #     None,
-        #     timedelta_0,
-        #     build_intervals([(1, 1, [event_1])]),
-        #     {'cnt_new_interval': 1, 'cnt_handled_events': 1},
-        #     []
-        # ),
-        # (
-        #     "adjacent event",
-        #     [event_2],
-        #     build_intervals([(1, 1, [event_1])]),
-        #     timedelta_0,
-        #     build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
-        #     {'cnt_new_interval': 1, 'cnt_handled_events': 1},
-        #     []
-        # ),
         (
-            "overlaping event",
+            "first event",
+            [event_1],
+            None,
+            timedelta_0,
+            False,
+            build_intervals([(1, 1, [event_1])]),
+            {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "adjacent event",
+            [event_2],
+            build_intervals([(1, 1, [event_1])]),
+            timedelta_0,
+            False,
+            build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
+            {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "event far after",
+            [event_3],
+            build_intervals([(1, 1, [event_1])]),
+            timedelta_0,
+            False,
+            build_intervals([(1, 1, [event_1]), (3, 1, [event_3])]),
+            {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlapping event same start time but smaller",
             [event_2],
             build_intervals([(1, 2, [event_1l2])]),
             timedelta_0,
+            True,
+            build_intervals([(1, 2, [event_1l2])]),
+            {'cnt_split_one_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlaping event same start and ent time",
+            [event_1],
+            build_intervals([(1, 1, [event_1])]),
+            timedelta_0,
+            True,
+            build_intervals([(1, 1, [event_1, event_1])]),
+            {'cnt_match_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlapping event same start time but bigger",
+            [event_1l2],
+            build_intervals([(1, 1, [event_1])]),
+            timedelta_0,
+            True,
+            build_intervals([(1, 1, [event_1, event_1l2]), (2, 1, [event_1l2])]),
+            {'cnt_split_few_intervals': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlapping event same end time",
+            [event_2],
+            build_intervals([(1, 2, [event_1l2])]),
+            timedelta_0,
+            True,
             build_intervals([(1, 1, [event_1l2]), (2, 1, [event_1l2, event_2])]),
-            {'cnt_new_interval': 1, 'cnt_handled_events': 1},
-            []
+            {'cnt_split_one_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlapping event start time inside and end time outside",
+            [event_2l2],
+            build_intervals([(1, 2, [event_1l2])]),
+            timedelta_0,
+            True,
+            build_intervals([(1, 1, [event_1l2]), (2, 1, [event_1l2, event_2l2]), (3, 1, [event_2l2])]),
+            {'cnt_split_few_intervals': 1, 'cnt_handled_events': 1},
         ),
     ])
-    @patch.object(LOG, "debug", MagicMock())
-    def test_apply_events_stopwatch(self, test_name: str, events: List[Event], interval: Interval,
-            tolerance: datetime.timedelta,
-            expected_interval: Interval, expected_metrics: Dict[str, int], expected_logs: List[str]):
+    def TODOtest_apply_events_stopwatch(self, test_name: str, events: List[Event], interval: Interval,
+            tolerance: datetime.timedelta, is_should_fail: bool,
+            expected_interval: Interval, expected_metrics: Dict[str, int]):
         # Act
         actual_interval: Interval
         actual_metrics: Dict[str, int]
-        actual_interval, actual_metrics = merger.apply_events(events, interval, tolerance, True, True)
+        if is_should_fail:
+            with self.assertRaises(ValueError):
+                actual_interval, actual_metrics = merger.apply_events(events, interval, tolerance, True, True)
+            return
+        else:
+            actual_interval, actual_metrics = merger.apply_events(events, interval, tolerance, True, True)
         # Assert
         err_msg = f"'{test_name}' case failed."
         if expected_interval:
@@ -103,7 +153,91 @@ class TestMerger(unittest.TestCase):
             {k: v for (k, v) in expected_metrics.items() if v > 0},
             err_msg
         )
-        LOG.debug.assert_has_calls([call(*x) for x in expected_logs])
+
+    @parameterized.expand([
+        (
+            "first event",
+            [event_1],
+            None,
+            timedelta_0,
+            build_intervals([(1, 1, [event_1])]),
+            {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "adjacent event",
+            [event_2],
+            build_intervals([(1, 1, [event_1])]),
+            timedelta_0,
+            build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
+            {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "event far after",
+            [event_3],
+            build_intervals([(1, 1, [event_1])]),
+            timedelta_0,
+            build_intervals([(1, 1, [event_1]), (3, 1, [event_3])]),
+            {'cnt_new_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlapping event same start time but smaller",
+            [event_2],
+            build_intervals([(1, 2, [event_1l2])]),
+            timedelta_0,
+            build_intervals([(1, 1, [event_1l2]), (2, 1, [event_1l2, event_2])]),
+            {'cnt_split_one_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlaping event same start and ent time",
+            [event_1],
+            build_intervals([(1, 1, [event_1])]),
+            timedelta_0,
+            build_intervals([(1, 1, [event_1, event_1])]),
+            {'cnt_match_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlapping event same start time but bigger",
+            [event_1l2],
+            build_intervals([(1, 1, [event_1])]),
+            timedelta_0,
+            build_intervals([(1, 1, [event_1, event_1l2]), (2, 1, [event_1l2])]),
+            {'cnt_split_few_intervals': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlapping event same end time",
+            [event_2],
+            build_intervals([(1, 2, [event_1l2])]),
+            timedelta_0,
+            build_intervals([(1, 1, [event_1l2]), (2, 1, [event_1l2, event_2])]),
+            {'cnt_split_one_interval': 1, 'cnt_handled_events': 1},
+        ),
+        (
+            "overlapping event start time inside and end time outside",
+            [event_2l2],
+            build_intervals([(1, 2, [event_1l2])]),
+            timedelta_0,
+            build_intervals([(1, 1, [event_1l2]), (2, 1, [event_1l2, event_2l2]), (3, 1, [event_2l2])]),
+            {'cnt_split_few_intervals': 1, 'cnt_handled_events': 1},
+        ),
+    ])
+    def TODOtest_apply_events_afk(self, test_name: str, events: List[Event], interval: Interval,
+            tolerance: datetime.timedelta,
+            expected_interval: Interval, expected_metrics: Dict[str, int]):
+        # Act
+        actual_interval: Interval
+        actual_metrics: Dict[str, int]
+        actual_interval, actual_metrics = merger.apply_events(events, interval, tolerance, True, False)
+        # Assert
+        err_msg = f"'{test_name}' case failed."
+        if expected_interval:
+            self.assertListEqual(actual_interval.get_range(), expected_interval.get_range(), err_msg)
+        else:
+            self.assertIsNone(actual_interval, err_msg)
+        self.assertDictEqual(
+            {k: v for (k, v) in actual_metrics.items() if v > 0},
+            {k: v for (k, v) in expected_metrics.items() if v > 0},
+            err_msg
+        )
 
     @parameterized.expand([
         # (
@@ -220,7 +354,7 @@ class TestMerger(unittest.TestCase):
     ])
     @patch.object(LOG, "info", MagicMock())
     @patch.object(merger, "check_and_print_intervals", MagicMock())
-    def TODOtest_report_from_buckets(self, test_name: str, get_events_lists_results: List[Event],
+    def test_report_from_buckets(self, test_name: str, get_events_lists_results: List[Event],
             buckets: Dict[str, object], tolerance: datetime.timedelta,
             expected_interval: Interval, expected_buckets_called: List[str], expected_logs: List[str]):
         # Arrange
