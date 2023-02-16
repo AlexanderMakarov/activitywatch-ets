@@ -31,6 +31,7 @@ def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timed
             return interval
         else:  # Event end after the interval.
             interval.events.append(event)
+    # If we need to make new intervals and event doesn't end within last interval then append interval in the end.
     if is_make_intervals and interval.next is None:
         ends_diff = interval.compare_with_time(event.timestamp + event.duration, tolerance, is_start=False)
         if ends_diff > 0:
@@ -145,6 +146,7 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
                 metrics['cnt_split_one_interval'] += 1
             else:
                 # 7) Event start matches interval and event ends after it.
+                interval.events.append(event)
                 interval = _span_event_down(event, interval, tolerance, is_make_intervals)
                 metrics['cnt_split_few_intervals'] += 1
         elif starts_diff > 0:
@@ -251,6 +253,7 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     # "aw-stopwatch" - active watcher, it is managed by user directly.
     # Make sense measuring duration per unique label from "running=true" to "running=false".
     # data={label: str, running: bool}
+    # Firstly make list of all events from all buckets. Convert to inner lightweight 'Event's with bucket_id attached.
     stopwatch_buckets = [x for x in bucket_ids_to_handle if x.startswith("aw-stopwatch")]
     if stopwatch_buckets:
         for bucket_id in stopwatch_buckets:
@@ -259,27 +262,12 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
                 events.extend([Event(bucket_id, x.timestamp, x.duration, x.data) for x in bucket_events])
                 buckets_cnt += 1
             bucket_ids_to_handle.remove(bucket_id)
-    # If there are some stopwatch events then make itervals from them. Sort events by start time for simplicity.
-    events.sort(key=lambda e: e.timestamp)
+    # Secondly, If there are some stopwatch events then make itervals from them.
+    # Sort events by start time to make one consecutive linked list with minimal number of "patches".
     if events:
+        events.sort(key=lambda e: e.timestamp)
         cur_interval, metrics = apply_events(events, None, tolerance, True, True)
         print_metrics(metrics, cur_interval.get_count() if cur_interval else 0)
-        # for event in events:
-        #     d: datetime.timedelta = event.duration
-        #     if d.total_seconds() <= 0:
-        #         LOG.info("JFYI: Skipped 0-duration AFK event at %s in '%s' bucket.", event_to_str(event), event.bucket_id)
-        #         continue
-        #     if not cur_interval:
-        #         cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
-        #         cur_interval.events.append(event)
-        #     elif cur_interval.compare_with_time(event.timestamp, tolerance, False) < 0:
-        #         raise ValueError(f"Stopwatch events collision: {event_to_str(event)} intersects with"
-        #                          f" {interval.to_str(debug=True)}. Can't proceed.")
-        #     else:
-        #         interval = Interval(event.timestamp, event.timestamp + event.duration, cur_interval, None)
-        #         interval.events.append(event)
-        #         cur_interval.set_next(interval)
-        #         cur_interval = interval
     if cur_interval:
         check_and_print_intervals(cur_interval, buckets_cnt, "Stopwatch")
 
@@ -290,7 +278,7 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     # "not-afk" periods and ocasionally add activities from other watchers like "meetings" or "out of comp activity".
     afk_buckets = [x for x in bucket_ids_to_handle if x.startswith("aw-watcher-afk")]
     # If we have AFK events from few computers then merge them together.
-    # Firstly make list of all events from all buckets. Convert them to inner light 'Event's with bucket_id attached.
+    # Firstly make list of all events from all buckets. Convert to inner lightweight 'Event's with bucket_id attached.
     events = []
     for bucket_id in afk_buckets:
         bucket_events = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
@@ -298,34 +286,11 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
             events.extend([Event(bucket_id, x.timestamp, x.duration, x.data) for x in bucket_events])
             buckets_cnt += 1
         bucket_ids_to_handle.remove(bucket_id)
-    # Secondly sort them by start time and iterate to make intervals.
-    # If events from few buckets (aka few computers) overlap then split existing intervals.
-    # TODO Note that due to "sorted" nature they would be consecutive and following cases are possible:
-    # 1. |[--]  |      split interval with new at the start
-    # 2. | [--] |      split interval at the middle on 3
-    # 3. |  [--]|      split interval with new at the end
-    # 4. |    [-|-]    split interval with new at the end and add new interval after
-    # 5. |      |[--]  add new interval after
-    # 6. |      | [--] add new interval after
+    # Secondly sort events by start time and make one consecutive linked list with minimal number of "patches".
     events.sort(key=lambda e: e.timestamp)
     for event in events:
         cur_interval, metrics = apply_events(events, None, tolerance, True)
         print_metrics(metrics, cur_interval.get_count() if cur_interval else 0)
-        # d: datetime.timedelta = event.duration
-        # if d.total_seconds() <= 0:
-        #     LOG.info("JFYI: Skipped 0-duration AFK event at %s in '%s' bucket.", event_to_str(event), event.bucket_id)
-        #     continue
-        # if not cur_interval:
-        #     cur_interval = Interval(event.timestamp, event.timestamp + event.duration)
-        #     cur_interval.events.append(event)
-        # else:
-        #     interval_to_put_after = cur_interval.find_closest(event.timestamp, tolerance, by_end_time=True)
-        #     # Doesn't use `Interval.new_after` because it doesn't use event start time i.e. doesn't
-        #     # allow gaps in intervals linked list.
-        #     interval = Interval(event.timestamp, event.timestamp + event.duration, cur_interval, None)
-        #     interval.events.append(event)
-        #     cur_interval.set_next(interval)
-        #     cur_interval = interval
     if buckets_cnt <= 0:
         LOG.info("No buckets except AFK and/or Stopwatch found. Stopping here - no more events expected.")
         return None

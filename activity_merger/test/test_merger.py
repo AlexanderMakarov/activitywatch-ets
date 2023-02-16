@@ -37,24 +37,27 @@ start_time = build_datetime(1, day=1)
 end_time = build_datetime(2, day=1)
 afk_bucket_id = "aw-watcher-afk-foo"
 afk_bucket_id2 = "aw-watcher-afk-foo2"
+some_bucket_id = "some_bucket_id"
 awc = MagicMock()
 timedelta_0 = build_timedelta(0)
+timedelta_1 = build_timedelta(1, True)
 event_0_length = Event(afk_bucket_id, start_time, timedelta_0, 'event_0_length')
-event_1 = Event(afk_bucket_id, start_time, build_timedelta(1, True), 'event_1')
-event_1_bucket2 = Event(afk_bucket_id2, start_time, build_timedelta(1, True), 'event_1_bucket2')
+event_1 = Event(afk_bucket_id, start_time, timedelta_1, 'event_1')
+event_1_bucket2 = Event(afk_bucket_id2, start_time, timedelta_1, 'event_1_bucket2')
 inerval_for_1_event = build_intervals([(1, 1, [event_1])])
-event_2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(1, True), 'event_2')
-event_2_bucket2 = Event(afk_bucket_id2, build_datetime(2, day=1), build_timedelta(1, True), 'event_2_bucket2')
-event_3 = Event(afk_bucket_id, build_datetime(3, day=1), build_timedelta(1, True), 'event_3')
-event_3_bucket2 = Event(afk_bucket_id2, build_datetime(3, day=1), build_timedelta(1, True), 'event_3_bucket2')
+event_2 = Event(afk_bucket_id, build_datetime(2, day=1), timedelta_1, 'event_2')
+event_2_bucket2 = Event(afk_bucket_id2, build_datetime(2, day=1), timedelta_1, 'event_2_bucket2')
+event_3 = Event(afk_bucket_id, build_datetime(3, day=1), timedelta_1, 'event_3')
+event_3_bucket2 = Event(afk_bucket_id2, build_datetime(3, day=1), timedelta_1, 'event_3_bucket2')
 interval_for_3_consecutive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (3, 1, [event_3])])
-event_4 = Event(afk_bucket_id, build_datetime(4, day=1), build_timedelta(1, True), 'event_4')
-event_4_bucket2 = Event(afk_bucket_id2, build_datetime(4, day=1), build_timedelta(1, True), 'event_4_bucket2')
+event_4 = Event(afk_bucket_id, build_datetime(4, day=1), timedelta_1, 'event_4')
+event_4_bucket2 = Event(afk_bucket_id2, build_datetime(4, day=1), timedelta_1, 'event_4_bucket2')
 event_1l2 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(2, True), 'event_1l2')
-event_1l2_1 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(1, True), 'event_1l2_1')
-event_1l2_2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(1, True), 'event_1l2_2')
 event_1l4 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(4, True), 'event_1l4')
 event_2l2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(2, True), 'event_2l2')
+
+sevent_1 = Event(some_bucket_id, start_time, timedelta_1, 'sevent_1')
+sevent_2 = Event(some_bucket_id, build_datetime(2, day=1), timedelta_1, 'sevent_2')
 
 
 class TestMerger(unittest.TestCase):
@@ -148,7 +151,7 @@ class TestMerger(unittest.TestCase):
         # Assert
         err_msg = f"'{test_name}' case failed."
         if expected_interval:
-            self.assertListEqual(actual_interval.get_range(0), expected_interval.get_range(0), err_msg)
+            self.assertListEqual(actual_interval.get_range(-10, 10), expected_interval.get_range(-10, 10), err_msg)
         else:
             self.assertIsNone(actual_interval, err_msg)
         self.assertDictEqual(
@@ -233,7 +236,7 @@ class TestMerger(unittest.TestCase):
         # Assert
         err_msg = f"'{test_name}' case failed."
         if expected_interval:
-            self.assertListEqual(actual_interval.get_range(0), expected_interval.get_range(0), err_msg)
+            self.assertListEqual(actual_interval.get_range(-10, 10), expected_interval.get_range(-10, 10), err_msg)
         else:
             self.assertIsNone(actual_interval, err_msg)
         self.assertDictEqual(
@@ -362,20 +365,60 @@ class TestMerger(unittest.TestCase):
         #     {afk_bucket_id: None, afk_bucket_id2: None},
         #     timedelta_0,
         #     None,
-        #     build_intervals([(1, 1, [event_1l2_1, event_1_bucket2]), (2, 1, [event_1l2_2]),
+        #     build_intervals([(1, 1, [event_1l2, event_1_bucket2]), (2, 1, [event_1l2]),
         #                      (4, 1, [event_4_bucket2])]),
         #     [afk_bucket_id, afk_bucket_id2],
         #     []
         # ),
+        # (
+        #     "AFK events overlaping in buckets, 1l4 overlaps 1 and 3",
+        #     [[event_1l4], [event_1_bucket2, event_3_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1l4, event_1_bucket2]), (2, 1, [event_1l4]),
+        #                      (3, 1, [event_1l4, event_3_bucket2]), (4, 1, [event_1l4])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     []
+        # ),
+        # (
+        #     "Some empty bucket",
+        #     [[event_1], []],
+        #     {afk_bucket_id: None, some_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1])]),
+        #     [afk_bucket_id, some_bucket_id],
+        #     []
+        # ),
+        # (
+        #     "Some event matches AFK",
+        #     [[event_1], [sevent_1]],
+        #     {afk_bucket_id: None, some_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1, sevent_1])]),
+        #     [afk_bucket_id, some_bucket_id],
+        #     []
+        # ),
         (
-            "AFK events overlaping in buckets, 1l4 overlaps 1 and 3",
-            [[event_1l4], [event_1_bucket2, event_3_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
+            "Some event before AFK",
+            [[event_2], [sevent_1]],
+            {afk_bucket_id: None, some_bucket_id: None},
             timedelta_0,
             None,
-            build_intervals([(1, 1, [event_1l4, event_1_bucket2]), (2, 1, [event_1l4]),
-                             (3, 1, [event_1l4, event_3_bucket2]), (4, 1, [event_1l4])]),
-            [afk_bucket_id, afk_bucket_id2],
+            build_intervals([(2, 1, [event_2])]),
+            [afk_bucket_id, some_bucket_id],
+            []
+        ),
+        (
+            "Some event after AFK",
+            [[event_1], [sevent_2]],
+            {afk_bucket_id: None, some_bucket_id: None},
+            timedelta_0,
+            None,
+            build_intervals([(1, 1, [event_1])]),
+            [afk_bucket_id, some_bucket_id],
             []
         ),
     ])
@@ -399,7 +442,7 @@ class TestMerger(unittest.TestCase):
         # Assert
         err_msg = f"'{test_name}' case failed."
         if expected_interval:
-            self.assertListEqual(actual.get_range(0), expected_interval.get_range(0), err_msg)
+            self.assertListEqual(actual.get_range(-10, num=10), expected_interval.get_range(-10, num=10), err_msg)
         else:
             self.assertIsNone(actual, err_msg)
         awc.get_events.assert_has_calls([call(x, start=start_time, end=end_time) for x in expected_buckets_called])
