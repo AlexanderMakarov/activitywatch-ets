@@ -105,7 +105,7 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
         interval_end_minus_event_start = interval.compare_with_time(event.timestamp, tolerance, False)
         interval_start_minus_event_end = interval.compare_with_time(event_end, tolerance, True)
         # 1) If event completely before closest interval then skip or add new interval.
-        if interval_start_minus_event_end < 0:
+        if interval_start_minus_event_end <= 0:
             if is_make_intervals:
                 tmp = Interval(event.timestamp, event.timestamp + event.duration, None, interval)
                 tmp.events.append(event)
