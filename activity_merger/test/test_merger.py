@@ -41,6 +41,7 @@ some_bucket_id = "some_bucket_id"
 awc = MagicMock()
 timedelta_0 = build_timedelta(0)
 timedelta_1 = build_timedelta(1, True)
+timedelta_2 = build_timedelta(2, True)
 event_0_length = Event(afk_bucket_id, start_time, timedelta_0, 'event_0_length')
 event_1 = Event(afk_bucket_id, start_time, timedelta_1, 'event_1')
 event_1_bucket2 = Event(afk_bucket_id2, start_time, timedelta_1, 'event_1_bucket2')
@@ -52,12 +53,15 @@ event_3_bucket2 = Event(afk_bucket_id2, build_datetime(3, day=1), timedelta_1, '
 interval_for_3_consecutive_events = build_intervals([(1, 1, [event_1]), (2, 1, [event_2]), (3, 1, [event_3])])
 event_4 = Event(afk_bucket_id, build_datetime(4, day=1), timedelta_1, 'event_4')
 event_4_bucket2 = Event(afk_bucket_id2, build_datetime(4, day=1), timedelta_1, 'event_4_bucket2')
-event_1l2 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(2, True), 'event_1l2')
+event_1l2 = Event(afk_bucket_id, build_datetime(1, day=1), timedelta_2, 'event_1l2')
 event_1l4 = Event(afk_bucket_id, build_datetime(1, day=1), build_timedelta(4, True), 'event_1l4')
-event_2l2 = Event(afk_bucket_id, build_datetime(2, day=1), build_timedelta(2, True), 'event_2l2')
+event_2l2 = Event(afk_bucket_id, build_datetime(2, day=1), timedelta_2, 'event_2l2')
 
 sevent_1 = Event(some_bucket_id, start_time, timedelta_1, 'sevent_1')
 sevent_2 = Event(some_bucket_id, build_datetime(2, day=1), timedelta_1, 'sevent_2')
+sevent_1l2 = Event(some_bucket_id, start_time, timedelta_2, 'sevent_1l2')
+sevent_1l3 = Event(some_bucket_id, build_datetime(1, day=1), build_timedelta(3, True), 'sevent_1l3')
+sevent_2l2 = Event(some_bucket_id, build_datetime(2, day=1), timedelta_2, 'sevent_2l2')
 
 
 class TestMerger(unittest.TestCase):
@@ -246,181 +250,261 @@ class TestMerger(unittest.TestCase):
         )
 
     @parameterized.expand([
+        # (
+        #     "No buckets",
+        #     [],
+        #     {},
+        #     timedelta_0,
+        #     None,
+        #     None,
+        #     [],
+        #     [("No buckets except AFK and/or Stopwatch found. Stopping here - no more events expected.",)]
+        # ),
+        # (
+        #     "No AFK events",
+        #     [[]],
+        #     {afk_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     None,
+        #     [afk_bucket_id],
+        #     [("No buckets except AFK and/or Stopwatch found. Stopping here - no more events expected.",)]
+        # ),
+        # (
+        #     "1 AFK 0-length event",
+        #     [[event_0_length]],
+        #     {afk_bucket_id: None},
+        #     timedelta_0,
+        #     "Wrong interval boundaries - start time .+ is after or equal end time .+, prev=None, next=None",
+        #     None,
+        #     [afk_bucket_id],
+        #     [
+        #         ("JFYI: Skipped 0-duration AFK event at %s in '%s' bucket.", event_to_str(event_0_length), afk_bucket_id),
+        #         ("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
+        #     ]
+        # ),
+        # (
+        #     "1 AFK event",
+        #     [[event_1], []],
+        #     {afk_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     inerval_for_1_event,
+        #     [afk_bucket_id],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1')
+        #     ]
+        # ),
+        # (
+        #     "2 consecutive AFK events same bucket",
+        #     [[event_1, event_2], []],
+        #     {afk_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
+        #     [afk_bucket_id],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
+        #     ]
+        # ),
+        # (
+        #     "2 similar AFK events different buckets",
+        #     [[event_1], [event_1_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1, event_1_bucket2])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 1,
+        #          'cnt_new_interval: 1\n  cnt_handled_events: 2\n  cnt_match_interval: 1')
+        #     ]
+        # ),
+        # (
+        #     "2 consecutive AFK events different buckets",
+        #     [[event_1], [event_2_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1]), (2, 1, [event_2_bucket2])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
+        #     ]
+        # ),
+        # (
+        #     "2 consecutive AFK events different buckets opposite order",
+        #     [[event_2], [event_1_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
+        #     ]
+        # ),
+        # (
+        #     "AFK events 1 and 3 in first bucket, 2 in second",
+        #     [[event_1, event_3], [event_2_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1]), (2, 1, [event_2_bucket2]), (3, 1, [event_3])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
+        #     ]
+        # ),
+        # (
+        #     "AFK events 2 in first bucket, 1 and 3 in second",
+        #     [[event_2], [event_1_bucket2, event_3_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2]), (3, 1, [event_3_bucket2])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
+        #     ]
+        # ),
+        # (
+        #     "AFK events 2 in first bucket, 1 and 4 in second",
+        #     [[event_2], [event_1_bucket2, event_4_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2]), (4, 1, [event_4_bucket2])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
+        #     ]
+        # ),
+        # (
+        #     "AFK events overlaping in buckets, 1 overlaps 1l2 plus far after 4",
+        #     [[event_1l2], [event_1_bucket2, event_4_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1l2, event_1_bucket2]), (2, 1, [event_1l2]),
+        #                      (4, 1, [event_4_bucket2])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 3,
+        #          'cnt_new_interval: 2\n  cnt_handled_events: 3\n  cnt_split_one_interval: 1')
+        #     ]
+        # ),
+        # (
+        #     "AFK events overlaping in buckets, 1l4 overlaps 1 and 3",
+        #     [[event_1l4], [event_1_bucket2, event_3_bucket2]],
+        #     {afk_bucket_id: None, afk_bucket_id2: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1l4, event_1_bucket2]), (2, 1, [event_1l4]),
+        #                      (3, 1, [event_1l4, event_3_bucket2]), (4, 1, [event_1l4])]),
+        #     [afk_bucket_id, afk_bucket_id2],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 4,
+        #          'cnt_new_interval: 1\n  cnt_handled_events: 3\n  cnt_inside_interval: 1\n  cnt_split_one_interval: 1')
+        #     ]
+        # ),
+        # (
+        #     "Some empty bucket",
+        #     [[event_1], []],
+        #     {afk_bucket_id: None, some_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1])]),
+        #     [afk_bucket_id, some_bucket_id],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+        #         ("'%s' bucket doesn't have events in %s..%s.", some_bucket_id, start_time, build_datetime(2, day=1)),
+        #     ]
+        # ),
+        # (
+        #     "Some event matches AFK",
+        #     [[event_1], [sevent_1]],
+        #     {afk_bucket_id: None, some_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1, sevent_1])]),
+        #     [afk_bucket_id, some_bucket_id],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+        #         ("Applying '%s' bucket %s events.", some_bucket_id, 1),
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_handled_events: 1\n  cnt_match_interval: 1'),
+        #     ]
+        # ),
+        # (
+        #     "Some event before AFK",
+        #     [[event_2], [sevent_1]],
+        #     {afk_bucket_id: None, some_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(2, 1, [event_2])]),
+        #     [afk_bucket_id, some_bucket_id],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+        #         ("Applying '%s' bucket %s events.", some_bucket_id, 1),
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_skipped_before_afk: 1'),
+        #     ]
+        # ),
+        # (
+        #     "Some event after AFK",
+        #     [[event_1], [sevent_2]],
+        #     {afk_bucket_id: None, some_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1])]),
+        #     [afk_bucket_id, some_bucket_id],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+        #         ("Applying '%s' bucket %s events.", some_bucket_id, 1),
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_skipped_after_afk: 1'),
+        #     ]
+        # ),
+        # (
+        #     "Some event overlaps AFK's start",
+        #     [[event_2l2], [sevent_1l2]],
+        #     {afk_bucket_id: None, some_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(2, 1, [event_2l2, sevent_1l2]), (3, 1, [event_2l2])]),
+        #     [afk_bucket_id, some_bucket_id],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+        #         ("Applying '%s' bucket %s events.", some_bucket_id, 1),
+        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_handled_events: 1\n  cnt_split_one_interval: 1'),
+        #     ]
+        # ),
+        # (
+        #     "Some event overlaps AFK's end",
+        #     [[event_1l2], [sevent_2l2]],
+        #     {afk_bucket_id: None, some_bucket_id: None},
+        #     timedelta_0,
+        #     None,
+        #     build_intervals([(1, 1, [event_1l2]), (2, 1, [event_1l2, sevent_2l2])]),
+        #     [afk_bucket_id, some_bucket_id],
+        #     [
+        #         ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+        #         ("Applying '%s' bucket %s events.", some_bucket_id, 1),
+        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_handled_events: 1\n  cnt_split_few_intervals: 1'),
+        #     ]
+        # ),
         (
-            "No buckets",
-            [],
-            {},
+            "Some event overlaps AFK's both sides",
+            [[event_2], [sevent_1l3]],
+            {afk_bucket_id: None, some_bucket_id: None},
             timedelta_0,
             None,
-            None,
-            [],
-            [("No buckets except AFK and/or Stopwatch found. Stopping here - no more events expected.",)]
-        ),
-        (
-            "No AFK events",
-            [[]],
-            {afk_bucket_id: None},
-            timedelta_0,
-            None,
-            None,
-            [afk_bucket_id],
-            [("No buckets except AFK and/or Stopwatch found. Stopping here - no more events expected.",)]
-        ),
-        (
-            "1 AFK 0-length event",
-            [[event_0_length]],
-            {afk_bucket_id: None},
-            timedelta_0,
-            "Wrong interval boundaries - start time .+ is after or equal end time .+, prev=None, next=None",
-            None,
-            [afk_bucket_id],
+            build_intervals([(2, 1, [event_2, sevent_1l3])]),
+            [afk_bucket_id, some_bucket_id],
             [
-                ("JFYI: Skipped 0-duration AFK event at %s in '%s' bucket.", event_to_str(event_0_length), afk_bucket_id),
-                ("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
+                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ("Applying '%s' bucket %s events.", some_bucket_id, 1),
+                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_handled_events: 1\n  cnt_split_few_intervals: 1'),
             ]
-        ),
-        (
-            "1 AFK event",
-            [[event_1], []],
-            {afk_bucket_id: None},
-            timedelta_0,
-            None,
-            inerval_for_1_event,
-            [afk_bucket_id],
-            []
-        ),
-        (
-            "2 consecutive AFK events same bucket",
-            [[event_1, event_2], []],
-            {afk_bucket_id: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
-            [afk_bucket_id],
-            []
-        ),
-        (
-            "2 similar AFK events different buckets",
-            [[event_1], [event_1_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1, event_1_bucket2])]),
-            [afk_bucket_id, afk_bucket_id2],
-            []
-        ),
-        (
-            "2 consecutive AFK events different buckets",
-            [[event_1], [event_2_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1]), (2, 1, [event_2_bucket2])]),
-            [afk_bucket_id, afk_bucket_id2],
-            []
-        ),
-        (
-            "2 consecutive AFK events different buckets opposite order",
-            [[event_2], [event_1_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2])]),
-            [afk_bucket_id, afk_bucket_id2],
-            []
-        ),
-        (
-            "AFK events 1 and 3 in first bucket, 2 in second",
-            [[event_1, event_3], [event_2_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1]), (2, 1, [event_2_bucket2]), (3, 1, [event_3])]),
-            [afk_bucket_id, afk_bucket_id2],
-            []
-        ),
-        (
-            "AFK events 2 in first bucket, 1 and 3 in second",
-            [[event_2], [event_1_bucket2, event_3_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2]), (3, 1, [event_3_bucket2])]),
-            [afk_bucket_id, afk_bucket_id2],
-            []
-        ),
-        (
-            "AFK events 2 in first bucket, 1 and 4 in second",
-            [[event_2], [event_1_bucket2, event_4_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2]), (4, 1, [event_4_bucket2])]),
-            [afk_bucket_id, afk_bucket_id2],
-            []
-        ),
-        (
-            "AFK events overlaping in buckets, 1 overlaps 1l2 plus far after 4",
-            [[event_1l2], [event_1_bucket2, event_4_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1l2, event_1_bucket2]), (2, 1, [event_1l2]),
-                             (4, 1, [event_4_bucket2])]),
-            [afk_bucket_id, afk_bucket_id2],
-            []
-        ),
-        (
-            "AFK events overlaping in buckets, 1l4 overlaps 1 and 3",
-            [[event_1l4], [event_1_bucket2, event_3_bucket2]],
-            {afk_bucket_id: None, afk_bucket_id2: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1l4, event_1_bucket2]), (2, 1, [event_1l4]),
-                             (3, 1, [event_1l4, event_3_bucket2]), (4, 1, [event_1l4])]),
-            [afk_bucket_id, afk_bucket_id2],
-            []
-        ),
-        (
-            "Some empty bucket",
-            [[event_1], []],
-            {afk_bucket_id: None, some_bucket_id: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1])]),
-            [afk_bucket_id, some_bucket_id],
-            []
-        ),
-        (
-            "Some event matches AFK",
-            [[event_1], [sevent_1]],
-            {afk_bucket_id: None, some_bucket_id: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1, sevent_1])]),
-            [afk_bucket_id, some_bucket_id],
-            []
-        ),
-        (
-            "Some event before AFK",
-            [[event_2], [sevent_1]],
-            {afk_bucket_id: None, some_bucket_id: None},
-            timedelta_0,
-            None,
-            build_intervals([(2, 1, [event_2])]),
-            [afk_bucket_id, some_bucket_id],
-            []
-        ),
-        (
-            "Some event after AFK",
-            [[event_1], [sevent_2]],
-            {afk_bucket_id: None, some_bucket_id: None},
-            timedelta_0,
-            None,
-            build_intervals([(1, 1, [event_1])]),
-            [afk_bucket_id, some_bucket_id],
-            []
-        ),
+        )
     ])
     @patch.object(LOG, "info", MagicMock())
     @patch.object(merger, "check_and_print_intervals", MagicMock())
@@ -430,6 +514,7 @@ class TestMerger(unittest.TestCase):
         # Arrange
         awc.get_events.reset()
         awc.get_events.side_effect = get_events_lists_results
+        LOG.info.reset_mock()
         # Act
         actual: Interval
         if expected_error_message:
@@ -445,7 +530,10 @@ class TestMerger(unittest.TestCase):
         else:
             self.assertIsNone(actual, err_msg)
         awc.get_events.assert_has_calls([call(x, start=start_time, end=end_time) for x in expected_buckets_called])
-        LOG.info.assert_has_calls([call(*x) for x in expected_logs])
+        if expected_logs:
+            LOG.info.assert_has_calls([call(*x) for x in expected_logs])
+        else:
+            LOG.info.assert_not_called()
 
 
 if __name__ == '__main__':

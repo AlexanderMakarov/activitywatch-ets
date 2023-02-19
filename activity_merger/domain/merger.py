@@ -287,8 +287,8 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
             buckets_cnt += 1
         bucket_ids_to_handle.remove(bucket_id)
     # Secondly sort events by start time and make one consecutive linked list with minimal number of "patches".
-    events.sort(key=lambda e: e.timestamp)
-    for event in events:
+    if events:
+        events.sort(key=lambda e: e.timestamp)
         cur_interval, metrics = apply_events(events, None, tolerance, True)
         print_metrics(metrics, cur_interval.get_count() if cur_interval else 0)
     if buckets_cnt <= 0:
@@ -308,7 +308,7 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     for bucket_id in bucket_ids_to_handle:
         raw_events = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
         if raw_events:
-            LOG.info("Applying '%s' %s events with.", bucket_id, len(raw_events))
+            LOG.info("Applying '%s' bucket %s events.", bucket_id, len(raw_events))
             # Note that some watchers (like IDEA watcher from few windows) makes events covering each other,
             # i.e. not adjacent. But on each focus change it do generates new event.
             # So first sort all events and cut to make adjacent in scope of a bucket.
