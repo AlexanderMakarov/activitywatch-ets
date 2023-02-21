@@ -94,8 +94,9 @@ Note that for `RULES` configuration it would be great to have:
 - [ ] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust `RULES` and code if need.
 - [ ] Use for ETS for a few days. Adjust `RULES`.
-- [ ] Write tests for merger with Stopwatch events involvement.
+- [x] Write tests for merger with Stopwatch events involvement.
 - [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
+- [ ] Add support for TODO cases in test_merger.
 - [ ] Prepare for distribution.
 - [ ] Importers - support parsing few days at once.
 - [ ] OWA importer - adopt Chrome as well.
