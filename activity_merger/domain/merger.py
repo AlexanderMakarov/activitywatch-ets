@@ -238,11 +238,18 @@ def print_metrics(metrics: Dict[str, int], intervals_count: int):
 
 def _sort_and_merge_events(events: List[Event]) -> List[Event]:
     events.sort(key=lambda e: e.timestamp)
+    TIMEDELTA_0 = datetime.timedelta()
     result = []
     p = None
     for e in events:
+        # Note that AFK sometimes contains "0 timedelta" events which breaks merging logic - omit them.
+        if e.duration == TIMEDELTA_0:
+            continue
         if p is not None:
-            if e.timestamp <= (p.timestamp + p.duration) and e.bucket_id == p.bucket_id and str(e.data) == str(p.data):
+            # Note that we want to merge events with the same data and overlapping time spans.
+            # But differnt buckets are allowed. Because for AFK it is possible to work on few machines in parallel,
+            # and for Stopwatch 'status' is expected to be different anyway.
+            if e.timestamp <= (p.timestamp + p.duration) and str(e.data) == str(p.data):
                 p = Event(e.bucket_id, p.timestamp,
                           max(e.timestamp + e.duration, p.timestamp + p.duration) - p.timestamp, e.data)
             else:
@@ -327,7 +334,7 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     # Assume that they are all "passive" watchers reacting on 3d-party application events which leads to:
     # - Events may have bounds out of 'AFK' events therefore don't represent user activity (like "aw-idea").
     # - Event start means some user activity, but event end may be just some timeout or "computer waken up".
-    # - Events may have not enough data to describe state (like "aw-window-watcher" behavior on Linux Wayland).
+    # - Events may have not enough data to describe state (like "aw-window-watcher" behavior on Linux with Wayland).
     for bucket_id in bucket_ids_to_handle:
         raw_events = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
         if raw_events:
@@ -344,7 +351,8 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
                         prev_event.duration = event.timestamp - prev_event.timestamp
                     events.append(Event(bucket_id, prev_event.timestamp, prev_event.duration, prev_event.data))
                 prev_event = event
-            events.append(prev_event)  # Add last event.
+            # Add last event.
+            events.append(Event(bucket_id, prev_event.timestamp, prev_event.duration, prev_event.data))
             # Handle events.
             cur_interval, metrics = apply_events(events, cur_interval, tolerance)
             print_metrics(metrics, cur_interval.get_count())
