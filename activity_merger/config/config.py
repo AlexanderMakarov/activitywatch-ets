@@ -8,7 +8,7 @@ from ..domain.input_entities import EventKeyHandler, Rule
 # How short may be activity.
 MIN_DURATION_SEC = 15 * 60  # 0.25 hours
 # How long activity may be.
-TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS = datetime.timedelta(2, 0, 0).seconds  # 2 hours
+TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS = datetime.timedelta(hours=2).seconds
 # List of rules describing "watcher" event activity and priority if different "watcher" events happened simultaneously.
 # Keys matche bucket names start. If there will be few buckets with ID starting from key then all will be handled.
 # If few keys match the same bucket then only first `EventKeyHandler` will be applied to the bucket events.
