@@ -1,8 +1,8 @@
 import dataclasses
 import collections
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 
-from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY
+from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS
 from .interval import Interval
 from .input_entities import EventKeyHandler, Rule
 from .output_entities import RuleResult, Activity
@@ -19,11 +19,118 @@ def _intervals_duration(intervals: List[Interval]):
     return sum(x.get_duration() for x in intervals)
 
 
-def _find_out_rule_for_interval(
-        interval: Interval,
-        metrics: Dict[str, Tuple[int, float]],
-        bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]]
-    ) -> RuleResult:
+@dataclasses.dataclass
+class RuleResultsWindow:
+    """
+    Subsidiary class to make sliding window on `Interval`-s linked list which accumulates `RuleResult`-s directly or
+    supposingly belonging to one specific `Activity`.
+    """
+    rule_results: List[RuleResult]
+    priority: int
+    description: str
+    duration: float
+
+    def to_str(self, debug=False) -> str:
+        """
+        Converts to string.
+        :param debug: Flag to make output more detailed.
+        :return: String representation of the window.
+        """
+        prefix = f"{seconds_to_int_timedelta(self.duration)} with priority={self.priority}"
+        if debug:
+            events = dict((x.event.timestamp, x.event) for x in self.rule_results)
+            events_str = "\n  ".join(
+                f"{seconds_to_int_timedelta(x.duration.total_seconds())} {event_data_to_str(x)}"
+                for x in events.values()
+            )
+            return f"{prefix}, description='{self.description}' and {len(events)} events:" + "\n  " + events_str
+        else:
+            return f"{prefix} and {len(self.rule_results)} rule results"
+
+    def append(self, rule_result: RuleResult):
+        """
+        Appends new RuleResult to the window.
+        :param rule_result: RuleResult to add.
+        """
+        self.rule_results.append(rule_result)
+        self.duration += _intervals_duration(rule_result.intervals)
+        # If new rule has more priority than all existing in window then update windows priority and description.
+        if rule_result.rule.priority >= self.priority:
+            self.priority = rule_result.rule.priority
+            self.description = rule_result.description
+
+    def to_activity(self) -> Activity:
+        """
+        Converts window to 'Activity'.
+        :return: New 'Activity' from current window.
+        """
+        start_time = self.rule_results[0].intervals[0].start_time
+        end_time = self.rule_results[-1].intervals[-1].end_time
+        tmp = set(x.description for x in self.rule_results)
+        description = ", ".join(sorted(tmp))
+        return Activity(start_time, end_time, list(self.rule_results), description, self.duration)
+
+
+def _is_new_activity(window: RuleResultsWindow, rule_result: RuleResult) -> bool:
+    current_rule = rule_result.rule
+    # Don't separate activities for rules with the same priority or same description.
+    if current_rule.priority == window.priority or rule_result.description == window.description:
+        return False
+    # Separate all "independent" activities undoubtedly.
+    if current_rule.priority >= AFK_RULE_PRIORITY:
+        return rule_result.description != window.description
+    return False
+
+
+class ProblemReporter:
+    """
+    Class to encapsulate and report problem in analyzing intervals/events.
+    """
+
+    EVENT_WITHOUT_RULE = "EVENT_WITHOUT_RULE"
+    MISSED_RULE = "MISSED_RULE"
+    WEEK_RULE = "WEEK_RULE"
+    TOO_SPECIFIC_RULE = "TOO_SPECIFIC_RULE"
+    TOO_WIDE_RULE = "TOO_WIDE_RULE"
+
+    SUPPORTED_PROBLEMS = [
+        EVENT_WITHOUT_RULE,
+        MISSED_RULE,
+        WEEK_RULE,
+        TOO_WIDE_RULE,
+        TOO_SPECIFIC_RULE
+    ]
+
+    def __init__(self, rule: str, **kwargs) -> None:
+        self.rule = rule
+        self.kwargs: Dict[str, Any] = kwargs
+
+    def report(self, disable_problems: List[str]):
+        if self.rule in disable_problems:
+            return
+        elif self.rule == ProblemReporter.EVENT_WITHOUT_RULE:
+            LOG.info("%s: Can't find handler for %s", self.rule, self.kwargs['event'])
+        elif self.rule == ProblemReporter.MISSED_RULE:
+            LOG.info("%s: Skipping %s because can't find rule for events in it:\n  %s", self.rule,
+                     self.kwargs['cur_interval'], "\n  ".join(str(x) for x in self.kwargs['cur_interval'].events))
+        elif self.rule == ProblemReporter.WEEK_RULE:
+            cur_interval = self.kwargs['cur_interval']
+            LOG.info("%s: Need to reveal rule for interval %s with %d events:\n  %s", self.rule,
+                     cur_interval.to_str(only_time=True), len(cur_interval.events),
+                     "\n  ".join(str(x) for x in cur_interval.events))
+        elif self.rule == ProblemReporter.TOO_SPECIFIC_RULE:
+            LOG.info("%s: On handling %s separated too small window %s", self.rule, self.kwargs['rule_result'],
+                     self.kwargs['window'].to_str(True))
+        elif self.rule == ProblemReporter.TOO_WIDE_RULE:
+            LOG.info("%s: Got too long window %s after adding %s.", self.rule, self.kwargs['window'].to_str(False),
+                     self.kwargs['rule_result'])
+        else:
+            LOG.warning("%s.report doesn't support '%s' with arguments: %s",
+                        self.__class__.__name__, self.rule, self.kwargs)
+
+
+def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int, float]],
+        bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]], ignore_hints: List[str]) -> RuleResult:
     rule_result: RuleResult = None
     # Iterate all events to 
     for event in interval.events:
@@ -38,7 +145,7 @@ def _find_out_rule_for_interval(
                         handler = bucket_handler
                         break
         if not handler:
-            LOG.info(f"Can't find handler for {event}")
+            ProblemReporter(ProblemReporter.EVENT_WITHOUT_RULE, event=event).report(ignore_hints)
             _increment_metric(metrics, 'events without handlers', interval)
             continue  # It is OK, some events (inside interval) may don't have handlers intentionally.
         # Find rule by event data. Note that it may be sorted out by priority afterwards.
@@ -52,67 +159,21 @@ def _find_out_rule_for_interval(
     return rule_result
 
 
-@dataclasses.dataclass
-class RuleResultsWindow:
+def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, List[EventKeyHandler]],
+        ignore_hints: List[str]) -> Tuple[List[Activity], collections.Counter, Dict[str, Tuple[int, float]]]:
     """
-    Subsidiary class to make sliding window on `Interval`-s linked list which accumulates `RuleResult`-s directly or
-    supposingly belonging to one specific `Activity`.
-    """
-    rule_results: List[RuleResult]
-    priority: int
-    description: str
-    duration: float
-
-    def to_str(self, debug=False) -> str:
-        repr = f"{seconds_to_int_timedelta(self.duration)} with priority={self.priority}"
-        if debug:
-            events = dict((x.event.timestamp, x.event) for x in self.rule_results)
-            events_str = "\n  ".join(
-                f"{seconds_to_int_timedelta(x.duration.total_seconds())} {event_data_to_str(x)}"
-                for x in events.values()
-            )
-            return f"{repr}, description='{self.description}' and {len(events)} events:" + "\n  " + events_str
-        else:
-            return f"{repr} and {len(self.rule_results)} rule results"
-
-    def append(self, rule_result: RuleResult):
-        self.rule_results.append(rule_result)
-        self.duration += _intervals_duration(rule_result.intervals)
-        # If new rule has more priority than all existing in window then update windows priority and description.
-        if rule_result.rule.priority >= self.priority:
-            self.priority = rule_result.rule.priority
-            self.description = rule_result.description
-
-    def to_activity(self) -> Activity:
-        start_time = self.rule_results[0].intervals[0].start_time
-        end_time = self.rule_results[-1].intervals[-1].end_time
-        tmp = set(x.description for x in self.rule_results)
-        description = ", ".join(sorted(tmp))
-        return Activity(start_time, end_time, list(self.rule_results), description, self.duration)
-
-
-def _is_new_activity(window: RuleResultsWindow, rule_result: RuleResult, round_to: float) -> bool:
-    current_rule = rule_result.rule
-    # Don't separate activities for rules with the same priority or same description.
-    if current_rule.priority == window.priority and rule_result.description != window.description:
-        return False
-    # Separate all "indipendent" activities as soon as they appear.
-    if current_rule.priority >= AFK_RULE_PRIORITY:
-        return rule_result.description != window.description
-    # TODO Apply `round_to` with distributing small buckets into wider ones.
-    return False
-
-
-def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, List[EventKeyHandler]]
-        ) -> Tuple[List[Activity], collections.Counter, Dict[str, Tuple[int, float]]]:
-    """
-    :param interval: Linked list of intervals to analyze.
+    Analyzes linked list of 'Interval'-s to convert them into list of 'Activity'-es and provide explanation about
+    how well it was done.
+    :param interval: Linked list of 'Interval'-s to analyze.
     :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
-    :param rules: User-specific map of event bucket name prefix to list of `EventKeyHandler`-s to handle data intervals.
+    :param rules: User-specific/crafted map of `EventKeyHandler`-s to event buckets (by name prefix).
+    :param ignore_hints: List of problems to disable in logs.
     :return: Tuple of:
     1 - List of assembled `Activity`-es.
-    2 - `Counter` of interval description-s to theirs durations. Aka `Activity`-es built by naive "equal" strategy.
-    3 - Map of metrics to estimate report quality/coverage.
+    2 - `Counter` of intervals-by-rule description-s to sum of their durations.
+        Like a `Activity`-es built by naive "equal" strategy, i.e. report with too many and too small activities.
+    3 - Map of metrics to estimate report quality/coverage and improve rules.
+        Key is name of metric, value is tuple [number_of_intervals, sum_of_durations].
     """
     # Assemble full set of EventKeyHandler-s from predifined ones and custom.
     bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]] = dict(custom_rules)
@@ -135,26 +196,26 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     rules_counter = collections.Counter()
     activities: List[Activity] = []
     metrics = {  # Put default metrics. Next it will be appended by per-rule metrics.
-        'total intervals': (0, 0),
-        'events without handlers': (0, 0),
-        'intervals without rules': (0, 0),
-        'intervals merged to next rule': (0, 0),
-        'intervals with rule to skip': (0, 0),
-        'intervals need to reveal rule for': (0, 0),
+        'total intervals': (0, 0.0),
+        'events without handlers': (0, 0.0),
+        'intervals without rules': (0, 0.0),
+        'intervals merged to next rule': (0, 0.0),
+        'intervals with rule to skip': (0, 0.0),
+        'intervals need to reveal rule for': (0, 0.0),
     }
-    # Prepare dummy `Interval`` to use first interval on the very first iteration below.
+    # Prepare dummy `Interval` to use first interval on the very first iteration below.
     cur_interval = Interval(cur_interval.start_time, cur_interval.end_time, None, cur_interval)
-    # Iterate all intervals, find rules for all events in it and choose highest by prioirty to handle interval to
-    # build slices, activity_counter, metrics.
+    # Iterate all intervals, iterate rules for all events in each and choose highest by prioirty event
+    # to choose dominant rule for interval which will become part of activity.
     deferred_intervals: List[Interval] = []  # `Interval`-s deffered as "append to next independent rule".
     window: RuleResultsWindow = None
     while cur_interval.next:
         cur_interval = cur_interval.next
-        rule_result = _find_out_rule_for_interval(cur_interval, metrics, bucket_prefix_to_ruleshandler)
+        rule_result = _find_out_rule_for_interval(cur_interval, metrics, bucket_prefix_to_ruleshandler, ignore_hints)
+        # NOTE: order is very important below.
         # Decide whether to count this interval or not and update metrics.
         if rule_result is None:
-            LOG.info(f"Skipping {cur_interval} because it doesn't contain events matching any rule."
-                     + " Events:\n  " + "\n  ".join(str(x) for x in cur_interval.events))
+            ProblemReporter(ProblemReporter.MISSED_RULE, cur_interval=cur_interval).report(ignore_hints)
             _increment_metric(metrics, 'intervals without rules', cur_interval)
             continue
         # Update per-rule-name metric. It should include all rules (i.e. "skip", "placeholder", etc.).
@@ -167,19 +228,14 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             deferred_intervals = []
         # Check if rule says skip interval from the report.
         if rule_result.rule.skip:
-            LOG.debug(f"Skipping {duration:.1f} sec {len(rule_result.intervals)}"
-                      f" intervals(s) because of {rule_result.rule} priority is highest"
-                      f" for {rule_result.event}.")
+            LOG.debug(f"Skipping {duration:.1f} sec {len(rule_result.intervals)} interval(s) "
+                      f"because of {rule_result.rule} priority is highest for {rule_result.event}.")
             _increment_metric(metrics, 'intervals with rule to skip', cur_interval)
             continue
-        # Check if rule is a placeholder and provide all information about interval to write appropriate rule for it. 
+        # Check if rule is a placeholder and provide all information about interval to write appropriate rule for it.
         if rule_result.rule.is_placeholder:
-            LOG.info("Need to reveal rule for interval %s with %d events:\n  %s"
-                     % (cur_interval.to_str(only_time=True), len(cur_interval.events),
-                        "\n  ".join(str(x) for x in cur_interval.events))
-                    )
+            ProblemReporter(ProblemReporter.WEEK_RULE, cur_interval=cur_interval).report(ignore_hints)
             _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
-        # is_fresh = cur_interval.prev is None or cur_interval.prev.end_time != cur_interval.start_time
         # Update 'total_intervals' metric.
         _increment_metric(metrics, 'total intervals', cur_interval)
         # Defer interval if need. Note that `activity_counter` shouldn't be touched by this rule.
@@ -188,21 +244,26 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             continue
         # Update 'rules counter'.
         rules_counter[rule_result.description] += duration
-        # -----------
+        # Decide if current window is completed, may be converted to `Activity` and next window started.
         is_start_new_window = True  # By default start new window.
         if window is not None:
             # Decide if current `RuleResult` is separate activity from previous ones and need to create `Activity` from
             # items accumulated in `activity_window` so far.
-            if _is_new_activity(window, rule_result, round_to):
+            if _is_new_activity(window, rule_result):
                 if window.duration < round_to:
-                    LOG.info(f"On handling {rule_result} separated too small window {window.to_str(True)}")
+                    ProblemReporter(ProblemReporter.TOO_SPECIFIC_RULE, rule_result=rule_result, window=window)\
+                        .report(ignore_hints)
+                    # Here may be a reason in "too specific" rules which leads to too small activities.
+                    # But current algorithm doesn't allow to keep few sliding windows in parallel
+                    # while person actually may switch too often between different activities.
                     # TODO _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
                 activities.append(window.to_activity())
             else:
                 window.append(rule_result)
-                # if window.duration > TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS:
-                #     LOG.info(f"Too long window {window.to_str(False)} after checking {rule_result}.")
-                #     # TODO _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
+                if window.duration > TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS:
+                    ProblemReporter(ProblemReporter.TOO_WIDE_RULE, rule_result=rule_result, window=window)\
+                        .report(ignore_hints)
+                    _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
                 is_start_new_window = False
         if is_start_new_window:
             window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
