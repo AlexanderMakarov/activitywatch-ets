@@ -87,6 +87,23 @@ RULES = {
             Rule(".*", 100, to_string=lambda x: f"IDEA file '{x.group(0)}'")
         ])
     ],
+    # Ad-hoc importer. Due to JIRA doesn't allow to get time when user started to work on the change it measures
+    # duration either from previous event or from the start of the day. Therefore events doesn't intersect with AFK.
+    # 'symbols_count' field contains probable number of keystrokes user made to make this change but it is not precise
+    # and for cases where don't need to use keyboard is equal to 1.
+    # data={jira_id: str, field: str, change_desc: str, symbols_count: int}.
+    "jira_aw_events_scraper": [
+        EventKeyHandler("jira_id", [
+            Rule(".*", 30, to_string=lambda x: f"JIRA task '{x.group(0)}'")  # TODO add subhandler by 'field'.
+        ])
+    ],
+    # Ad-hoc importer. Represents items from "Calendar" tab of OWA365.
+    # data={type: [busy, free, tentative], name: str, location: str, sender: str}.
+    "outlook_aw_events_scraper": [
+        EventKeyHandler("name", [
+            Rule(".*", 910, to_string=lambda x: f"Meeting '{x.group(0)}'")
+        ])
+    ],
 }
 # Absolute path to Firefox profile folder to grab OWA events under.
 # On Linux it looks like '/home/{username}/.mozilla/firefox/{some_id}.default-release/'.
