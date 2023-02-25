@@ -66,7 +66,9 @@ def main():
     parser.add_argument('-i', '--ignore-hints', nargs='*', default=[],
                         help="Hints to ignore in report. Helps filter log messages about rule mistakes. "
                              f"Supported values in importance order: {ProblemReporter.SUPPORTED_PROBLEMS}. "
-                             "Example for the start '... -i TOO_SPECIFIC_RULE WEEK_RULE ...'")
+                             "For example, to understand what need to setup for yourself with default config, use "
+                             "'./get_activities.py 2022-12-31 -i TOO_SPECIFIC_RULE TOO_WIDE_RULE' and after it stop "
+                             "to report issues remove '-i' part.")
     args = parser.parse_args()
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:

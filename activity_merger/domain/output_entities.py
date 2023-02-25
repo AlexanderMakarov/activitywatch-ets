@@ -26,7 +26,7 @@ class RuleResult:
     values: List[str]
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(rule={self.rule}, description={self.description})"
+        return f"{self.__class__.__name__}(description={self.description}, rule={self.rule})"
 
 
 @dataclasses.dataclass
