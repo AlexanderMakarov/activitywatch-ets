@@ -6,7 +6,8 @@ import aw_client
 from typing import List
 
 from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES,\
-                                          BUCKET_DEBUG_RULE_RESULTS, DEBUG_BUCKETS_IMPORTER_NAME
+                                          DEBUG_BUCKETS_IMPORTER_NAME, BUCKET_DEBUG_RAW_RULE_RESULTS,\
+                                          BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
 from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date, upload_events
 from activity_merger.domain.merger import report_from_buckets
 from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter
@@ -21,6 +22,8 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     prints them into output.
     :param events_date: Date to get events on.
     :param ignore_hints: List of problems to disable in logs.
+    :param is_import_debug_buckets: Flag to assemble and import into ActivityWatch debugging information as events for
+    "debugging" buckets.
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
     try:
@@ -36,8 +39,9 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     if interval is None:
         LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
         return []
-    # Convert (assemble) intervals list into activities.
-    analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, ignore_hints)
+    # Convert (analyze) intervals list into activities.
+    analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, ignore_hints,
+                                                        is_import_debug_buckets)
     # Print metrics as is.
     sorted_metric_entries = sorted(analyzer_result.metrics.items(), key=lambda x: x[1][1], reverse=True)
     LOG.info("Metrics from intervals analysis (%s):\n  %s",
@@ -55,9 +59,15 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
              "\n  ".join(str(x) for x in analyzer_result.activities))
     # Import debugging buckets if need.
     if is_import_debug_buckets:
-        if analyzer_result.rule_result_events:
-            LOG.info(upload_events(analyzer_result.rule_result_events, DEBUG_BUCKETS_IMPORTER_NAME,
-                                   "activitymerger.debug.ruleresults", BUCKET_DEBUG_RULE_RESULTS, True))
+        if analyzer_result.raw_rule_result_debug_events:
+            LOG.info(upload_events(analyzer_result.raw_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
+                                   "activitymerger.debug.rawruleresults", BUCKET_DEBUG_RAW_RULE_RESULTS, True))
+        if analyzer_result.final_rule_result_debug_events:
+            LOG.info(upload_events(analyzer_result.final_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
+                                   "activitymerger.debug.finalruleresults", BUCKET_DEBUG_FINAL_RULE_RESULTS, True))
+        if analyzer_result.activity_debug_events:
+            LOG.info(upload_events(analyzer_result.activity_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
+                                   "activitymerger.debug.activities", BUCKET_DEBUG_ACTIVITES, True))
     return analyzer_result
 
 
@@ -83,8 +93,12 @@ def main():
                              "behavior. They are very handy on http://localhost:5600/#/timeline page "
                              "(in ActivityWatch v0.12.1 need to refresh browser page to get them). "
                              " Note that these debugging buckets are pre-removed (for the whole time) "
-                             "and aren't machine-specific. "
-                             f"'{BUCKET_DEBUG_RULE_RESULTS}' bucket contains list of 'RuleResult'-s.")  # TODO result?
+                             "and aren't machine-specific. Also they are quite heavy for UI."
+                             f"'{BUCKET_DEBUG_RAW_RULE_RESULTS}' bucket contains list of raw 'RuleResult'-s. "
+                             "I.e. rule found for each interval, before applying 'skip' or 'placeholder' features."
+                             f"'{BUCKET_DEBUG_FINAL_RULE_RESULTS}' bucket contains list of final 'RuleResult'-s."
+                             "I.e. rule for intervals which will contribute into final report."
+                             f"'{BUCKET_DEBUG_ACTIVITES}' bucket contains list of resulting activities.")
     args = parser.parse_args()
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:

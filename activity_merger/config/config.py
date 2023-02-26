@@ -132,8 +132,12 @@ AFK_RULE_PRIORITY = 500
 WATCHDOG_RULE_PRIORITY = 1000
 # Name of ActivityWatch client created to import debugging buckets.
 DEBUG_BUCKETS_IMPORTER_NAME = 'activity_merger_debugger'
-# Name of ActivityWatch bucket to import debugging buckets. Starts with "z" to be at bottom.
-BUCKET_DEBUG_RULE_RESULTS = "z_activity_merger_rule_results"
+# Name of ActivityWatch bucket to import debugging information about raw RuleResult-s. Starts with "z" to be at bottom.
+BUCKET_DEBUG_RAW_RULE_RESULTS = "z1_activity_merger_raw_rule_results"
+# Name of ActivityWatch bucket to import debugging info about final RuleResult-s. Starts with "z" to be at bottom.
+BUCKET_DEBUG_FINAL_RULE_RESULTS = "z2_activity_merger_final_rule_results"
+# Name of ActivityWatch bucket to import resulting activities. Starts with "z" to be at bottom.
+BUCKET_DEBUG_ACTIVITES = "z3_activity_merger_activities"
 # Timezone to show dates.
 CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo  # Use system timezone.
 # Default logger. Used for cases when script is called as a library.

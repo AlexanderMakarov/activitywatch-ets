@@ -3,7 +3,7 @@ import collections
 from typing import List, Dict, Tuple, Any
 
 from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,\
-                            BUCKET_DEBUG_RULE_RESULTS
+                            BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
 from .interval import Interval
 from .input_entities import EventKeyHandler, Rule, Event
 from .output_entities import RuleResult, Activity, AnalyzerResult
@@ -176,7 +176,7 @@ def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int
 
 
 def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, List[EventKeyHandler]],
-        ignore_hints: List[str]) -> AnalyzerResult:
+        ignore_hints: List[str], is_build_debug_buckets: bool) -> AnalyzerResult:
     """
     Analyzes linked list of 'Interval'-s to convert them into list of 'Activity'-es and provide explanation about
     how well it was done.
@@ -184,6 +184,8 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
     :param rules: User-specific/crafted map of `EventKeyHandler`-s to event buckets (by name prefix).
     :param ignore_hints: List of problems to disable in logs.
+    :param is_build_debug_buckets: Flag to assemble debugging information as events for ActivityWatch
+    "debugging" buckets.
     :return: Tuple of:
     1 - List of assembled `Activity`-es.
     2 - `Counter` of intervals-by-rule description-s to sum of their durations.
@@ -212,7 +214,9 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
         'intervals with rule to skip': (0, 0.0),
         'intervals need to reveal rule for': (0, 0.0),
     }
-    rule_result_events = []
+    raw_rule_result_debug_events = []
+    final_rule_result_debug_events = []
+    activity_debug_events = []
     # Prepare dummy `Interval` to use first interval on the very first iteration below.
     cur_interval = Interval(cur_interval.start_time, cur_interval.end_time, None, cur_interval)
     # Iterate all intervals, iterate rules for all events in each and choose highest by prioirty event
@@ -234,12 +238,14 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             continue
         # Update per-rule-name metric. It should include all rules (i.e. "skip", "placeholder", etc.).
         _increment_metric(metrics, str(rule_result.rule), cur_interval)
-        # Fill up BUCKET_DEBUG_RULE_RESULTS before handling deferred intervals to don't merge them.
-        rule_result_events.append(
-            Event(BUCKET_DEBUG_RULE_RESULTS, cur_interval.start_time, cur_interval.get_duration(), {
-                'description': rule_result.description,
-                'rule': str(rule_result.rule),
-            }))
+        # Fill up BUCKET_DEBUG_RULE_RESULTS before handling deferred intervals
+        # to represent logic of choosing rule by events in interval.
+        if is_build_debug_buckets:
+            raw_rule_result_debug_events.append(
+                Event(BUCKET_DEBUG_RAW_RULE_RESULTS, cur_interval.start_time, cur_interval.get_duration(), {
+                    'description': rule_result.description,
+                    'rule': str(rule_result.rule),
+                }))
         duration = _intervals_duration(rule_result.intervals)
         # Append deferred intervals if there are such.
         if deferred_intervals is not None:
@@ -264,6 +270,14 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             continue
         # Update 'rules counter'.
         rules_counter[rule_result.description] += duration
+        if is_build_debug_buckets:
+            final_rule_result_debug_events.append(
+                Event(BUCKET_DEBUG_FINAL_RULE_RESULTS, rule_result.intervals[0].start_time,
+                      rules_counter[rule_result.description], {
+                    'description': rule_result.description,
+                    'rule': str(rule_result.rule),
+                    'intervals_count': len(rule_result.intervals),
+                }))
         # Decide if current window is completed, may be converted to `Activity` and next window started.
         is_start_new_window = True  # By default start new window.
         if window is not None:
@@ -277,7 +291,14 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                     # But current algorithm doesn't allow to keep few sliding windows in parallel
                     # while person actually may switch too often between different activities.
                     # TODO _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
-                activities.append(window.to_activity())
+                activity = window.to_activity()
+                activities.append(activity)
+                if is_build_debug_buckets:
+                    activity_debug_events.append(
+                        Event(BUCKET_DEBUG_ACTIVITES, activity.start_time, activity.duration, {
+                            'description': rule_result.description,
+                            'rule_results_count': len(activity.rule_results),
+                        }))
             else:
                 window.append(rule_result)
                 if window.duration > TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS:
@@ -287,4 +308,5 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                 is_start_new_window = False
         if is_start_new_window:
             window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
-    return AnalyzerResult(activities, rules_counter, metrics, rule_result_events)
+    return AnalyzerResult(activities, rules_counter, metrics,
+                          raw_rule_result_debug_events, final_rule_result_debug_events, activity_debug_events)

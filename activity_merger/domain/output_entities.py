@@ -46,7 +46,7 @@ class Activity:
     """Human-friendly description of the activity."""
     duration: float
     """
-    Total duration of the activity.
+    Total duration of the activity in seconds.
     Note that 'end_time - start_time' doesn't work due to possible gaps between intervals.
     """
 
@@ -67,5 +67,9 @@ class AnalyzerResult:
     """Duration of intervals per rule."""
     metrics: Dict[str, Tuple[int, float]]
     """Dictionary of metrics, where each metric is represented by number of intervals and duration."""
-    rule_result_events: List[Event]
+    raw_rule_result_debug_events: List[Event]
     """List of 'Event'-s which represents 'RuleResult' chosen for each interval."""
+    final_rule_result_debug_events: List[Event]
+    """List of 'Event'-s which represents 'RuleResult' after applying 'skip', 'merge_next', etc. features."""
+    activity_debug_events: List[Event]
+    """List of 'Event'-s which represent resulting 'Activity'-es."""

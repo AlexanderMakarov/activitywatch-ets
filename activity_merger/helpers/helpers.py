@@ -84,9 +84,9 @@ def upload_events(events: List[Event], aw_client_name: str, event_type: str, buc
     if is_replace:
         try:
             client.delete_bucket(bucket_id, True)
-            result += f"Deleted '{bucket_id}' bucket. "
+            result += "Deleted '" + bucket_id + "' bucket.\n"
         except Exception as e:
-            result += f"Wasn't able to delete '{bucket_id}' bucket because: {e} "
+            result += "Wasn't able to delete '" + bucket_id + "' bucket because: " + str(e) + "\n"
     client.create_bucket(bucket_id, event_type=event_type)  # Will return 304 if bucket exists.
     client.insert_events(bucket_id, aw_events)  # Actually returns None.
     result += f"Uploaded {len(aw_events)} events into local ActivityWatch '{bucket_id}' bucket."
