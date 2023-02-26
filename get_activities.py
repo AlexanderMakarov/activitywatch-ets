@@ -57,7 +57,7 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     if is_import_debug_buckets:
         if analyzer_result.rule_result_events:
             LOG.info(upload_events(analyzer_result.rule_result_events, DEBUG_BUCKETS_IMPORTER_NAME,
-                                   "activitiesmerger.debug.ruleresults", BUCKET_DEBUG_RULE_RESULTS, True))
+                                   "activitymerger.debug.ruleresults", BUCKET_DEBUG_RULE_RESULTS, True))
     return analyzer_result
 
 

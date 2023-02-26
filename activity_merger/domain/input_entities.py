@@ -45,6 +45,18 @@ class Rule:
         """
         return match.group(0) if self.to_string is None else self.to_string(match)
 
+    def __repr__(self) -> str:
+        desc = ""
+        if self.subhandler:
+            desc = f"with subhandler {self.subhandler}"
+        elif self.skip:
+            desc = "to skip"
+        elif self.merge_next:
+            desc = "to merge with next interval"
+        elif self.is_placeholder:
+            desc = "placeholder"
+        return f"Rule '{self.key_pattern}', priority={self.priority}, {desc}"
+
 class EventKeyHandler:
     """
     Structure which binds multiple `Rule`-s to one `Event`'s specific key values (by regexp).
