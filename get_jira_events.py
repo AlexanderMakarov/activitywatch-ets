@@ -244,8 +244,8 @@ def main():
                     f"[{args.projects}] projects.")
     # Load events into ActivityWatcher
     if not args.is_dry_run:
-        upload_events(events, JIRA_SCRAPER_NAME, "jira.issue.activity", JIRA_BUCKET_ID, args.is_replace_bucket)
-        LOG.info(f"Uploaded all events into local ActivityWatch '{JIRA_BUCKET_ID}' bucket.")
+        LOG.info(upload_events(events, JIRA_SCRAPER_NAME, "jira.issue.activity", JIRA_BUCKET_ID,
+                               args.is_replace_bucket))
 
 
 if __name__ == '__main__':

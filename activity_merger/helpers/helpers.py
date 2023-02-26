@@ -64,7 +64,8 @@ def ensure_datetime(d):  # https://stackoverflow.com/a/29840081/1535127
     return datetime.datetime(d.year, d.month, d.day).astimezone(CURRENT_TIMEZONE)
 
 
-def upload_events(events: List[Event], aw_client_name: str, event_type: str, bucket_id: str, is_replace: bool = False):
+def upload_events(events: List[Event], aw_client_name: str, event_type: str, bucket_id: str, is_replace: bool = False
+                  ) -> str:
     """
     Takes list of `Event`-s, converts them into ActivityWatch events, creates new ActivityWatch client, removes bucket
     if need, creates bucket and uploads events into it.
@@ -73,12 +74,20 @@ def upload_events(events: List[Event], aw_client_name: str, event_type: str, buc
     :param event_type: Type of event to set for the bucket. Means nothing.
     :param bucket_id: Name of bucket to put events into or recreate.
     :param is_replace: Flag to force remove bucket first.
+    :return: String with representation of implemented actions.
     """
     # Convert into ActivityWatch clients.
     aw_events = [awmodels.Event(timestamp=x.timestamp, duration=x.duration, data=x.data) for x in events]
+    result = ""
     # Build client, check than bucket is created and insert events.
     client = aw_client.ActivityWatchClient(aw_client_name)
     if is_replace:
-        client.delete_bucket(bucket_id, True)
+        try:
+            client.delete_bucket(bucket_id, True)
+            result += f"Deleted '{bucket_id}' bucket. "
+        except Exception as e:
+            result += f"Wasn't able to delete '{bucket_id}' bucket because: {e} "
     client.create_bucket(bucket_id, event_type=event_type)  # Will return 304 if bucket exists.
     client.insert_events(bucket_id, aw_events)  # Actually returns None.
+    result += f"Uploaded {len(aw_events)} events into local ActivityWatch '{bucket_id}' bucket."
+    return result

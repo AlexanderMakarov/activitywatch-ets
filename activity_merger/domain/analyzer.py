@@ -2,9 +2,10 @@ import dataclasses
 import collections
 from typing import List, Dict, Tuple, Any
 
-from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS
+from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,\
+                            BUCKET_DEBUG_RULE_RESULTS
 from .interval import Interval
-from .input_entities import EventKeyHandler, Rule
+from .input_entities import EventKeyHandler, Rule, Event
 from .output_entities import RuleResult, Activity, AnalyzerResult
 from ..helpers.helpers import seconds_to_int_timedelta, event_data_to_str
 
@@ -211,6 +212,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
         'intervals with rule to skip': (0, 0.0),
         'intervals need to reveal rule for': (0, 0.0),
     }
+    rule_result_events = []
     # Prepare dummy `Interval` to use first interval on the very first iteration below.
     cur_interval = Interval(cur_interval.start_time, cur_interval.end_time, None, cur_interval)
     # Iterate all intervals, iterate rules for all events in each and choose highest by prioirty event
@@ -232,6 +234,12 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             continue
         # Update per-rule-name metric. It should include all rules (i.e. "skip", "placeholder", etc.).
         _increment_metric(metrics, str(rule_result.rule), cur_interval)
+        # Fill up BUCKET_DEBUG_RULE_RESULTS before handling deferred intervals to don't merge them.
+        rule_result_events.append(
+            Event(BUCKET_DEBUG_RULE_RESULTS, cur_interval.start_time, cur_interval.get_duration(), {
+                'description': rule_result.description,
+                'rule': str(rule_result.rule),
+            }))
         duration = _intervals_duration(rule_result.intervals)
         # Append deferred intervals if there are such.
         if deferred_intervals is not None:
@@ -279,4 +287,4 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                 is_start_new_window = False
         if is_start_new_window:
             window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
-    return AnalyzerResult(activities, rules_counter, metrics)
+    return AnalyzerResult(activities, rules_counter, metrics, rule_result_events)

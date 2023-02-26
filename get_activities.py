@@ -5,14 +5,16 @@ import argparse
 import aw_client
 from typing import List
 
-from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES
-from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date
+from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES,\
+                                          BUCKET_DEBUG_RULE_RESULTS, DEBUG_BUCKETS_IMPORTER_NAME
+from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date, upload_events
 from activity_merger.domain.merger import report_from_buckets
 from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter
-from activity_merger.domain.output_entities import Activity, AnalyzerResult
+from activity_merger.domain.output_entities import AnalyzerResult
 
 
-def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: List[str]) -> AnalyzerResult:
+def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: List[str],
+                                    is_import_debug_buckets: bool) -> AnalyzerResult:
     """
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
     analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
@@ -51,6 +53,11 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     # Print resulting activities as is. Order is important here.
     LOG.info("Assembled %d activities:\n  %s", len(analyzer_result.activities),
              "\n  ".join(str(x) for x in analyzer_result.activities))
+    # Import debugging buckets if need.
+    if is_import_debug_buckets:
+        if analyzer_result.rule_result_events:
+            LOG.info(upload_events(analyzer_result.rule_result_events, DEBUG_BUCKETS_IMPORTER_NAME,
+                                   "activitiesmerger.debug.ruleresults", BUCKET_DEBUG_RULE_RESULTS, True))
     return analyzer_result
 
 
@@ -71,11 +78,18 @@ def main():
                              "For example, to understand what need to setup for yourself with default config, use "
                              "'./get_activities.py 2022-12-31 -i TOO_SPECIFIC_RULE TOO_WIDE_RULE' and after it stop "
                              "to report issues remove '-i' part.")
+    parser.add_argument('-d', '--debug-buckets', dest='is_import_debug_buckets', action='store_true',
+                        help="Flag to import debugging buckets into ActivityWatch which allows represent rules "
+                             "behavior. They are very handy on http://localhost:5600/#/timeline page "
+                             "(in ActivityWatch v0.12.1 need to refresh browser page to get them). "
+                             " Note that these debugging buckets are pre-removed (for the whole time) "
+                             "and aren't machine-specific. "
+                             f"'{BUCKET_DEBUG_RULE_RESULTS}' bucket contains list of 'RuleResult'-s.")  # TODO result?
     args = parser.parse_args()
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
         events_date = (events_date - datetime.timedelta(days=args.back_days))
-    convert_aw_events_to_activities(events_date, args.ignore_hints)
+    convert_aw_events_to_activities(events_date, args.ignore_hints, args.is_import_debug_buckets)
 
 
 if __name__ == '__main__':

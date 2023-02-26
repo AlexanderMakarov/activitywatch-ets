@@ -15,7 +15,7 @@ class RuleResult:
     chosen to be connected under one `Rule`.
     :param rule: `Rule` which produced this instance.
     :param event: `Event` choosen by `Rule`.
-    :param description: Description of underlying interval.
+    :param description: Description of underlying time span obtained by event.
     :param intervals: List of `Interval`-s covering by this rule.
     :param values: List of `Event` data pieces which pointed on this rule.
     """
@@ -67,3 +67,5 @@ class AnalyzerResult:
     """Duration of intervals per rule."""
     metrics: Dict[str, Tuple[int, float]]
     """Dictionary of metrics, where each metric is represented by number of intervals and duration."""
+    rule_result_events: List[Event]
+    """List of 'Event'-s which represents 'RuleResult' chosen for each interval."""

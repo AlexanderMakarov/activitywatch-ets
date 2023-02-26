@@ -130,6 +130,10 @@ EVENTS_COMPARE_TOLERANCE_TIMEDELTA = datetime.timedelta(0, 1, 0)  # 1 sec
 AFK_RULE_PRIORITY = 500
 # Default priority of "watchdog" watcher, aka maximum priority.
 WATCHDOG_RULE_PRIORITY = 1000
+# Name of ActivityWatch client created to import debugging buckets.
+DEBUG_BUCKETS_IMPORTER_NAME = 'activity_merger_debugger'
+# Name of ActivityWatch bucket to import debugging buckets. Starts with "z" to be at bottom.
+BUCKET_DEBUG_RULE_RESULTS = "z_activity_merger_rule_results"
 # Timezone to show dates.
 CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo  # Use system timezone.
 # Default logger. Used for cases when script is called as a library.
