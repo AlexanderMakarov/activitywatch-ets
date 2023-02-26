@@ -1,6 +1,7 @@
 import dataclasses
 import datetime
-from typing import List
+import collections
+from typing import List, Dict, Tuple
 
 from .input_entities import Event, Rule
 from .interval import Interval
@@ -32,16 +33,37 @@ class RuleResult:
 @dataclasses.dataclass
 class Activity:
     """
-    One or few `RuleResult`-s separated as independent activity.
+    One or few `RuleResult`-s separated as independent activity. See description per field.
     """
 
     start_time: datetime.datetime
+    """Start time of the activity."""
     end_time: datetime.datetime
+    """End time of the activity."""
     rule_results: List[RuleResult]
+    """List of (dominant) events the activity consists of."""
     description: str
-    # Note that 'end_time minus start_time' doesn't work due to possible gaps between intervals.
+    """Human-friendly description of the activity."""
     duration: float
+    """
+    Total duration of the activity.
+    Note that 'end_time - start_time' doesn't work due to possible gaps between intervals.
+    """
 
     def __repr__(self) -> str:
         return f"{seconds_to_int_timedelta((self.duration))} "\
                f"({from_start_to_end_to_str(self)}) {self.description}"
+
+
+@dataclasses.dataclass
+class AnalyzerResult:
+    """
+    General result of one call to "analyze" method. See description per field.
+    """
+
+    activities: List[Activity]
+    """List of activities."""
+    rule_results_counter: collections.Counter
+    """Duration of intervals per rule."""
+    metrics: Dict[str, Tuple[int, float]]
+    """Dictionary of metrics, where each metric is represented by number of intervals and duration."""

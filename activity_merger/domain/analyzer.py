@@ -5,8 +5,23 @@ from typing import List, Dict, Tuple, Any
 from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS
 from .interval import Interval
 from .input_entities import EventKeyHandler, Rule
-from .output_entities import RuleResult, Activity
+from .output_entities import RuleResult, Activity, AnalyzerResult
 from ..helpers.helpers import seconds_to_int_timedelta, event_data_to_str
+
+
+BUCKET_AFK_PREFIX = "aw-watcher-afk"
+BUCKET_STOPWATCH_PREFIX = "aw-stopwatch"
+DEFAULT_AFK_RULES = [EventKeyHandler('status', [
+    Rule("afk", AFK_RULE_PRIORITY, skip=True),
+    Rule("not-afk", 1, is_placeholder=True)
+])]
+DEFAULT_STOPWATCH_RULES = [EventKeyHandler('label', [
+    Rule(".*", 0, subhandler=EventKeyHandler('running', [
+        Rule("true", WATCHDOG_RULE_PRIORITY),
+        # Even if it is the only event in interval it carries no activity.
+        Rule("false", 0, skip=True)
+    ]))
+])]
 
 
 def _increment_metric(metrics: Dict[str, Tuple[int, float]], metric_name: str, interval: Interval):
@@ -132,7 +147,7 @@ class ProblemReporter:
 def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int, float]],
         bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]], ignore_hints: List[str]) -> RuleResult:
     rule_result: RuleResult = None
-    # Iterate all events to 
+    # Iterate all events to find out one with higher priority.
     for event in interval.events:
         # Search `EventKeyHandler` by 2 criteria:
         # 1) event bucket ID starts with handler 'bucket_id',
@@ -146,7 +161,7 @@ def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int
                         break
         if not handler:
             ProblemReporter(ProblemReporter.EVENT_WITHOUT_RULE, event=event).report(ignore_hints)
-            _increment_metric(metrics, 'events without handlers', interval)
+            _increment_metric(metrics, 'intervals with unknows events', interval)
             continue  # It is OK, some events (inside interval) may don't have handlers intentionally.
         # Find rule by event data. Note that it may be sorted out by priority afterwards.
         rule, descriptions = handler.get_rule(event)
@@ -160,7 +175,7 @@ def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int
 
 
 def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, List[EventKeyHandler]],
-        ignore_hints: List[str]) -> Tuple[List[Activity], collections.Counter, Dict[str, Tuple[int, float]]]:
+        ignore_hints: List[str]) -> AnalyzerResult:
     """
     Analyzes linked list of 'Interval'-s to convert them into list of 'Activity'-es and provide explanation about
     how well it was done.
@@ -177,18 +192,10 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     """
     # Assemble full set of EventKeyHandler-s from predifined ones and custom.
     bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]] = dict(custom_rules)
-    if "aw-watcher-afk" not in bucket_prefix_to_ruleshandler:
-        bucket_prefix_to_ruleshandler["aw-watcher-afk"] = [EventKeyHandler('status', [
-            Rule("afk", AFK_RULE_PRIORITY, skip=True),
-            Rule("not-afk", 1, is_placeholder=True)
-        ])]
-    if "aw-stopwatch" not in bucket_prefix_to_ruleshandler:
-        bucket_prefix_to_ruleshandler["aw-stopwatch"] = [EventKeyHandler('label', [
-            Rule(".*", 0, subhandler=EventKeyHandler('running', [
-                Rule("true", WATCHDOG_RULE_PRIORITY),
-                Rule("false", 0, skip=True)  # Even if it is the only event in interval it carries no activity.
-            ]))
-        ])]
+    if BUCKET_AFK_PREFIX not in bucket_prefix_to_ruleshandler:
+        bucket_prefix_to_ruleshandler[BUCKET_AFK_PREFIX] = DEFAULT_AFK_RULES
+    if BUCKET_STOPWATCH_PREFIX not in bucket_prefix_to_ruleshandler:
+        bucket_prefix_to_ruleshandler[BUCKET_STOPWATCH_PREFIX] = DEFAULT_STOPWATCH_RULES
     # Prepare to loop through intervals with searching rules, building report and metrics.
     # Go to the first interval.
     cur_interval: Interval = interval.iterate_prev()
@@ -197,7 +204,8 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     activities: List[Activity] = []
     metrics = {  # Put default metrics. Next it will be appended by per-rule metrics.
         'total intervals': (0, 0.0),
-        'events without handlers': (0, 0.0),
+        'not afk intervals': (0, 0.0),
+        'intervals with unknows events': (0, 0.0),
         'intervals without rules': (0, 0.0),
         'intervals merged to next rule': (0, 0.0),
         'intervals with rule to skip': (0, 0.0),
@@ -212,6 +220,10 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     while cur_interval.next:
         cur_interval = cur_interval.next
         rule_result = _find_out_rule_for_interval(cur_interval, metrics, bucket_prefix_to_ruleshandler, ignore_hints)
+        # Gather some important metrics at start.
+        is_not_afk = any(x.bucket_id.startswith(BUCKET_AFK_PREFIX) for x in cur_interval.events)
+        if is_not_afk:
+            _increment_metric(metrics, 'not afk intervals', cur_interval)
         # NOTE: order is very important below.
         # Decide whether to count this interval or not and update metrics.
         if rule_result is None:
@@ -267,4 +279,4 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                 is_start_new_window = False
         if is_start_new_window:
             window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
-    return activities, rules_counter, metrics
+    return AnalyzerResult(activities, rules_counter, metrics)

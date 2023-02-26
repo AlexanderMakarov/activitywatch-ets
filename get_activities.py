@@ -9,10 +9,10 @@ from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELT
 from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date
 from activity_merger.domain.merger import report_from_buckets
 from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter
-from activity_merger.domain.output_entities import Activity
+from activity_merger.domain.output_entities import Activity, AnalyzerResult
 
 
-def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: List[str]) -> List[Activity]:
+def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: List[str]) -> AnalyzerResult:
     """
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
     analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
@@ -35,21 +35,23 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
         LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
         return []
     # Convert (assemble) intervals list into activities.
-    activities, activity_counter, metrics = analyze_intervals(interval, MIN_DURATION_SEC, RULES, ignore_hints)
+    analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, ignore_hints)
     # Print metrics as is.
-    sorted_metric_entries = sorted(metrics.items(), key=lambda x: x[1][1], reverse=True)
+    sorted_metric_entries = sorted(analyzer_result.metrics.items(), key=lambda x: x[1][1], reverse=True)
     LOG.info("Metrics from intervals analysis (%s):\n  %s",
-             len(metrics),
-             "\n  ".join(f"{x[1][0]:4} on {datetime.timedelta(seconds=x[1][1])} - {x[0]}" for x in sorted_metric_entries))
+             len(analyzer_result.metrics),
+             "\n  ".join(f"{x[1][0]:4} on {datetime.timedelta(seconds=x[1][1])} - {x[0]}"
+                         for x in sorted_metric_entries))
     # Print "less than MIN_DURATION_SEC" values from 'activity_counter'.
-    dumb_activities = [
-        f"{seconds_to_int_timedelta(v)} {k}" for k, v in activity_counter.most_common() if v >= MIN_DURATION_SEC
-    ]
+    dumb_activities = [f"{seconds_to_int_timedelta(v)} {k}"
+                       for k, v in analyzer_result.rule_results_counter.most_common() if v >= MIN_DURATION_SEC]
     LOG.info("There were %d 'equal' activities with %d longer than %d seconds:\n  %s",
-             len(activity_counter), len(dumb_activities), MIN_DURATION_SEC, "\n  ".join(dumb_activities))
+             len(analyzer_result.rule_results_counter), len(dumb_activities), MIN_DURATION_SEC,
+             "\n  ".join(dumb_activities))
     # Print resulting activities as is. Order is important here.
-    LOG.info("Assembled %d activities:\n  %s", len(activities), "\n  ".join(str(x) for x in activities))
-    return activities
+    LOG.info("Assembled %d activities:\n  %s", len(analyzer_result.activities),
+             "\n  ".join(str(x) for x in analyzer_result.activities))
+    return analyzer_result
 
 
 def main():
