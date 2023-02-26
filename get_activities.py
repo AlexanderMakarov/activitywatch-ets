@@ -75,7 +75,6 @@ def main():
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
         events_date = (events_date - datetime.timedelta(days=args.back_days))
-    # TODO need interactive way to merge activities
     convert_aw_events_to_activities(events_date, args.ignore_hints)
 
 

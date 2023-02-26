@@ -90,6 +90,7 @@ Note that for `RULES` configuration it would be great to have:
 - [x] Fix get_outlook_events.py: removes plugins.
 - [x] Fix get_outlook_events.py: skips 'free' events.
 - [x] Debug: write a script to export all buckets data for a specific date.
+- [ ] Add debugging buckets to produce insights about rules work into ActivityWatch UI "Timeline" page. 
 - [ ] Complete get_activities.py
 - [ ] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust `RULES` and code if need.
@@ -100,3 +101,4 @@ Note that for `RULES` configuration it would be great to have:
 - [ ] Prepare for distribution.
 - [ ] Importers - support parsing few days at once.
 - [ ] OWA importer - adopt Chrome as well.
+- [ ] Interactive way to merge activities.
