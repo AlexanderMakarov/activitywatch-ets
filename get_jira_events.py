@@ -56,7 +56,7 @@ def _calculate_diff(old_value: str, new_value: str) -> Tuple[str, int]:
 
 
 def _parse_events_from_story_without_duration(story: jira.resources.PropertyHolder, jira_id: str,\
-        created: datetime.datetime) -> Tuple[List[Event], Set[str]]:
+        summary: str, created: datetime.datetime) -> Tuple[List[Event], Set[str]]:
     unsupported_fields = set()  # For debugging custom Jira projects/servers.
     events = []
     for item in story.items:
@@ -92,9 +92,10 @@ def _parse_events_from_story_without_duration(story: jira.resources.PropertyHold
         # Make separate event for each change in issue - flat events are easier to handle.
         events.append(Event(JIRA_BUCKET_ID, created, None, {
             'jira_id': jira_id,
+            'title': summary,
             'field': field,
-            'change_desc': change_desc,
             'symbols_count': symbols_count,  # Some gauge of "how many effort was added" TODO
+            'change_desc': change_desc,
         }))
     return events, unsupported_fields
 
@@ -121,23 +122,25 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
     change_date = ensure_datetime(change_date).date()
     for issue in issues:
         jira_id = issue.key
+        title = issue.fields.summary if hasattr(issue.fields, 'summary') else "<cannot parse>"
         # Don't use 'raw' value(s) because Jira may rename fields.
         # Note that Jira history is provided in reversed order. They will be ordered by date later on.
         for story in issue.changelog.histories:
-            # Skip changes by other people or by not signed actors. 
+            # Skip changes by other people or by not signed actors.
             if not hasattr(story.author, 'emailAddress') or story.author.emailAddress != author_email:
                 continue
             # Skip changes made other date.
             created = datetime.datetime.strptime(story.created, JIRA_DATETIME_FORMAT)
             if created.date() != change_date:
                 continue
-            story_events, story_unsupported_fields = _parse_events_from_story_without_duration(story, jira_id, created)
+            story_events, story_unsupported_fields = _parse_events_from_story_without_duration(story, jira_id,
+                                                                                               title, created)
             events.extend(story_events)
             unsupported_fields.update(story_unsupported_fields)
     unsupported_desc = " All fields are supported." if not unsupported_fields else\
         " During parsing handled with 'default' behavior following unknown fields from Jira issues: "\
             + str(unsupported_fields)
-    LOG.info(f"Parsed {len(events)} events from {len(issues)} issues.{unsupported_desc}")
+    LOG.info("Parsed %d events from %d issues.%s", len(events), len(issues), unsupported_desc)
     if len(events) <= 0:
         return []
     # Here events created on "per issue" basis though doesn't have durations and may intersect. Also theirs 'timestamp'
@@ -145,8 +148,8 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
     # Need to sort, set 'duration' and maybe tune 'timestamp' to make one consequitive line of "not too short" events.
     events = sorted(events, key=lambda x: x.timestamp)
     if LOG.level <= logging.DEBUG:
-        LOG.debug("Having following events without durations yet:\n  "
-                  + "\n  ".join(_format_jira_event_for_log(x) for x in events))
+        LOG.debug("Having following events without durations yet:\n  %s",
+                  "\n  ".join(_format_jira_event_for_log(x) for x in events))
         LOG.debug("Calculating duration and adjusting events:")
     result_events = []
     # If try to adjust "previous" only event if new one too short then it is not enough for Jira.
@@ -227,7 +230,7 @@ def main():
                         help=f"Flag to delete ActivityWatch '{JIRA_BUCKET_ID}' bucket first."
                              " Removes all previous events in it, for all time.")
     parser.add_argument('--dry-run', dest='is_dry_run', action='store_true',
-                        help=f"Flag to just log events but don't upload into ActivityWatch.")
+                        help="Flag to just log events but don't upload into ActivityWatch.")
     args = parser.parse_args()
     search_date = args.search_date
     if args.back_days:
@@ -235,13 +238,14 @@ def main():
             f"'back_days' value ({args.back_days}) should be positive or 0."
         search_date = (datetime.datetime.today().astimezone() - datetime.timedelta(days=args.back_days))
     projects = [str(x).strip() for x in args.projects.split(',')]  # Clean up input from extra spaces.
+    # Get "touched" Jira issues list.
     issues = _get_jira_issues(args.server, args.email, args.api_token, projects, search_date)
-    LOG.info(f"Received {len(issues)} issues from Jira [{args.projects}] projects.")
+    LOG.info("Received %d issues from Jira [%s] projects.", len(issues), args.projects)
     events = get_events_from_jira(issues, args.email, search_date)
-    LOG.info(f"Ready to upload {len(events)} events:" + "\n  " + "\n  ".join(event_to_str(x) for x in events))
+    LOG.info("Ready to upload %d events:\n  %s", len(events), "\n  ".join(event_to_str(x) for x in events))
     if not events:
-        LOG.warning(f"Can't find Jira activity on {args.search_date} for {args.email} account in "
-                    f"[{args.projects}] projects.")
+        LOG.warning("Can't find Jira activity on %s for %s account in [%s] projects.",
+                    args.search_date, args.email, args.projects)
     # Load events into ActivityWatcher
     if not args.is_dry_run:
         LOG.info(upload_events(events, JIRA_SCRAPER_NAME, "jira.issue.activity", JIRA_BUCKET_ID,
