@@ -8,10 +8,49 @@ from typing import List
 from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES,\
                                           DEBUG_BUCKETS_IMPORTER_NAME, BUCKET_DEBUG_RAW_RULE_RESULTS,\
                                           BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
+from activity_merger.domain.interval import Interval
 from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date, upload_events
 from activity_merger.domain.merger import report_from_buckets
-from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter
+from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, ANALYZE_MODE_ACTIVITIES,\
+                                            ANALYZE_MODE_DEBUG
 from activity_merger.domain.output_entities import AnalyzerResult
+
+
+def get_interval(events_date: datetime.datetime, client: aw_client.ActivityWatchClient) -> Interval:
+    """
+    Connects to ActivityWatch, gets list of buckets and builds linked list of `Interval`-s representing events.
+    :param events_date: Date to get events for.
+    :param client: ActivityWatch client to use.
+    :return: Linked list of `Interval`-s.
+    """
+    try:
+        buckets = client.get_buckets()
+    except Exception as ex:
+        LOG.exception("Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", ex,
+                      exc_info=True)
+        exit(1)
+    LOG.info("Buckets: [%s]", ", ".join(buckets.keys()))
+    # Build time-ordered linked list of intervals by provided events.
+    return report_from_buckets(client, events_date.date(), events_date.date() + datetime.timedelta(days=1),
+                               buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)
+
+
+def upload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.ActivityWatchClient):
+    """
+    Uploads events representing analyzer debug information into ActivityWatch "debug" buckets. Removes these
+    bucket preliminary.
+    :param analyzer_result: Result to get data from.
+    :param client: ActivityWatch client to use.
+    """
+    if analyzer_result.raw_rule_result_debug_events:
+        LOG.info(upload_events(analyzer_result.raw_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
+                               BUCKET_DEBUG_RAW_RULE_RESULTS, True, client=client))
+    if analyzer_result.final_rule_result_debug_events:
+        LOG.info(upload_events(analyzer_result.final_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
+                               BUCKET_DEBUG_FINAL_RULE_RESULTS, True, client=client))
+    if analyzer_result.activity_debug_events:
+        LOG.info(upload_events(analyzer_result.activity_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
+                               BUCKET_DEBUG_ACTIVITES, True, client=client))
 
 
 def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: List[str],
@@ -26,22 +65,16 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     "debugging" buckets.
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
-    try:
-        buckets = client.get_buckets()
-    except Exception as e:
-        LOG.exception("Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", e,
-                      exc_info=True)
-        exit(1)
-    LOG.info("Buckets: [%s]", ", ".join(buckets.keys()))
     # Build time-ordered linked list of intervals by provided events.
-    interval = report_from_buckets(client, events_date.date(), events_date.date() + datetime.timedelta(days=1),
-        buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)
+    interval = get_interval(events_date, client)
     if interval is None:
         LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
         return []
     # Convert (analyze) intervals list into activities.
-    analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, ignore_hints,
-                                                        is_import_debug_buckets)
+    analyzer_result: AnalyzerResult = analyze_intervals(
+        interval, MIN_DURATION_SEC, RULES, ignore_hints,
+        ANALYZE_MODE_DEBUG if is_import_debug_buckets else ANALYZE_MODE_ACTIVITIES
+    )
     # Print metrics as is.
     sorted_metric_entries = sorted(analyzer_result.metrics.items(), key=lambda x: x[1][1], reverse=True)
     LOG.info("Metrics from intervals analysis (%s):\n  %s",
@@ -59,15 +92,7 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
              "\n  ".join(str(x) for x in analyzer_result.activities))
     # Import debugging buckets if need.
     if is_import_debug_buckets:
-        if analyzer_result.raw_rule_result_debug_events:
-            LOG.info(upload_events(analyzer_result.raw_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
-                                   "activitymerger.debug.rawruleresults", BUCKET_DEBUG_RAW_RULE_RESULTS, True))
-        if analyzer_result.final_rule_result_debug_events:
-            LOG.info(upload_events(analyzer_result.final_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
-                                   "activitymerger.debug.finalruleresults", BUCKET_DEBUG_FINAL_RULE_RESULTS, True))
-        if analyzer_result.activity_debug_events:
-            LOG.info(upload_events(analyzer_result.activity_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
-                                   "activitymerger.debug.activities", BUCKET_DEBUG_ACTIVITES, True))
+        upload_debug_buckets(analyzer_result, client)
     return analyzer_result
 
 

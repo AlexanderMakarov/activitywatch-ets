@@ -64,29 +64,31 @@ def ensure_datetime(d):  # https://stackoverflow.com/a/29840081/1535127
     return datetime.datetime(d.year, d.month, d.day).astimezone(CURRENT_TIMEZONE)
 
 
-def upload_events(events: List[Event], aw_client_name: str, event_type: str, bucket_id: str, is_replace: bool = False
-                  ) -> str:
+def upload_events(events: List[Event], event_type: str, bucket_id: str, is_replace: bool = False,
+                  aw_client_name: str = "upload_events", client: aw_client.ActivityWatchClient = None) -> str:
     """
     Takes list of `Event`-s, converts them into ActivityWatch events, creates new ActivityWatch client, removes bucket
     if need, creates bucket and uploads events into it.
     :param events: List of events to upload.
-    :param aw_client_name: Name of client for ActivityWatch.
     :param event_type: Type of event to set for the bucket. Means nothing.
     :param bucket_id: Name of bucket to put events into or recreate.
     :param is_replace: Flag to force remove bucket first.
+    :param aw_client_name: Name of client for ActivityWatch. Not needed if client is specified externally.
+    :param client: ActivityWatch client to use. By-default new client will be created.
     :return: String with representation of implemented actions.
     """
     # Convert into ActivityWatch clients.
     aw_events = [awmodels.Event(timestamp=x.timestamp, duration=x.duration, data=x.data) for x in events]
     result = ""
     # Build client, check than bucket is created and insert events.
-    client = aw_client.ActivityWatchClient(aw_client_name)
+    if not client:
+        client = aw_client.ActivityWatchClient(aw_client_name)
     if is_replace:
         try:
             client.delete_bucket(bucket_id, True)
             result += "Deleted '" + bucket_id + "' bucket.\n"
-        except Exception as e:
-            result += "Wasn't able to delete '" + bucket_id + "' bucket because: " + str(e) + "\n"
+        except Exception as ex:
+            result += "Wasn't able to delete '" + bucket_id + "' bucket because: " + str(ex) + "\n"
     client.create_bucket(bucket_id, event_type=event_type)  # Will return 304 if bucket exists.
     client.insert_events(bucket_id, aw_events)  # Actually returns None.
     result += f"Uploaded {len(aw_events)} events into local ActivityWatch '{bucket_id}' bucket."

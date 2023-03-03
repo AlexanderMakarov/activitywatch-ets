@@ -248,8 +248,8 @@ def main():
                     args.search_date, args.email, args.projects)
     # Load events into ActivityWatcher
     if not args.is_dry_run:
-        LOG.info(upload_events(events, JIRA_SCRAPER_NAME, "jira.issue.activity", JIRA_BUCKET_ID,
-                               args.is_replace_bucket))
+        LOG.info(upload_events(events, JIRA_SCRAPER_NAME, JIRA_BUCKET_ID, args.is_replace_bucket,
+                               aw_client_name="jira.issue.activity"))
 
 
 if __name__ == '__main__':

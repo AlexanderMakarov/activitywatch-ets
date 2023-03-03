@@ -386,11 +386,11 @@ def main():
     args = parser.parse_args()
     events = get_events_from_owa(args.profile_path, args.owa_url, args.headless, events_date=args.events_date, 
                                  back_days=args.back_days, date_label=args.date_label)
-    LOG.info(f"Ready to upload {len(events)} events:" + "\n  " + "\n  ".join(str(x) for x in events))
+    LOG.info("Ready to upload %d events:\n  %s", len(events), "\n  ".join(str(x) for x in events))
     # Load events into ActivityWatcher
     if not args.is_dry_run:
-        LOG.info(upload_events(events, OWA_SCRAPER_NAME, "owa365.calendar.event", OWA_BUCKET_ID,
-                               args.is_replace_bucket))
+        LOG.info(upload_events(events, OWA_SCRAPER_NAME, OWA_BUCKET_ID, args.is_replace_bucket,
+                               aw_client_name="owa365.calendar.event"))
 
 
 if __name__ == '__main__':

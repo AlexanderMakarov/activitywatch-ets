@@ -90,7 +90,15 @@ Note that for `RULES` configuration it would be great to have:
 - [x] Fix get_outlook_events.py: removes plugins.
 - [x] Fix get_outlook_events.py: skips 'free' events.
 - [x] Debug: write a script to export all buckets data for a specific date.
-- [ ] Add debugging buckets to produce insights about rules work into ActivityWatch UI "Timeline" page. 
+- [x] Add debugging buckets to produce insights about rules work into ActivityWatch UI "Timeline" page.
+- [ ] Made a tool to help build rules. See z1 and mark
+  - "skip" (non-working or AFK),
+  - "merge_next" (e.g. for "unknown"),
+  - "these events" (1 or few if not sure which points on activity better)
+  In result need to provide user with list of problems which would lead to reconsideration
+  or creating more precise rules (subhandlers).
+  Better to remember answers or provide ability to reiterate only some of events, for example
+  those where were issues previous iteration. It means database...
 - [ ] Complete get_activities.py
 - [ ] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust `RULES` and code if need.

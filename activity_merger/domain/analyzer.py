@@ -23,6 +23,10 @@ DEFAULT_STOPWATCH_RULES = [EventKeyHandler('label', [
         Rule("false", 0, skip=True)
     ]))
 ])]
+ANALYZE_MODE_ACTIVITIES = "FOR_ACTIVITIES"
+ANALYZE_MODE_DEBUG = "FOR_DEBUG"
+ANALYZE_MODE_TUNER = "FOR_TUNER"
+ANALYZE_MODES = [ANALYZE_MODE_ACTIVITIES, ANALYZE_MODE_DEBUG, ANALYZE_MODE_TUNER]
 
 
 def _increment_metric(metrics: Dict[str, Tuple[int, float]], metric_name: str, interval: Interval):
@@ -176,7 +180,7 @@ def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int
 
 
 def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, List[EventKeyHandler]],
-        ignore_hints: List[str], is_build_debug_buckets: bool) -> AnalyzerResult:
+        ignore_hints: List[str], analyze_mode: str = ANALYZE_MODE_ACTIVITIES) -> AnalyzerResult:
     """
     Analyzes linked list of 'Interval'-s to convert them into list of 'Activity'-es and provide explanation about
     how well it was done.
@@ -184,8 +188,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
     :param rules: User-specific/crafted map of `EventKeyHandler`-s to event buckets (by name prefix).
     :param ignore_hints: List of problems to disable in logs.
-    :param is_build_debug_buckets: Flag to assemble debugging information as events for ActivityWatch
-    "debugging" buckets.
+    :param analyze_mode: Mode to analyze intervals linked list. See constants starting with `ANALYZE_MODE`.
     :return: Tuple of:
     1 - List of assembled `Activity`-es.
     2 - `Counter` of intervals-by-rule description-s to sum of their durations.
@@ -193,6 +196,9 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     3 - Map of metrics to estimate report quality/coverage and improve rules.
         Key is name of metric, value is tuple [number_of_intervals, sum_of_durations].
     """
+    if analyze_mode not in ANALYZE_MODES:
+        raise ValueError(f"Analyze mode '{analyze_mode}' is not supported. Are supported only {ANALYZE_MODES}.")
+    is_build_debug_buckets = analyze_mode in (ANALYZE_MODE_DEBUG, ANALYZE_MODE_TUNER)
     # Assemble full set of EventKeyHandler-s from predifined ones and custom.
     bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]] = dict(custom_rules)
     if BUCKET_AFK_PREFIX not in bucket_prefix_to_ruleshandler:
@@ -254,8 +260,8 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             deferred_intervals = []
         # Check if rule says skip interval from the report.
         if rule_result.rule.skip:
-            LOG.debug(f"Skipping {duration:.1f} sec {len(rule_result.intervals)} interval(s) "
-                      f"because of {rule_result.rule} priority is highest for {rule_result.event}.")
+            LOG.debug("Skipping %f sec %d interval(s) because of %s priority is highest for %s.",
+                      round(duration, 1), len(rule_result.intervals), rule_result.rule, rule_result.event)
             _increment_metric(metrics, 'intervals with rule to skip', cur_interval)
             continue
         # Check if rule is a placeholder and provide all information about interval to write appropriate rule for it.
