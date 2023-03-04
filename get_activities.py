@@ -53,29 +53,11 @@ def upload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.Acti
                                BUCKET_DEBUG_ACTIVITES, True, client=client))
 
 
-def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: List[str],
-                                    is_import_debug_buckets: bool) -> AnalyzerResult:
+def print_analyzer_result(analyzer_result: AnalyzerResult):
     """
-    Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
-    analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
-    prints them into output.
-    :param events_date: Date to get events on.
-    :param ignore_hints: List of problems to disable in logs.
-    :param is_import_debug_buckets: Flag to assemble and import into ActivityWatch debugging information as events for
-    "debugging" buckets.
+    Prints 'AnalyzerResult' content as INFO logs.
+    :param analyzer_result: Object to describe data in.
     """
-    client = aw_client.ActivityWatchClient(os.path.basename(__file__))
-    # Build time-ordered linked list of intervals by provided events.
-    interval = get_interval(events_date, client)
-    if interval is None:
-        LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
-        return []
-    # Convert (analyze) intervals list into activities.
-    analyzer_result: AnalyzerResult = analyze_intervals(
-        interval, MIN_DURATION_SEC, RULES, ignore_hints,
-        ANALYZE_MODE_DEBUG if is_import_debug_buckets else ANALYZE_MODE_ACTIVITIES
-    )
-    # Print metrics as is.
     sorted_metric_entries = sorted(analyzer_result.metrics.items(), key=lambda x: x[1][1], reverse=True)
     LOG.info("Metrics from intervals analysis (%s):\n  %s",
              len(analyzer_result.metrics),
@@ -90,7 +72,32 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     # Print resulting activities as is. Order is important here.
     LOG.info("Assembled %d activities:\n  %s", len(analyzer_result.activities),
              "\n  ".join(str(x) for x in analyzer_result.activities))
-    # Import debugging buckets if need.
+
+
+def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: List[str],
+                                    is_import_debug_buckets: bool) -> AnalyzerResult:
+    """
+    Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
+    analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
+    prints them into output.
+    :param events_date: Date to get events on.
+    :param ignore_hints: List of problems to disable in logs.
+    :param is_import_debug_buckets: Flag to assemble and import into ActivityWatch debugging information as events for
+    "debugging" buckets.
+    :return: 'AnalyzerResult' object or 'None' if no intervals to analyze were found.
+    """
+    client = aw_client.ActivityWatchClient(os.path.basename(__file__))
+    # Build time-ordered linked list of intervals by provided events.
+    interval = get_interval(events_date, client)
+    if interval is None:
+        LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
+        return None
+    # Convert (analyze) intervals list into activities.
+    analyzer_result: AnalyzerResult = analyze_intervals(
+        interval, MIN_DURATION_SEC, RULES, ignore_hints,
+        ANALYZE_MODE_DEBUG if is_import_debug_buckets else ANALYZE_MODE_ACTIVITIES
+    )
+    print_analyzer_result(analyzer_result)
     if is_import_debug_buckets:
         upload_debug_buckets(analyzer_result, client)
     return analyzer_result

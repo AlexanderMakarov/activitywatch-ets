@@ -103,7 +103,7 @@ class Interval:
         """
         Iterates 'prev' intervals with checking order of nodes.
         :param checker: Lambda to return True if provided `Interval` is searched one.
-        :return: `Interval` where given checker responded with `True`, otherwise last `Interval`.
+        :return: `Interval` where given checker responded with `True`, otherwise first `Interval`.
         """
         if checker and checker(self):
             return self

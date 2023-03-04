@@ -3,3 +3,5 @@
 *.log
 *.png
 .vscode
+config*.py
+*.pickle
