@@ -1,5 +1,5 @@
 aw-client
-requests
-selenium
-parameterized
-jira
+parameterized  # For unit tests only.
+selenium  # For get_outlook_events.py only.
+jira  # For get_jira_events.py only.
+dill  # For tune_rules.py only. Pickle wrapper working with lambdas.
