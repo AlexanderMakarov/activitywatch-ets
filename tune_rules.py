@@ -109,15 +109,21 @@ class TerminalLeader:
         sys.stdout.flush()
         return self.read_user_input().lower() == "y"
 
-    def _ask_multiselect(self, options: List[str], title: str) -> List[str]:
-        result = pick(options, title, multiselect=True, default_index=2, min_selection_count=1)
-        # self.clean_lines(len(options) + 1)
+    def _ask_multiselect(self, options: List[str], question: str) -> List[str]:
+        """
+        Draws multiple lines of text on the screen with options to choose one or few. Cleans console after itself.
+        :param options: List of options to choose.
+        :param question: Question choose options for.
+        :return: List of chosen options.
+        """
+        # 'pick' library cleans screen and draws menu with options. At end disappears and leaves old content.
+        result = pick(options, question, multiselect=True, default_index=2, min_selection_count=1)
         return result
 
     def _ask_decision(self, interval: Interval) -> List[Any]:
         title = interval.to_str(only_time=True) + ":"
         SKIP_TEXT = 'skip from activities'
-        MERGE_TEXT = 'merge with next interval'
+        MERGE_TEXT = 'merge with next interval' + "--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
         options = {  # Use keys as 'value to present to user' and values to return result.
             SKIP_TEXT: Decision.SKIP,
             MERGE_TEXT: Decision.MERGE_NEXT,
@@ -140,7 +146,7 @@ class TerminalLeader:
         return [options[x] for x in selected]
 
     def ask_decisions(self, undecided_list: List[Decision]) -> bool:
-        self.ask_yes_no("Next will be presented intervals with options to choose."
+        self.ask_yes_no("Next will be presented intervals with options to choose. "
                         "Point (with \u2191 and \u2193) and press 'space' on one or few options "
                         "you expect to represent this interval. Press 'Enter' to apply and proceed. "
                         "Choose nothing to stop deciding. Ready?")
@@ -156,7 +162,10 @@ class TerminalLeader:
 
 
 class UnixTerminalLeader(TerminalLeader):
-    ANSI_ERASE_LINE = '\u001b[2K'  # Clear the whole line.
+    ANSI_ERASE_LINE = '\u001b[2K'  # Clear the whole line where cursor is placed.
+    ANSI_CURSOR_UP = '\u001b[1A'  # Move cursor up (don't forget '\r' to put it on start of line).
+    ANSI_CLEAR_PREVIOUS_LINE = '\033[A\033[A'
+    ANSI_HIDE_CURSOR = '\033[?25l'
     ANSI_FONT_DECORATION_STOP = '\u001b[0m'
     ANSI_FONT_DECORATION_BOLD = '\u001b[1m'
     ANSI_FONT_DECORATION_UNDERLINE = '\u001b[4m'
@@ -216,64 +225,92 @@ class UnixTerminalLeader(TerminalLeader):
         return user_input
 
     def clean_lines(self, cnt: int):
-        sys.stdout.write([self.ANSI_ERASE_LINE] * cnt)
+        # sys.stdout.write("".join(["\r%s\%s" % (self.ANSI_ERASE_LINE, self.ANSI_CURSOR_UP)] * cnt))
+        sys.stdout.write("".join([self.ANSI_CLEAR_PREVIOUS_LINE] * cnt))
         sys.stdout.flush()
 
-    def _move_option_cursor(self, options: List[Tuple], is_up: bool) -> List[Tuple]:
-        for i, option in enumerate(options):
+    def _move_menu_cursor_and_reprint(self, menu: List[List], is_down: bool):
+        pointed = [i for i, x in enumerate(menu) if x[1]]  # Get index or empty list.
+        # Calculate desired position.
+        desired_position: int
+        if not pointed:
+            desired_position = 0
+        else:
+            current_position = pointed[0]
+            desired_position = current_position
+            if is_down:
+                if current_position < len(menu) - 1:
+                    desired_position = current_position + 1
+            else:
+                if current_position > 0:
+                    desired_position = current_position - 1
+        # Change position.
+        menu[current_position][1] = False
+        menu[desired_position][1] = True
+        self.clean_lines(len(menu))
+        self._print_menu(menu)
 
+    def _select_menu_item_and_reprint(self, menu: List[List]):
+        for item in menu:
+            if item[1]:
+                item[2] = True
+                self._move_menu_cursor_and_reprint(menu, True)
+                return
 
-    def _print_multiselect(self, options: List[Tuple], title: str):
-        # option = (description, is_cursor, is_selected)
-        sys.stdout.write("\r" + title)
-        for i, option in enumerate(options):
-            buffer = '\r '
-            buffer += '-> (' if option[1] else '   ('
-            buffer += ' ) ' if option[2] else '*) '
-            buffer += option[0]
-            sys.stdout.write("\r    ( ) " + option[0])
-            sys.stdout.flush()
+    def _print_menu(self, menu: List[List]):
+        # item = [description, is_cursor, is_selected]
+        for item in menu:
+            buffer = '\n '
+            buffer += '-> (' if item[1] else '   ('
+            buffer += '*) ' if item[2] else ' ) '
+            buffer += item[0]
+            sys.stdout.write(buffer)
+        sys.stdout.flush()
 
-    def _ask_multiselect(self, options: List[str], title: str) -> List[str]:
-        data = [(x, False, False) for x in options]
-        data[0] = (data[0][0], True, False)  # Set cursor on first option.
-        sys.stdout.write("\r" + title)
-        self._print_multiselect(data, title)
-        # Based on https://stackoverflow.com/a/47955341
-        # TODO https://stackoverflow.com/a/47197390/1535127
-        # Get TTY attributes.
+    def _ask_multiselect(self, options: List[str], question: str) -> List[str]:
+        menu = [[x, False, False] for x in options]
+        menu[0][1] = True  # Put cursor on the first option.
+        sys.stdout.write("\n" + question + self.ANSI_HIDE_CURSOR)
+        self._print_menu(menu)
+        # Based on https://stackoverflow.com/a/47955341 and https://stackoverflow.com/a/47197390/1535127
+        # Save and clone TTY attributes.
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         new = termios.tcgetattr(fd)
-        # Clone existing TTY attributes and correct them to read by one char.
+        # Correct TTY attributes to read single key strokes.
         new[3] = new[3] & ~termios.ICANON & ~termios.ECHO
         new[6][termios.VMIN] = 1
         new[6][termios.VTIME] = 0
-        # Read by char.
-        user_input = ''
+        # Listen key strokes.
         try:
             termios.tcsetattr(fd, termios.TCSANOW, new)
             key = []
+            is_exit = False
             while True:
-                input = os.read(fd, 3).decode()
-                if len(input) == 3:
-                    k = ord(input[2])  # All 3 numbers mean special key when code is a last number.
+                event = os.read(fd, 3).decode()
+                if len(event) == 3:
+                    k = ord(event[2])  # All 3 numbers mean special key when code is a last number.
                     key = UnixTerminalLeader.KEY_MAPPING.get(k, None)
-                    if key is None:
-                        continue
-                    elif key == 'up':
-
-                else:
-                    k = ord(input)  # Otherwise it is a character key.
-                
-
-
+                    if key == 'up':
+                        self._move_menu_cursor_and_reprint(menu, False)
+                    elif key == 'down':
+                        self._move_menu_cursor_and_reprint(menu, True)
+                elif len(event) == 1:
+                    if event[0] == ' ':  # Space to choose menu item.
+                        self._select_menu_item_and_reprint(menu)
+                    elif event[0] == '\n':  # Enter was hit.
+                        is_exit = True
+                    elif event[0] == '\x1b':  # Escape was hit.
+                        for item in menu:  # Clean all selected options to simulate "I just want to exit!".
+                            item[2] = False
+                        is_exit = True
+                if is_exit:
+                    self.clean_lines(len(options) + 1)  # +1 is to remove question as well.
+                    break
         finally:
             # Revert TTY attributes.
             termios.tcsetattr(fd, termios.TCSAFLUSH, old)
-
-        # self.clean_lines(len(options) + 1)
-        return result
+        return [options[0] for x in menu if x[2]]
 
     def build_letters_number_hint_word(self, hint: Event) -> str:
         return '%s%s%s%s%s' % (hint.prefix, self.ANSI_FONT_DECORATION_UNDERLINE, " " * hint.word_len,
