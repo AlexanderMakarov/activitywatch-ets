@@ -24,6 +24,11 @@ def get_interval(events_date: datetime.datetime, client: aw_client.ActivityWatch
     :return: Linked list of `Interval`-s.
     """
     try:
+        # Remove debug buckets because they may become sources of events.
+        client.delete_bucket(BUCKET_DEBUG_RAW_RULE_RESULTS, True)
+        client.delete_bucket(BUCKET_DEBUG_FINAL_RULE_RESULTS, True)
+        client.delete_bucket(BUCKET_DEBUG_ACTIVITES, True)
+        # Get existing buckets.
         buckets = client.get_buckets()
     except Exception as ex:
         LOG.exception("Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", ex,
