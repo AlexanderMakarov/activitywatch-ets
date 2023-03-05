@@ -179,6 +179,25 @@ def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int
     return rule_result
 
 
+def _window_to_activity(window: RuleResultsWindow, rule_result: RuleResult, activities: List[Activity],
+                        is_build_debug_buckets: bool, activity_debug_events: List[Event], round_to: float,
+                        ignore_hints: List[str]):
+    if window.duration < round_to:
+        ProblemReporter(ProblemReporter.TOO_SPECIFIC_RULE, rule_result=rule_result, window=window)\
+            .report(ignore_hints)
+        # Here may be a reason in "too specific" rules which leads to too small activities.
+        # But current algorithm doesn't allow to keep few sliding windows in parallel
+        # while person actually may switch too often between different activities.
+        # TODO _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
+    activity = window.to_activity()
+    activities.append(activity)
+    if is_build_debug_buckets:
+        activity_debug_events.append(
+            Event(BUCKET_DEBUG_ACTIVITES, activity.start_time, activity.duration, {
+                'description': rule_result.description,
+                'rule_results_count': len(activity.rule_results),
+            }))
+
 def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[str, List[EventKeyHandler]],
         ignore_hints: List[str], analyze_mode: str = ANALYZE_MODE_ACTIVITIES) -> AnalyzerResult:
     """
@@ -290,21 +309,9 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
             # Decide if current `RuleResult` is separate activity from previous ones and need to create `Activity` from
             # items accumulated in `activity_window` so far.
             if _is_new_activity(window, rule_result):
-                if window.duration < round_to:
-                    ProblemReporter(ProblemReporter.TOO_SPECIFIC_RULE, rule_result=rule_result, window=window)\
-                        .report(ignore_hints)
-                    # Here may be a reason in "too specific" rules which leads to too small activities.
-                    # But current algorithm doesn't allow to keep few sliding windows in parallel
-                    # while person actually may switch too often between different activities.
-                    # TODO _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
-                activity = window.to_activity()
-                activities.append(activity)
-                if is_build_debug_buckets:
-                    activity_debug_events.append(
-                        Event(BUCKET_DEBUG_ACTIVITES, activity.start_time, activity.duration, {
-                            'description': rule_result.description,
-                            'rule_results_count': len(activity.rule_results),
-                        }))
+                _window_to_activity(window, rule_result, activities, is_build_debug_buckets, activity_debug_events,
+                                    round_to, ignore_hints)
+                window = None
             else:
                 window.append(rule_result)
                 if window.duration > TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS:
@@ -314,5 +321,9 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                 is_start_new_window = False
         if is_start_new_window:
             window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
+    # Handle last window.
+    if window is not None:
+        _window_to_activity(window, rule_result, activities, is_build_debug_buckets, activity_debug_events,
+                            round_to, ignore_hints)
     return AnalyzerResult(activities, rules_counter, metrics,
                           raw_rule_result_debug_events, final_rule_result_debug_events, activity_debug_events)
