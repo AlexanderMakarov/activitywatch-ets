@@ -6,7 +6,7 @@ import argparse
 import copy
 # import pickle
 import dill as pickle  # For pickle-ing lambdas need to use 'dill' package.
-from typing import Any, List, Dict, Tuple
+from typing import Any, List, Dict
 import contextlib
 import aw_client
 # Don't use convenient pyinput because https://pynput.readthedocs.io/en/latest/limitations.html#platform-limitations
@@ -16,10 +16,10 @@ try:
 except ImportError:
     pass
 # For Windows terminal:
-# try:
-#     import msvcrt
-# except ImportError:
-#     pass
+try:
+    import msvcrt
+except ImportError:
+    pass
 from pick import pick
 
 from activity_merger.config.config import LOG, MIN_DURATION_SEC, RULES
@@ -94,6 +94,8 @@ class TerminalLeader:
     Abstract matching song leader which expects user answers in terminal. Wraps `Matcher`, manages "ask - answer -
     check" flow and prints statistic at the end. Delegates operating system specific actions to inheritors.
     """
+    SKIP_TEXT = 'skip from activities'
+    MERGE_TEXT = 'merge with next interval'
 
     def __init__(self):
         pass
@@ -105,6 +107,11 @@ class TerminalLeader:
         raise NotImplementedError()
 
     def ask_yes_no(self, question_without_yn: str) -> bool:
+        """
+        Prints question, appends ' [y/N]: ' legend to it and waits answer.
+        :param question_without_yn: Question string/sentence.
+        :return: `True` if user answered yes, `False` otherwise.
+        """
         sys.stdout.write(question_without_yn + " [y/n]: ")
         sys.stdout.flush()
         result = self.read_user_input().lower() == "y"
@@ -124,29 +131,39 @@ class TerminalLeader:
         return result
 
     def _ask_decision(self, interval: Interval) -> List[Any]:
-        question = interval.to_str(only_time=True)
-        SKIP_TEXT = 'skip from activities'
-        MERGE_TEXT = 'merge with next interval' + "--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
+        interval_desc = interval.to_str(only_time=True)
         options = {  # Use keys as 'value to present to user' and values to return result.
-            SKIP_TEXT: Decision.SKIP,
-            MERGE_TEXT: Decision.MERGE_NEXT,
+            self.SKIP_TEXT: Decision.SKIP,
+            self.MERGE_TEXT: Decision.MERGE_NEXT,
         }
         for event in interval.events:
-            options[event_data_to_str(event)] = event
+            options[f"{event.bucket_id}: {event_data_to_str(event)}"] = event
         # Start loop of asking. Because some answers may contradict each other.
-        decision_items: List[str]
+        result_desc_items: List[str]
+        result = []
         while True:
-            selected: List[str] = self._ask_multiselect_question(question, list(options.keys()))
-            decision_items = []
-            if SKIP_TEXT in selected:
-                decision_items.append('skip')
-            if MERGE_TEXT in selected:
-                decision_items.append('merge')
-            if len(decision_items) > 1:
-                pass
+            selected: List[str] = self._ask_multiselect_question(interval_desc, list(options.keys()))
+            # Check for validity.
+            if self.SKIP_TEXT in selected and self.MERGE_TEXT in selected:
+                LOG.warning("It is impossible to both %s and %s. Please reconsider.", self.SKIP_TEXT, self.MERGE_TEXT)
+                continue
+            # Build text explanation of choice.
+            result_desc_items = []  # Clear from previous attempt values.
+            result = []
+            for key in selected:
+                value = options.get(key, None)
+                result.append(value)
+                if isinstance(value, Event):
+                    result_desc_items.append(f"event from {value.bucket_id}")
+                elif value == Decision.SKIP:
+                    result_desc_items.append('skip')
+                elif value == Decision.MERGE_NEXT:
+                    result_desc_items.append('merge with next')
+                else:
+                    raise ValueError(f"Got wrong selected option '{key}.")
             break
-        LOG.info("%s %s", question, ', '.join(decision_items))
-        return [options[x] for x in selected]
+        LOG.info("%s %s", interval_desc, ', '.join(result_desc_items))
+        return result
 
     def ask_decisions(self, undecided_list: List[Decision]) -> bool:
         """
@@ -157,10 +174,16 @@ class TerminalLeader:
         """
         if not self.ask_yes_no("Proceed with 'decide for interval' session?"):
             return True
-        LOG.info("Next will be presented %d intervals with options to choose. "
-                 "Point (with \u2191 and \u2193) and press 'space' on one or few options you think should represent "
-                 "each interval. Press 'Enter' to apply and proceed. "
-                 "Press 'Escape' or choose nothing to stop deciding.", len(undecided_list))
+        sys.stdout.write(
+            "Next will be presented %d intervals with options to choose. "
+            "Point (with \u2191 and \u2193) and press 'Space' on one or few options you think should represent "
+            "each interval. Press 'Enter' to apply and proceed. Press 'Escape' or choose nothing to stop deciding."
+            "\nNote that for special behavior better to choose event as well because:\n"
+            "- %s - need to point event causing skipping,\n"
+            "- %s - need to point event which is most important and makes it borrow meaning of next interval.\n" % \
+            (len(undecided_list), self.SKIP_TEXT, self.MERGE_TEXT)
+        )
+        sys.stdout.flush()
         cnt_decided = 0
         for decision in undecided_list:
             selected = self._ask_decision(decision.interval)
@@ -193,17 +216,6 @@ class UnixTerminalLeader(TerminalLeader):
     KEY_DOWN = '\u1b5b42' #  '\x1b[B'
     KEY_LEFT = '\u1b5b44' #  '\x1b[D'
     KEY_RIGHT = '\u1b5b43' # '\x1b[C'
-    KEY_MAPPING = {
-        127: 'backspace',
-        10: 'return',
-        32: 'space',
-        9: 'tab',
-        27: 'esc',
-        65: 'up',
-        66: 'down',
-        67: 'right',
-        68: 'left'
-    }
 
     def read_user_input(self) -> str:  # Based on https://stackoverflow.com/a/47955341
         # Get TTY attributes.
@@ -242,16 +254,16 @@ class UnixTerminalLeader(TerminalLeader):
         return user_input
 
     def clean_lines(self, cnt: int):
-        # sys.stdout.write("".join(["\r%s\%s" % (self.ANSI_ERASE_LINE, self.ANSI_CURSOR_UP)] * cnt))
         sys.stdout.write("".join([self.ANSI_CLEAR_PREVIOUS_LINE] * cnt))
         sys.stdout.flush()
 
     def ask_yes_no(self, question_without_legend: str) -> bool:
+        # Also cleans question from the console.
+        self._save_cursor_position()
         sys.stdout.write(question_without_legend + " [y/n]: ")
         sys.stdout.flush()
         result = self.read_user_input().lower() == "y"
-        sys.stdout.write(self.ANSI_CLEAR_PREVIOUS_LINE)
-        sys.stdout.flush()
+        self._clear_up_to_saved_position()
         return result
 
     def _save_cursor_position(self):
@@ -303,7 +315,7 @@ class UnixTerminalLeader(TerminalLeader):
                 return
 
     def _ask_multiselect_question(self, question: str, options: List[str]) -> List[str]:
-        if not options:  # Avoid errors on building menu (smelling code below)
+        if not options:  # Avoid errors on building menu (simplified code below)
             raise ValueError("Empty options are provided.")
         # Modify TTY. Based on https://stackoverflow.com/a/47955341 and https://stackoverflow.com/a/47197390/1535127
         # Save and clone TTY attributes.
@@ -324,24 +336,22 @@ class UnixTerminalLeader(TerminalLeader):
             self._save_cursor_position_and_print_multiselect_question(question, menu)
             # Apply TTY modifications.
             termios.tcsetattr(fd, termios.TCSANOW, new)
-            key = []
             is_exit = False
             # Listen key strokes and modify menu.
             while True:
                 event = os.read(fd, 3).decode()
                 if len(event) == 3:
-                    k = ord(event[2])  # All 3 numbers mean special key when code is a last number.
-                    key = UnixTerminalLeader.KEY_MAPPING.get(k, None)
-                    if key == 'up':
+                    code = ord(event[2])  # All 3 numbers mean special key when code is a last number.
+                    if code == 65:  # Up
                         self._multiselect_question_move_cursor_and_reprint(question, menu, False)
-                    elif key == 'down':
+                    elif code == 66:  # Down
                         self._multiselect_question_move_cursor_and_reprint(question, menu, True)
                 elif len(event) == 1:
-                    if event[0] == ' ':  # Space to choose menu item.
+                    if event[0] == ' ':  # Space to set/unset menu item.
                         self._multiselect_question_switch_option_and_reprint(question, menu)
-                    elif event[0] == '\n':  # Enter was hit.
+                    elif event[0] == '\n':  # Enter
                         is_exit = True
-                    elif event[0] == '\x1b':  # Escape was hit.
+                    elif event[0] == '\x1b':  # Escape
                         for item in menu:  # Clean all selected options to simulate "I just want to exit!".
                             item[2] = False
                         is_exit = True
