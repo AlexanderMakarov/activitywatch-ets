@@ -41,15 +41,23 @@ event_5l5 = Event(4, build_datetime(5), build_timedelta(5), "event_5l5")
 class TestInterval(unittest.TestCase):
 
     @parameterized.expand([
+        # Search for date 5. (name, interval, expected start date of returned interval)
         (
-            "Simple the only interval",
+            "The only interval before",
             build_intervals_linked_list([
                 (1, True, 1, [event_3l5])
             ]),
             1
         ),
         (
-            "The same interval",
+            "The only interval after",
+            build_intervals_linked_list([
+                (6, True, 1, [event_3l5])
+            ]),
+            6
+        ),
+        (
+            "Start of current interval",
             build_intervals_linked_list([
                 (1, False, 1, [event_3l5]),
                 (5, True, 1, [event_3l5]),
@@ -58,70 +66,18 @@ class TestInterval(unittest.TestCase):
             5
         ),
         (
-            "Exact Interval right before",
-            build_intervals_linked_list([
-                (5, False, 1, [event_3l5]),
-                (6, True, 1, [event_3l5]),
-                (7, False, 1, [event_3l5])
-            ]),
-            5
-        ),
-        (
-            "Exact Interval right after",
-            build_intervals_linked_list([
-                (3, False, 1, [event_3l5]),
-                (4, True, 1, [event_3l5]),
-                (5, False, 1, [event_3l5])
-            ]),
-            5
-        ),
-        (
-            "Exact Interval far after",
-            build_intervals_linked_list([
-                (3, True, 1, [event_3l5]),
-                (4, False, 1, [event_3l5]),
-                (5, False, 1, [event_3l5]),
-                (6, False, 1, [event_3l5]),
-            ]),
-            5
-        ),
-        (
-            "Exact Interval far before",
-            build_intervals_linked_list([
-                (4, False, 1, [event_3l5]),
-                (5, False, 1, [event_3l5]),
-                (6, False, 1, [event_3l5]),
-                (7, True, 1, [event_3l5]),
-            ]),
-            5
-        ),
-    ])
-    def test_find_closest_by_start(self, test_name, interval, expected_start_seed):
-        target = build_datetime(5)
-        actual: Interval = interval.find_closest(target, datetime.timedelta(0), False)
-        expected = build_datetime(expected_start_seed)
-        self.assertEqual(actual.start_time, expected, f"'{test_name}' case failed.")
-
-    @parameterized.expand([
-        (
-            "Simple the only interval",
-            build_intervals_linked_list([
-                (1, True, 1, [event_3l5])
-            ]),
-            1
-        ),
-        (
-            "The same interval",
+            "End of current interval",
             build_intervals_linked_list([
                 (1, False, 1, [event_3l5]),
                 (4, True, 1, [event_3l5]),
-                (6, False, 1, [event_3l5]),
+                (5, False, 1, [event_3l5])
             ]),
-            4
+            5  # Should prefer interval with 'start'.
         ),
         (
-            "Exact Interval right before",
+            "End of interval right before",
             build_intervals_linked_list([
+                (3, False, 1, [event_3l5]),
                 (4, False, 1, [event_3l5]),
                 (6, True, 1, [event_3l5]),
                 (7, False, 1, [event_3l5]),
@@ -129,40 +85,88 @@ class TestInterval(unittest.TestCase):
             4
         ),
         (
-            "Exact Interval right after",
+            "Start of interval far before",
             build_intervals_linked_list([
-                (1, False, 1, [event_3l5]),
+                (5, False, 1, [event_3l5]),
+                (6, False, 1, [event_3l5]),
+                (7, False, 1, [event_3l5]),
+                (8, True, 1, [event_3l5]),
+            ]),
+            5
+        ),
+        (
+            "End of interval right after",
+            build_intervals_linked_list([
                 (3, True, 1, [event_3l5]),
                 (4, False, 1, [event_3l5]),
+                (5, False, 1, [event_3l5])
+            ]),
+            5  # Should prefer interval with 'start'.
+        ),
+        (
+            "Start of interval far after",
+            build_intervals_linked_list([
+                (3, True, 1, [event_3l5]),
                 (5, False, 1, [event_3l5]),
+                (6, False, 1, [event_3l5]),
+            ]),
+            5
+        ),
+        (
+            "Middle of current interval",
+            build_intervals_linked_list([
+                (3, False, 1, [event_3l5]),
+                (4, True, 2, [event_3l5]),
+                (6, False, 1, [event_3l5]),
             ]),
             4
         ),
         (
-            "Exact Interval far after",
+            "Middle of interval right before",
             build_intervals_linked_list([
-                (2, True, 1, [event_3l5]),
                 (3, False, 1, [event_3l5]),
-                (4, False, 1, [event_3l5]),
-                (5, False, 1, [event_3l5]),
+                (4, False, 2, [event_3l5]),
+                (6, True, 1, [event_3l5]),
             ]),
             4
         ),
         (
-            "Exact Interval far before",
+            "Middle of interval far before",
             build_intervals_linked_list([
-                (3, False, 1, [event_3l5]),
-                (4, False, 1, [event_3l5]),
+                (2, False, 1, [event_3l5]),
+                (4, False, 2, [event_3l5]),
                 (6, False, 1, [event_3l5]),
                 (7, True, 1, [event_3l5]),
             ]),
             4
         ),
+        (
+            "Middle of interval fight after",
+            build_intervals_linked_list([
+                (3, True, 1, [event_3l5]),
+                (4, False, 2, [event_3l5]),
+                (6, False, 1, [event_3l5]),
+            ]),
+            4
+        ),
+        (
+            "Middle of interval far after",
+            build_intervals_linked_list([
+                (2, True, 1, [event_3l5]),
+                (3, False, 1, [event_3l5]),
+                (4, False, 2, [event_3l5]),
+                (6, False, 1, [event_3l5]),
+            ]),
+            4
+        ),
     ])
-    def test_find_closest_by_end(self, test_name, interval: Interval, expected_start_seed):
+    def test_find_closest(self, test_name, interval, expected_start_seed):
+        # Arrange
         target = build_datetime(5)
-        actual: Interval = interval.find_closest(target, datetime.timedelta(0), True)
         expected = build_datetime(expected_start_seed)
+        # Act
+        actual: Interval = interval.find_closest(target, datetime.timedelta(0))
+        # Assert
         self.assertEqual(actual.start_time, expected, f"'{test_name}' case failed.")
 
     @parameterized.expand([

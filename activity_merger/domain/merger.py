@@ -75,7 +75,7 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
             metrics['cnt_skipped_too_short'] += 1
             continue
         # Compare closest interval boundaries with event boundaries and update intervals linked list.
-        # Following cases are possible:
+        # Following cases are possible (not all, see 'test_mergerer.py', 1st case is not enough):
         #   [-----]      <- existing interval boundaries (like 'afk')
         # ----------------------------------------------------------- events
         # []|     |       <- 1. skip as 'out of boundaries' or make an interval
@@ -99,10 +99,10 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
             metrics['cnt_handled_events'] += 1
             continue
         # Find closest interval started before event start time.
-        interval = interval.find_closest(event.timestamp, tolerance, by_end_time=False)
+        interval = interval.find_closest(event.timestamp, tolerance)
         # Declare some points to compare.
-        interval_end_minus_event_start = interval.compare_with_time(event.timestamp, tolerance, False)
-        interval_start_minus_event_end = interval.compare_with_time(event_end, tolerance, True)
+        interval_end_minus_event_start = interval.compare_with_time(event.timestamp, tolerance, is_start=False)
+        interval_start_minus_event_end = interval.compare_with_time(event_end, tolerance, is_start=True)
         # 1) If event completely before closest interval then skip or add new interval.
         if interval_start_minus_event_end <= 0:
             if is_make_intervals:
@@ -355,6 +355,7 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
             events.append(Event(bucket_id, prev_event.timestamp, prev_event.duration, prev_event.data))
             # Handle events.
             cur_interval, metrics = apply_events(events, cur_interval, tolerance)
+            # FYI: [x.to_str(debug=True) for x in cur_interval.get_range(offset=-100000, num=3)]
             print_metrics(metrics, cur_interval.get_count())
             buckets_cnt += 1
             check_and_print_intervals(cur_interval, buckets_cnt, bucket_id, logging.WARN)

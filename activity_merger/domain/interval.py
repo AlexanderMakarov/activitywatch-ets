@@ -78,13 +78,13 @@ class Interval:
         """
         return (self.end_time - self.start_time).total_seconds()
 
-    def iterate_next(self, checker: Callable[['Interval'], bool] = None) -> 'Interval':
+    def iterate_next(self, matcher: Callable[['Interval'], bool] = None) -> 'Interval':
         """
         Iterates 'next' intervals with checking order of nodes.
-        :param checker: Lambda to return True if provided `Interval` is searched one.
-        :return: `Interval` where given checker responded with `True`, otherwise last `Interval`.
+        :param matcher: Lambda to return `True` if provided `Interval` is searched one.
+        :return: `Interval` where given matcher responded with `True`, otherwise last (more recent) `Interval`.
         """
-        if checker and checker(self):
+        if matcher and matcher(self):
             return self
         interval = self
         while interval.next:
@@ -93,19 +93,18 @@ class Interval:
             if tmp.start_time <= interval.start_time or tmp.start_time < interval.end_time:
                 raise ValueError(f"Wrong 'next' link in '{interval}'->'{tmp}': "
                                  f"{tmp.start_time} expected to be after (greater) {interval.end_time}.")
-            # Finish check.
-            if checker and checker(tmp):
+            if matcher and matcher(tmp):
                 return tmp
             interval = tmp
         return interval
 
-    def iterate_prev(self, checker: Callable[['Interval'], bool] = None) -> 'Interval':
+    def iterate_prev(self, matcher: Callable[['Interval'], bool] = None) -> 'Interval':
         """
         Iterates 'prev' intervals with checking order of nodes.
-        :param checker: Lambda to return True if provided `Interval` is searched one.
-        :return: `Interval` where given checker responded with `True`, otherwise first `Interval`.
+        :param matcher: Lambda to return True if provided `Interval` is searched one.
+        :return: `Interval` where given matcher responded with `True`, otherwise first (oldest) `Interval`.
         """
-        if checker and checker(self):
+        if matcher and matcher(self):
             return self
         interval = self
         while interval.prev:
@@ -115,7 +114,7 @@ class Interval:
                 raise ValueError(f"Wrong 'prev' link in '{tmp}'<-'{interval}': "
                                  f"{tmp.end_time} expected to be before (lesser) {interval.start_time}.")
             # Finish check.
-            if checker and checker(tmp):
+            if matcher and matcher(tmp):
                 return tmp
             interval = tmp
         return interval
@@ -188,21 +187,36 @@ class Interval:
         diff = time - (self.start_time if is_start else self.end_time)
         return 0 if abs(diff) <= tolerance else diff.total_seconds()
 
-    def find_closest(self, date: datetime.datetime, tolerance: datetime.timedelta, by_end_time: bool) -> 'Interval':
+    def find_closest(self, date: datetime.datetime, tolerance: datetime.timedelta) -> 'Interval':
         """
-        Finds interval in the linked list with selectively `end_time` or `start_time` closer to the given time.
-        First tries to find first interval on the specified time or right before. If there are no such intervals
-        then returns closest interval after.
+        Finds interval in the linked list with the given time inside or on the start.
+        First tries to find first interval containing specified time or placed right before.
+        If there are no such intervals then returns closest interval after.
         :param date: Time to search interval closest to.
-        :param by_end_time: Flag to search by interval `end_time`. Otherwise searches by `start_time`.
         :return: Closest (by given rules) Interval or just last checked.
         """
-        interval = self
-        # First check if date is later than current interval (need search it later intervals).
-        if (interval.end_time if by_end_time else interval.start_time) - tolerance <= date:
-            return self.iterate_next(lambda x: (x.end_time if by_end_time else x.start_time) + tolerance >= date)
-        else:  # Date is before current interval (need search in previous intervals).
-            return self.iterate_prev(lambda x: (x.end_time if by_end_time else x.start_time) - tolerance <= date)
+        diff_with_start = self.compare_with_time(date, tolerance, is_start=True)
+        if diff_with_start < 0.0:
+            # To get "covering or right before" search previous interval with end equal or later than date.
+            if self.prev:
+                return self.prev.iterate_prev(lambda x: x.start_time - tolerance <= date)
+            else:
+                return self
+        diff_with_end = self.compare_with_time(date, tolerance, is_start=False)
+        if diff_with_end <= 0.0:
+            # Current interval covers date.
+            return self
+        # To get "covering or right before" search next interval with
+        # start not later then date and end equal or later than date.
+        return self.iterate_next(
+            lambda x: x.end_time + tolerance >= date or not x.next or x.next.start_time - tolerance > date
+        )
+        # if (self.end_time if by_end_time else self.start_time) - tolerance <= date:
+        #     # If date is after current interval border then need to search in next intervals.
+        #     return self.iterate_next(lambda x: x.compare_with_time(date, tolerance, not by_end_time) <= 0.0)
+        # else:
+        #     # If date is before current interval then need to search in previous intervals.
+        #     return self.iterate_prev(lambda x: x.compare_with_time(date, tolerance, not by_end_time) >= 0.0)
 
     def new_after(self, event: Event) -> 'Interval':
         """
