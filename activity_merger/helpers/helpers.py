@@ -64,6 +64,25 @@ def ensure_datetime(d):  # https://stackoverflow.com/a/29840081/1535127
     return datetime.datetime(d.year, d.month, d.day).astimezone(CURRENT_TIMEZONE)
 
 
+def delete_buckets(bucket_ids: List[str], client: aw_client.ActivityWatchClient) -> str:
+    """
+    Forcely removes ActivityWatch buckets without producing extra logs.
+    :param bucket_ids: List of bucket ID-s to remove.
+    :param client: ActivityWatch client to use.
+    :return: Human-friendly string with applied actions.
+    """
+    result = []
+    try:
+        buckets = client.get_buckets()
+        for bucket_id in bucket_ids:
+            if bucket_id in buckets.keys():
+                client.delete_bucket([bucket_id], True)
+                result.append("Deleted '" + bucket_id + "' bucket. ")
+    except Exception as ex:
+        return "Wasn't able connect to ActivityWatch client because: " + str(ex)
+    return ''.join(result)
+
+
 def upload_events(events: List[Event], event_type: str, bucket_id: str, is_replace: bool = False,
                   aw_client_name: str = "upload_events", client: aw_client.ActivityWatchClient = None) -> str:
     """
@@ -84,11 +103,7 @@ def upload_events(events: List[Event], event_type: str, bucket_id: str, is_repla
     if not client:
         client = aw_client.ActivityWatchClient(aw_client_name)
     if is_replace:
-        try:
-            client.delete_bucket(bucket_id, True)
-            result += "Deleted '" + bucket_id + "' bucket.\n"
-        except Exception as ex:
-            result += "Wasn't able to delete '" + bucket_id + "' bucket because: " + str(ex) + "\n"
+        result += delete_buckets(bucket_id, client)
     client.create_bucket(bucket_id, event_type=event_type)  # Will return 304 if bucket exists.
     client.insert_events(bucket_id, aw_events)  # Actually returns None.
     result += f"Uploaded {len(aw_events)} events into local ActivityWatch '{bucket_id}' bucket."

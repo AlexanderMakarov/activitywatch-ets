@@ -275,7 +275,7 @@ class UnixTerminalLeader(TerminalLeader):
 
     def _save_cursor_position_and_print_multiselect_question(self, question: str, menu: List[List]):
         # item = [description, is_cursor, is_selected]
-        self._save_cursor_position()
+        self._save_cursor_position() # TODO doesn't work in xfce4-terminal - only in VS code.
         sys.stdout.write('\n' + question)
         for item in menu:
             buffer = '\n '

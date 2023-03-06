@@ -9,7 +9,8 @@ from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELT
                                           DEBUG_BUCKETS_IMPORTER_NAME, BUCKET_DEBUG_RAW_RULE_RESULTS,\
                                           BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
 from activity_merger.domain.interval import Interval
-from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date, upload_events
+from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date, upload_events,\
+                                            delete_buckets
 from activity_merger.domain.merger import report_from_buckets
 from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, ANALYZE_MODE_ACTIVITIES,\
                                             ANALYZE_MODE_DEBUG
@@ -25,16 +26,15 @@ def get_interval(events_date: datetime.datetime, client: aw_client.ActivityWatch
     """
     try:
         # Remove debug buckets because they may become sources of events.
-        client.delete_bucket(BUCKET_DEBUG_RAW_RULE_RESULTS, True)
-        client.delete_bucket(BUCKET_DEBUG_FINAL_RULE_RESULTS, True)
-        client.delete_bucket(BUCKET_DEBUG_ACTIVITES, True)
+        delete_buckets([BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES],
+                       client)
         # Get existing buckets.
         buckets = client.get_buckets()
     except Exception as ex:
         LOG.exception("Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", ex,
                       exc_info=True)
         exit(1)
-    LOG.info("Buckets: [%s]", ", ".join(buckets.keys()))
+    LOG.info("Buckets to analyze: [%s]", ", ".join(buckets.keys()))
     # Build time-ordered linked list of intervals by provided events.
     return report_from_buckets(client, events_date.date(), events_date.date() + datetime.timedelta(days=1),
                                buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)
