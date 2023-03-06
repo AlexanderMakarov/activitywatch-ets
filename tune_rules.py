@@ -107,13 +107,16 @@ class TerminalLeader:
     def ask_yes_no(self, question_without_yn: str) -> bool:
         sys.stdout.write(question_without_yn + " [y/n]: ")
         sys.stdout.flush()
-        return self.read_user_input().lower() == "y"
+        result = self.read_user_input().lower() == "y"
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        return result
 
-    def _ask_multiselect(self, options: List[str], question: str) -> List[str]:
+    def _ask_multiselect_question(self, question: str, options: List[str]) -> List[str]:
         """
         Draws multiple lines of text on the screen with options to choose one or few. Cleans console after itself.
-        :param options: List of options to choose.
         :param question: Question choose options for.
+        :param options: List of options to choose.
         :return: List of chosen options.
         """
         # 'pick' library cleans screen and draws menu with options. At end disappears and leaves old content.
@@ -121,7 +124,7 @@ class TerminalLeader:
         return result
 
     def _ask_decision(self, interval: Interval) -> List[Any]:
-        title = interval.to_str(only_time=True) + ":"
+        question = interval.to_str(only_time=True)
         SKIP_TEXT = 'skip from activities'
         MERGE_TEXT = 'merge with next interval' + "--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
         options = {  # Use keys as 'value to present to user' and values to return result.
@@ -133,7 +136,7 @@ class TerminalLeader:
         # Start loop of asking. Because some answers may contradict each other.
         decision_items: List[str]
         while True:
-            selected: List[str] = self._ask_multiselect(list(options.keys()), title)
+            selected: List[str] = self._ask_multiselect_question(question, list(options.keys()))
             decision_items = []
             if SKIP_TEXT in selected:
                 decision_items.append('skip')
@@ -142,30 +145,44 @@ class TerminalLeader:
             if len(decision_items) > 1:
                 pass
             break
-        LOG.info("%s %s", title, ', '.join(decision_items))
+        LOG.info("%s %s", question, ', '.join(decision_items))
         return [options[x] for x in selected]
 
     def ask_decisions(self, undecided_list: List[Decision]) -> bool:
-        self.ask_yes_no("Next will be presented intervals with options to choose. "
-                        "Point (with \u2191 and \u2193) and press 'space' on one or few options "
-                        "you expect to represent this interval. Press 'Enter' to apply and proceed. "
-                        "Choose nothing to stop deciding. Ready?")
+        """
+        Interacts with user asking decisions for given list of Interval-s. At start displays legend and asks if need
+        proceed.
+        :param undecided_list: List of undecided 'Decision'-s to decide on.
+        :return: `True` if need to stop tuning and just print result, `False` to proceed with one more iteration. 
+        """
+        if not self.ask_yes_no("Proceed with 'decide for interval' session?"):
+            return True
+        LOG.info("Next will be presented %d intervals with options to choose. "
+                 "Point (with \u2191 and \u2193) and press 'space' on one or few options you think should represent "
+                 "each interval. Press 'Enter' to apply and proceed. "
+                 "Press 'Escape' or choose nothing to stop deciding.", len(undecided_list))
         cnt_decided = 0
         for decision in undecided_list:
             selected = self._ask_decision(decision.interval)
             if selected:
                 decision.decision = selected
                 cnt_decided += 1
-            elif self.ask_yes_no(f"Decided {cnt_decided}/{len(undecided_list)}. Are you sure want to stop?"):
-                return True
+            elif self.ask_yes_no(f"Decided only {cnt_decided} from {len(undecided_list)} intervals. "
+                                 "Are you sure you want to stop earlier?"):
+                break
         return False
 
 
 class UnixTerminalLeader(TerminalLeader):
-    ANSI_ERASE_LINE = '\u001b[2K'  # Clear the whole line where cursor is placed.
-    ANSI_CURSOR_UP = '\u001b[1A'  # Move cursor up (don't forget '\r' to put it on start of line).
-    ANSI_CLEAR_PREVIOUS_LINE = '\033[A\033[A'
+    # FYI: https://wiki.bash-hackers.org/scripting/terminalcodes
+    ANSI_CURSOR_UP = '\x1b[1A'  # Move cursor up (don't forget '\r' to put it on start of line).
+    ANSI_CURSOR_SAVE_POSITION = '\x1b7'
+    ANSI_CURSOR_TO_SAVED = '\x1b8'
+    ANSI_CLEAR_CURRENT_LINE = '\x1b[2K'  # Clear the whole line where cursor is placed.
+    ANSI_CLEAR_PREVIOUS_LINE = '\033[A'
+    ANSI_CLEAR_TO_END_OF_SCREN = '\x1b[J'
     ANSI_HIDE_CURSOR = '\033[?25l'
+    ANSI_SHOW_CURSOR = '\033[?25h'
     ANSI_FONT_DECORATION_STOP = '\u001b[0m'
     ANSI_FONT_DECORATION_BOLD = '\u001b[1m'
     ANSI_FONT_DECORATION_UNDERLINE = '\u001b[4m'
@@ -229,7 +246,34 @@ class UnixTerminalLeader(TerminalLeader):
         sys.stdout.write("".join([self.ANSI_CLEAR_PREVIOUS_LINE] * cnt))
         sys.stdout.flush()
 
-    def _move_menu_cursor_and_reprint(self, menu: List[List], is_down: bool):
+    def ask_yes_no(self, question_without_legend: str) -> bool:
+        sys.stdout.write(question_without_legend + " [y/n]: ")
+        sys.stdout.flush()
+        result = self.read_user_input().lower() == "y"
+        sys.stdout.write(self.ANSI_CLEAR_PREVIOUS_LINE)
+        sys.stdout.flush()
+        return result
+
+    def _save_cursor_position(self):
+        sys.stdout.write(self.ANSI_CURSOR_SAVE_POSITION)
+
+    def _clear_up_to_saved_position(self):
+        sys.stdout.write(self.ANSI_CURSOR_TO_SAVED + self.ANSI_CLEAR_TO_END_OF_SCREN)
+        sys.stdout.flush()
+
+    def _save_cursor_position_and_print_multiselect_question(self, question: str, menu: List[List]):
+        # item = [description, is_cursor, is_selected]
+        self._save_cursor_position()
+        sys.stdout.write('\n' + question)
+        for item in menu:
+            buffer = '\n '
+            buffer += '-> (' if item[1] else '   ('
+            buffer += '*) ' if item[2] else ' ) '
+            buffer += item[0]
+            sys.stdout.write(buffer)
+        sys.stdout.flush()
+
+    def _multiselect_question_move_cursor_and_reprint(self, question: str, menu: List[List], is_down: bool):
         pointed = [i for i, x in enumerate(menu) if x[1]]  # Get index or empty list.
         # Calculate desired position.
         desired_position: int
@@ -247,32 +291,21 @@ class UnixTerminalLeader(TerminalLeader):
         # Change position.
         menu[current_position][1] = False
         menu[desired_position][1] = True
-        self.clean_lines(len(menu))
-        self._print_menu(menu)
+        # Note that `self.clean_lines(cnt)` works wrong after long lines being split due to lenght.
+        self._clear_up_to_saved_position()
+        self._save_cursor_position_and_print_multiselect_question(question, menu)
 
-    def _select_menu_item_and_reprint(self, menu: List[List]):
+    def _multiselect_question_switch_option_and_reprint(self, question: str, menu: List[List]):
         for item in menu:
             if item[1]:
-                item[2] = True
-                self._move_menu_cursor_and_reprint(menu, True)
+                item[2] = not item[2]
+                self._multiselect_question_move_cursor_and_reprint(question, menu, True)
                 return
 
-    def _print_menu(self, menu: List[List]):
-        # item = [description, is_cursor, is_selected]
-        for item in menu:
-            buffer = '\n '
-            buffer += '-> (' if item[1] else '   ('
-            buffer += '*) ' if item[2] else ' ) '
-            buffer += item[0]
-            sys.stdout.write(buffer)
-        sys.stdout.flush()
-
-    def _ask_multiselect(self, options: List[str], question: str) -> List[str]:
-        menu = [[x, False, False] for x in options]
-        menu[0][1] = True  # Put cursor on the first option.
-        sys.stdout.write("\n" + question + self.ANSI_HIDE_CURSOR)
-        self._print_menu(menu)
-        # Based on https://stackoverflow.com/a/47955341 and https://stackoverflow.com/a/47197390/1535127
+    def _ask_multiselect_question(self, question: str, options: List[str]) -> List[str]:
+        if not options:  # Avoid errors on building menu (smelling code below)
+            raise ValueError("Empty options are provided.")
+        # Modify TTY. Based on https://stackoverflow.com/a/47955341 and https://stackoverflow.com/a/47197390/1535127
         # Save and clone TTY attributes.
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
@@ -281,23 +314,31 @@ class UnixTerminalLeader(TerminalLeader):
         new[3] = new[3] & ~termios.ICANON & ~termios.ECHO
         new[6][termios.VMIN] = 1
         new[6][termios.VTIME] = 0
-        # Listen key strokes.
+        # Start block of changes which should be reverted afterwards.
         try:
+            # Prepare menu. Set pointer on the first option.
+            menu = [[x, False, False] for x in options]
+            menu[0][1] = True
+            # Hide cursor and print question with menu.
+            sys.stdout.write(self.ANSI_HIDE_CURSOR)
+            self._save_cursor_position_and_print_multiselect_question(question, menu)
+            # Apply TTY modifications.
             termios.tcsetattr(fd, termios.TCSANOW, new)
             key = []
             is_exit = False
+            # Listen key strokes and modify menu.
             while True:
                 event = os.read(fd, 3).decode()
                 if len(event) == 3:
                     k = ord(event[2])  # All 3 numbers mean special key when code is a last number.
                     key = UnixTerminalLeader.KEY_MAPPING.get(k, None)
                     if key == 'up':
-                        self._move_menu_cursor_and_reprint(menu, False)
+                        self._multiselect_question_move_cursor_and_reprint(question, menu, False)
                     elif key == 'down':
-                        self._move_menu_cursor_and_reprint(menu, True)
+                        self._multiselect_question_move_cursor_and_reprint(question, menu, True)
                 elif len(event) == 1:
                     if event[0] == ' ':  # Space to choose menu item.
-                        self._select_menu_item_and_reprint(menu)
+                        self._multiselect_question_switch_option_and_reprint(question, menu)
                     elif event[0] == '\n':  # Enter was hit.
                         is_exit = True
                     elif event[0] == '\x1b':  # Escape was hit.
@@ -305,12 +346,13 @@ class UnixTerminalLeader(TerminalLeader):
                             item[2] = False
                         is_exit = True
                 if is_exit:
-                    self.clean_lines(len(options) + 1)  # +1 is to remove question as well.
+                    self._clear_up_to_saved_position()
                     break
         finally:
             # Revert TTY attributes.
             termios.tcsetattr(fd, termios.TCSAFLUSH, old)
-        return [options[0] for x in menu if x[2]]
+            sys.stdout.write(self.ANSI_SHOW_CURSOR)  # Show cursor back.
+        return [x[0] for x in menu if x[2]]
 
     def build_letters_number_hint_word(self, hint: Event) -> str:
         return '%s%s%s%s%s' % (hint.prefix, self.ANSI_FONT_DECORATION_UNDERLINE, " " * hint.word_len,
@@ -319,29 +361,32 @@ class UnixTerminalLeader(TerminalLeader):
     def ask_user_input_this_line(self, matched_line_text: str, prev_match_desc: str):
         line = "\r%s%s%s %s%s" % (
             self.ANSI_FONT_DECORATION_BOLD, "", self.ANSI_FONT_DECORATION_STOP, matched_line_text, "")
-        sys.stdout.write(self.ANSI_ERASE_LINE + line)
+        sys.stdout.write(self.ANSI_CLEAR_CURRENT_LINE + line)
         sys.stdout.flush()
 
     def complete_line(self, matched_text: str, statistic: List[Event]):
-        sys.stdout.write('\r%s%s' % (self.ANSI_ERASE_LINE, ""))
+        sys.stdout.write('\r%s%s' % (self.ANSI_CLEAR_CURRENT_LINE, ""))
         sys.stdout.flush()
 
 
-def _ask_decision_and_correct_rules(context: Context) -> bool:
+def ask_decision_and_correct_rules(context: Context) -> bool:
+    """
+    Interacts with user asking about required intervals decisions, next makes suggestion for "analyze" rules.
+    :param context: Context with "what to ask" and current progress.
+    :return: Flag that user chose to stop tuning.
+    """
     if sys.platform.startswith("win"):
         LOG.error("Windows terminal is not supported yet")
         # leader = WindowsTerminalLeader(Matcher(song, args))
     else:
         leader = UnixTerminalLeader()
-    # 1) check if we need one more iteration. TODO maybe ask it on each interval instead?
-    intervals = context.get_undecided_intervals()
-    # if leader.ask_yes_no(f"Remained {len(intervals)} undecided intervals. Proceed with tuning?"):
-    #     return True
-    # 2) ask decision for all undecided intervals.
-    is_exit = leader.ask_decisions(intervals)
-    decided_intervals = [x for x in intervals if x.decision]
-    LOG.info("Got decisions for %d from %d asked on this iteration intervals.", len(decided_intervals), len(intervals))
-    # 3) calculate new rules.
+    # Calculate which decisions need to make.
+    undecided_intervals = context.get_undecided_intervals()
+    # Interact with user asking for "proceed?" and decisions.
+    is_exit = leader.ask_decisions(undecided_intervals)
+    decided_intervals = [x for x in undecided_intervals if x.decision]
+    LOG.info("Got decisions for %d from %d asked intervals.", len(decided_intervals), len(undecided_intervals))
+    # Calculate new rules and show problems.
     context.recalculate_rules()
     return is_exit
 
@@ -373,18 +418,18 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
         # Save context right away to skip steps above next time.
         context.save()
     analyzer_result: AnalyzerResult
+    LOG.info("---- Tuning started.")
     while True:
         # Analyze interval with hiding all problems logs. Upload debug buckets.
         analyzer_result = analyze_intervals(context.first_interval, MIN_DURATION_SEC, context.rules,
                                             ProblemReporter.SUPPORTED_PROBLEMS, ANALYZE_MODE_TUNER)
         upload_debug_buckets(analyzer_result, client)
-        LOG.info("---- Start tuning.")
-        # Ask user for each interval (TODO only with problems) and adjust rules basing on it.
-        is_one_more_iteration = _ask_decision_and_correct_rules(context)
+        # Interact with user.
+        is_exit = ask_decision_and_correct_rules(context)
         context.save()
-        if not is_one_more_iteration:
+        if is_exit:
             break
-    LOG.info("---- Tuning completed. Final analyzing results:")
+    LOG.info("---- Tuning completed.")
     print_analyzer_result(analyzer_result)
     return analyzer_result
 
