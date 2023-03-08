@@ -74,22 +74,24 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
         if event.duration < tolerance:
             metrics['cnt_skipped_too_short'] += 1
             continue
+        # Basing on `Interval.find_closest` behavior - it returns interval with the given time inside or on the start.
         # Compare closest interval boundaries with event boundaries and update intervals linked list.
-        # Following cases are possible (not all, see 'test_mergerer.py', 1st case is not enough):
-        #   [-----]      <- existing interval boundaries (like 'afk')
-        # ----------------------------------------------------------- events
-        # []|     |       <- 1. skip as 'out of boundaries' or make an interval
-        # [---]   |       <- 2. split interval with new on the start and optionaly add new interval at start
-        # [-------]       <- 3. just add event to interval and optionaly add new interval before
-        # [---------]     <- 4. span event on few intervals or add ones at the end
-        #   [--]  |        <- 5. split interval with new on the start
-        #   [-----]        <- 6. just add event to interval
-        #   [-------]      <- 7. span event on few intervals and optionaly add new one
-        #   | [-] |         <- 8. split interval on 3
-        #   | [---]         <- 9. split interval with new on the end
-        #   | [-----]       <- 10. split current interval with new on the end and span event on few intervals
-        #   |     [--]      <- 11. skip as 'out of boundaries' or add new interval
-        #   |     |  [---]  <- 12. skip as 'out of boundaries' or add new interval
+        # Following cases are possible (excluding long StopWatch events, see 'test_mergerer.py' TO DO-s):
+        #    [-----]      <- existing interval boundaries
+        # ----------------------------------------------------------- event relation of position cases:
+        # [] |     |       <- 1. skip as 'out of boundaries' or make an interval
+        # [--]     |       <- 1. skip as 'out of boundaries' or make an interval
+        # [---]    |       <- 2. split interval with new on the start and optionaly add new interval at start
+        # [--------]       <- 3. just add event to interval and optionaly add new interval before
+        # [----------]     <- 4. span event on current and next intervals or add one at the end
+        #    [--]  |         <- 5. split interval with new on the start
+        #    [-----]         <- 6. just add event to interval
+        #    [-------]       <- 7. span event on few intervals and optionaly add new one
+        #    | [-] |         <- 8. split interval on 3
+        #    | [---]         <- 9. split interval with new on the end
+        #    | [-----]       <- 10. split current interval with new on the end and span event on few intervals
+        #    |     [--]      <- 11. span event on intervals later
+        #    |     |  [---]  <- 12. skip as 'out of boundaries' or add new interval
         event_end = event.timestamp + event.duration
         # Make new interval if it is the first event.
         if is_make_intervals and interval is None:
@@ -113,10 +115,10 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
                 metrics['cnt_handled_events'] += 1
             else:
                 LOG.debug("  Skipping %s event happened before all 'AFK' events "
-                            "- user didn't work those time.", event_to_str(event))
+                            "- user didn't work that time.", event_to_str(event))
                 metrics['cnt_skipped_before_afk'] += 1
             continue
-        # 11, 12) If event is after closest interval then it is "out of AFK" - skip it.
+        # 11, 12) If event is completely after closest interval then it is "out of AFK" - skip it or make new.
         if interval_end_minus_event_start >= 0:
             if is_make_intervals:
                 tmp = Interval(event.timestamp, event.timestamp + event.duration, interval, None)
@@ -126,7 +128,7 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
                 metrics['cnt_handled_events'] += 1
             else:
                 LOG.debug("  Skipping %s event happened after/out of 'AFK' events "
-                            "- user didn't work those time.", event_to_str(event))
+                            "- user didn't work that time.", event_to_str(event))
                 metrics['cnt_skipped_after_afk'] += 1
             continue
         starts_diff = interval.compare_with_time(event.timestamp, tolerance, True)

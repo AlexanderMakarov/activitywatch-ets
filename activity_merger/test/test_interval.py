@@ -87,6 +87,7 @@ class TestInterval(unittest.TestCase):
         (
             "Start of interval far before",
             build_intervals_linked_list([
+                (4, False, 1, [event_3l5]),
                 (5, False, 1, [event_3l5]),
                 (6, False, 1, [event_3l5]),
                 (7, False, 1, [event_3l5]),

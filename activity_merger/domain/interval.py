@@ -197,26 +197,20 @@ class Interval:
         """
         diff_with_start = self.compare_with_time(date, tolerance, is_start=True)
         if diff_with_start < 0.0:
-            # To get "covering or right before" search previous interval with end equal or later than date.
+            # To get "covering or right before" search previous interval with start equal or before than date.
             if self.prev:
                 return self.prev.iterate_prev(lambda x: x.start_time - tolerance <= date)
             else:
-                return self
+                return self  # Case when it is the first interval.
         diff_with_end = self.compare_with_time(date, tolerance, is_start=False)
-        if diff_with_end <= 0.0:
-            # Current interval covers date.
+        if diff_with_end < 0.0:
+            # Current interval covers date but don't ends on.
             return self
-        # To get "covering or right before" search next interval with
-        # start not later then date and end equal or later than date.
+        # To get "covering or right before" search next interval with end strictly later then date
+        # or is last interval or next interval start is later than date.
         return self.iterate_next(
-            lambda x: x.end_time + tolerance >= date or not x.next or x.next.start_time - tolerance > date
+            lambda x: x.end_time + tolerance > date or not x.next or x.next.start_time - tolerance > date
         )
-        # if (self.end_time if by_end_time else self.start_time) - tolerance <= date:
-        #     # If date is after current interval border then need to search in next intervals.
-        #     return self.iterate_next(lambda x: x.compare_with_time(date, tolerance, not by_end_time) <= 0.0)
-        # else:
-        #     # If date is before current interval then need to search in previous intervals.
-        #     return self.iterate_prev(lambda x: x.compare_with_time(date, tolerance, not by_end_time) >= 0.0)
 
     def new_after(self, event: Event) -> 'Interval':
         """
