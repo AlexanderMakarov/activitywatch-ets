@@ -235,7 +235,7 @@ def print_metrics(metrics: Dict[str, int], intervals_count: int):
     :param intervals_count: Number of intervals measured separately from metrics to put into logs.
     """
     metrics_strings = (f"{k}: {v}" for k, v in metrics.items() if v > 0)
-    LOG.info("In result got %d intervals. Details:\n  %s", intervals_count, "\n  ".join(metrics_strings))
+    LOG.info("  In result got %d intervals. Details:\n  %s", intervals_count, "\n  ".join(metrics_strings))
 
 
 def _sort_and_merge_events(events: List[Event]) -> List[Event]:
@@ -340,14 +340,16 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     for bucket_id in bucket_ids_to_handle:
         raw_events = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
         if raw_events:
-            LOG.info("Applying '%s' bucket %s events.", bucket_id, len(raw_events))
-            # Note that some watchers (like IDEA watcher from few windows) makes events covering each other,
-            # i.e. not adjacent. But on each focus change it do generates new event.
+            LOG.info("Applying '%s' bucket %d events:", bucket_id, len(raw_events))
+            # Note that some watchers (like IDEA watcher from few windows/projects) makes events covering each other,
+            # i.e. not adjacent, but on each focus change it do generates new event.
             # So first sort all events and cut to make adjacent in scope of a bucket.
             raw_events.sort(key=lambda e: e.timestamp)
             prev_event = None
             events = []  # Convert all events into inner named tuple with more fields.
             for event in raw_events:  # Note that input events are mutable, but `Event` is immutable.
+                if event.duration < tolerance:  # Filter out too short events.
+                    continue
                 if prev_event:
                     if prev_event.timestamp + prev_event.duration > event.timestamp:
                         prev_event.duration = event.timestamp - prev_event.timestamp
@@ -355,6 +357,8 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
                 prev_event = event
             # Add last event.
             events.append(Event(bucket_id, prev_event.timestamp, prev_event.duration, prev_event.data))
+            if len(events) != len(raw_events):
+                LOG.info("  Normalized and cleansed %d events into %d.", len(raw_events), len(events))
             # Handle events.
             cur_interval, metrics = apply_events(events, cur_interval, tolerance)
             # FYI: [x.to_str(debug=True) for x in cur_interval.get_range(offset=-100000, num=3)]
