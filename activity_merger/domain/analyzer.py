@@ -270,6 +270,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                 Event(BUCKET_DEBUG_RAW_RULE_RESULTS, cur_interval.start_time, cur_interval.get_duration(), {
                     'description': rule_result.description,
                     'rule': str(rule_result.rule),
+                    'events_cnt': len(cur_interval.events),
                 }))
         duration = _intervals_duration(rule_result.intervals)
         # Append deferred intervals if there are such.
