@@ -76,7 +76,7 @@ def delete_buckets(bucket_ids: List[str], client: aw_client.ActivityWatchClient)
         buckets = client.get_buckets()
         for bucket_id in bucket_ids:
             if bucket_id in buckets.keys():
-                client.delete_bucket([bucket_id], True)
+                client.delete_bucket(bucket_id, True)
                 result.append("Deleted '" + bucket_id + "' bucket. ")
     except Exception as ex:
         return "Wasn't able connect to ActivityWatch client because: " + str(ex)
