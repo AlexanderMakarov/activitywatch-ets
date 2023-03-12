@@ -22,7 +22,7 @@ except ImportError:
     pass
 from pick import pick
 
-from activity_merger.config.config import LOG, MIN_DURATION_SEC, RULES
+from activity_merger.config.config import LOG, MIN_DURATION_SEC, RULES, BUCKET_DEBUG_RAW_RULE_RESULTS
 from activity_merger.domain.input_entities import EventKeyHandler, Event
 from activity_merger.domain.interval import Interval
 from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date
@@ -176,12 +176,15 @@ class TerminalLeader:
             return True
         sys.stdout.write(
             "Next will be presented %d intervals with options to choose. "
+            "Please open them in http://localhost:5600/#/timeline '%s' bucket as well. "
+            "Note that this page with debug information may be quite heavy and take few GB in your RAM. "
             "Point (with \u2191 and \u2193) and press 'Space' on one or few options you think should represent "
             "each interval. Press 'Enter' to apply and proceed. Press 'Escape' or choose nothing to stop deciding."
-            "\nNote that for special behavior better to choose event as well because:\n"
+            "\nNote that for special behavior usually need to choose recorded event as well because:\n"
             "- %s - need to point event causing skipping,\n"
-            "- %s - need to point event which is most important and makes it borrow meaning of next interval.\n" % \
-            (len(undecided_list), self.SKIP_TEXT, self.MERGE_TEXT)
+            "- %s - need to point event which makes this interval borrow meaning of the next interval. "
+            "Except case when you decided to merge with next because of absence of event in the some bucket.\n" % \
+            (len(undecided_list), BUCKET_DEBUG_RAW_RULE_RESULTS, self.SKIP_TEXT, self.MERGE_TEXT)
         )
         sys.stdout.flush()
         cnt_decided = 0
@@ -199,11 +202,11 @@ class TerminalLeader:
 class UnixTerminalLeader(TerminalLeader):
     # FYI: https://wiki.bash-hackers.org/scripting/terminalcodes
     ANSI_CURSOR_UP = '\x1b[1A'  # Move cursor up (don't forget '\r' to put it on start of line).
-    ANSI_CURSOR_SAVE_POSITION = '\x1b7'
-    ANSI_CURSOR_TO_SAVED = '\x1b8'
+    ANSI_CURSOR_SAVE_POSITION = '\033[s'#'\x1b7'
+    ANSI_CURSOR_TO_SAVED = '\033[u'#'\x1b8'
     ANSI_CLEAR_CURRENT_LINE = '\x1b[2K'  # Clear the whole line where cursor is placed.
     ANSI_CLEAR_PREVIOUS_LINE = '\033[A'
-    ANSI_CLEAR_TO_END_OF_SCREN = '\x1b[J'
+    ANSI_CLEAR_TO_END_OF_SCREEN = '\033[J'#'\x1b[J'
     ANSI_HIDE_CURSOR = '\033[?25l'
     ANSI_SHOW_CURSOR = '\033[?25h'
     ANSI_FONT_DECORATION_STOP = '\u001b[0m'
@@ -270,12 +273,12 @@ class UnixTerminalLeader(TerminalLeader):
         sys.stdout.write(self.ANSI_CURSOR_SAVE_POSITION)
 
     def _clear_up_to_saved_position(self):
-        sys.stdout.write(self.ANSI_CURSOR_TO_SAVED + self.ANSI_CLEAR_TO_END_OF_SCREN)
+        sys.stdout.write(self.ANSI_CURSOR_TO_SAVED + self.ANSI_CLEAR_TO_END_OF_SCREEN)
         sys.stdout.flush()
 
     def _save_cursor_position_and_print_multiselect_question(self, question: str, menu: List[List]):
         # item = [description, is_cursor, is_selected]
-        self._save_cursor_position() # TODO doesn't work in xfce4-terminal - only in VS code.
+        self._save_cursor_position()
         sys.stdout.write('\n' + question)
         for item in menu:
             buffer = '\n '
@@ -316,23 +319,21 @@ class UnixTerminalLeader(TerminalLeader):
 
     def _ask_multiselect_question(self, question: str, options: List[str]) -> List[str]:
         if not options:  # Avoid errors on building menu (simplified code below)
-            raise ValueError("Empty options are provided.")
+            raise ValueError("_ask_multiselect_question: Empty options are provided.")
         # Modify TTY. Based on https://stackoverflow.com/a/47955341 and https://stackoverflow.com/a/47197390/1535127
         # Save and clone TTY attributes.
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         new = termios.tcgetattr(fd)
-        # Correct TTY attributes to read single key strokes.
+        # Correct TTY attributes to read single key strokes. See https://man7.org/linux/man-pages/man3/termios.3.html
         new[3] = new[3] & ~termios.ICANON & ~termios.ECHO
-        new[6][termios.VMIN] = 1
-        new[6][termios.VTIME] = 0
         # Start block of changes which should be reverted afterwards.
         try:
             # Prepare menu. Set pointer on the first option.
             menu = [[x, False, False] for x in options]
             menu[0][1] = True
             # Hide cursor and print question with menu.
-            sys.stdout.write(self.ANSI_HIDE_CURSOR)
+            # NOTE breaks cursor movements in xfce4-terminal sys.stdout.write(self.ANSI_HIDE_CURSOR)
             self._save_cursor_position_and_print_multiselect_question(question, menu)
             # Apply TTY modifications.
             termios.tcsetattr(fd, termios.TCSANOW, new)
@@ -361,7 +362,7 @@ class UnixTerminalLeader(TerminalLeader):
         finally:
             # Revert TTY attributes.
             termios.tcsetattr(fd, termios.TCSAFLUSH, old)
-            sys.stdout.write(self.ANSI_SHOW_CURSOR)  # Show cursor back.
+            # NOTE breaks cursor movements in xfce4-terminal sys.stdout.write(self.ANSI_SHOW_CURSOR)
         return [x[0] for x in menu if x[2]]
 
     def build_letters_number_hint_word(self, hint: Event) -> str:
