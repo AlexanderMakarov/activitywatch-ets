@@ -28,7 +28,7 @@ from activity_merger.domain.interval import Interval
 from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date
 from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER
 from activity_merger.domain.output_entities import AnalyzerResult
-from get_activities import get_interval, upload_debug_buckets, print_analyzer_result
+from get_activities import get_interval, reload_debug_buckets, print_analyzer_result
 
 
 class Decision:
@@ -43,9 +43,16 @@ class Decision:
         # Copy interval without 'prev' and 'next' attributes to don't get errors caused by big recursion.
         self.interval = Interval(interval.start_time, interval.end_time)
         self.interval.events = interval.events
+        # Cases:
+        # - user decided (any, True)
+        # - interval looks the same as decided by user so apply the same decision TODO do we need?
         self.decision = None
+        self.is_user_decision = False
         self.problem = None
 
+    def set_user_decision(self, decision):
+        self.decision = decision
+        self.is_user_decision = True
 
 class Context:
     FILE_PATH = os.path.abspath("tune_rules-context.pickle")
@@ -87,6 +94,25 @@ class Context:
 
     def get_undecided_intervals(self) -> List[Decision]:
         return [x for x in self.decisions if not x.decision]
+
+    def recalculate_rules(self):
+        """
+        Modifies rules itself basing on decisions. If something contradicting or not not enough in decisions then
+        explains it in logs.
+        TODO saves decisions from this iterations and clears problems ones to ask user for decision one more time.
+        """
+        # 1. Iterate all decisions to:
+        #   - checks which are decided
+        #   - find contradictions like:
+        #     * for similar set of events decisions are different in intervals
+        #   - print contradictions
+        #   - gather statistic (first part)
+        # 2. correct rules basing on right decisions
+        # 3. try to apply rules to all remained intervals and calculate activities
+        # 4. print statistic
+        for decision in self.decisions:
+            pass
+        raise NotImplementedError("")
 
 
 class TerminalLeader:
@@ -191,7 +217,7 @@ class TerminalLeader:
         for decision in undecided_list:
             selected = self._ask_decision(decision.interval)
             if selected:
-                decision.decision = selected
+                decision.set_user_decision(selected)
                 cnt_decided += 1
             elif self.ask_yes_no(f"Decided only {cnt_decided} from {len(undecided_list)} intervals. "
                                  "Are you sure you want to stop earlier?"):
@@ -200,6 +226,10 @@ class TerminalLeader:
 
 
 class UnixTerminalLeader(TerminalLeader):
+    """
+    TerminalLeader for Unix machines. Relies on VT100 escape codes and TTY.
+    """
+
     # FYI: https://wiki.bash-hackers.org/scripting/terminalcodes
     ANSI_CURSOR_UP = '\x1b[1A'  # Move cursor up (don't forget '\r' to put it on start of line).
     ANSI_CURSOR_SAVE_POSITION = '\033[s'#'\x1b7'
@@ -219,42 +249,6 @@ class UnixTerminalLeader(TerminalLeader):
     KEY_DOWN = '\u1b5b42' #  '\x1b[B'
     KEY_LEFT = '\u1b5b44' #  '\x1b[D'
     KEY_RIGHT = '\u1b5b43' # '\x1b[C'
-
-    def read_user_input(self) -> str:  # Based on https://stackoverflow.com/a/47955341
-        # Get TTY attributes.
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        new = termios.tcgetattr(fd)
-        # Clone existing TTY attributes and correct them to read by one char.
-        new[3] = new[3] & ~termios.ICANON & ~termios.ECHO
-        new[6][termios.VMIN] = 1
-        new[6][termios.VTIME] = 0
-        # Read by char.
-        user_input = ''
-        try:
-            termios.tcsetattr(fd, termios.TCSANOW, new)
-            while True:
-                character = os.read(fd, 1)
-                # If user typed terminating key then stop listen input.
-                if character == b'\n':
-                    break
-                elif character == b'\x7f':  # Backspace/delete is hit.
-                    sys.stdout.write("\b%s %s\b" % (
-                        self.ANSI_FONT_DECORATION_UNDERLINE, self.ANSI_FONT_DECORATION_STOP))
-                    user_input = user_input[:-1]
-                else:
-                    try:
-                        character_str = character.decode("utf-8")
-                    except UnicodeDecodeError as e:
-                        print("Unsupported character: %s" % e)
-                        return user_input
-                    sys.stdout.write(character_str)
-                    user_input += character_str
-                sys.stdout.flush()
-        finally:
-            # Revert TTY attributes.
-            termios.tcsetattr(fd, termios.TCSAFLUSH, old)
-        return user_input
 
     def clean_lines(self, cnt: int):
         sys.stdout.write("".join([self.ANSI_CLEAR_PREVIOUS_LINE] * cnt))
@@ -365,20 +359,6 @@ class UnixTerminalLeader(TerminalLeader):
             # NOTE breaks cursor movements in xfce4-terminal sys.stdout.write(self.ANSI_SHOW_CURSOR)
         return [x[0] for x in menu if x[2]]
 
-    def build_letters_number_hint_word(self, hint: Event) -> str:
-        return '%s%s%s%s%s' % (hint.prefix, self.ANSI_FONT_DECORATION_UNDERLINE, " " * hint.word_len,
-                               self.ANSI_FONT_DECORATION_STOP, hint.suffix)
-
-    def ask_user_input_this_line(self, matched_line_text: str, prev_match_desc: str):
-        line = "\r%s%s%s %s%s" % (
-            self.ANSI_FONT_DECORATION_BOLD, "", self.ANSI_FONT_DECORATION_STOP, matched_line_text, "")
-        sys.stdout.write(self.ANSI_CLEAR_CURRENT_LINE + line)
-        sys.stdout.flush()
-
-    def complete_line(self, matched_text: str, statistic: List[Event]):
-        sys.stdout.write('\r%s%s' % (self.ANSI_CLEAR_CURRENT_LINE, ""))
-        sys.stdout.flush()
-
 
 def ask_decision_and_correct_rules(context: Context) -> bool:
     """
@@ -388,7 +368,7 @@ def ask_decision_and_correct_rules(context: Context) -> bool:
     """
     if sys.platform.startswith("win"):
         LOG.error("Windows terminal is not supported yet")
-        # leader = WindowsTerminalLeader(Matcher(song, args))
+        # leader = WindowsTerminalLeader()
     else:
         leader = UnixTerminalLeader()
     # Calculate which decisions need to make.
@@ -399,6 +379,7 @@ def ask_decision_and_correct_rules(context: Context) -> bool:
     LOG.info("Got decisions for %d from %d asked intervals.", len(decided_intervals), len(undecided_intervals))
     # Calculate new rules and show problems.
     context.recalculate_rules()
+    assert False, "Need to complete code"
     return is_exit
 
 
@@ -434,9 +415,10 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
         # Analyze interval with hiding all problems logs. Upload debug buckets.
         analyzer_result = analyze_intervals(context.first_interval, MIN_DURATION_SEC, context.rules,
                                             ProblemReporter.SUPPORTED_PROBLEMS, ANALYZE_MODE_TUNER)
-        upload_debug_buckets(analyzer_result, client)
+        reload_debug_buckets(analyzer_result, client)
         # Interact with user.
         is_exit = ask_decision_and_correct_rules(context)
+        # TODO provide ability to reset some decisions (is_exit -> EXIT/APPLY_AND_SAVE/ONLY_APPLY)
         context.save()
         if is_exit:
             break

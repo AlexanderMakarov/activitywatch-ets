@@ -40,13 +40,14 @@ def get_interval(events_date: datetime.datetime, client: aw_client.ActivityWatch
                                buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)
 
 
-def upload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.ActivityWatchClient):
+def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.ActivityWatchClient):
     """
     Uploads events representing analyzer debug information into ActivityWatch "debug" buckets. Removes these
     bucket preliminary.
     :param analyzer_result: Result to get data from.
     :param client: ActivityWatch client to use.
     """
+    delete_buckets([BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES], client)
     if analyzer_result.raw_rule_result_debug_events:
         LOG.info(upload_events(analyzer_result.raw_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
                                BUCKET_DEBUG_RAW_RULE_RESULTS, True, client=client))
@@ -104,7 +105,7 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     )
     print_analyzer_result(analyzer_result)
     if is_import_debug_buckets:
-        upload_debug_buckets(analyzer_result, client)
+        reload_debug_buckets(analyzer_result, client)
     return analyzer_result
 
 
