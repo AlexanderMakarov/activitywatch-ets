@@ -127,7 +127,7 @@ class TerminalLeader:
         pass
 
     def read_user_input(self) -> str:
-        raise NotImplementedError()
+        return input()
 
     def clean_lines(self, cnt: int):
         raise NotImplementedError()
@@ -254,12 +254,12 @@ class UnixTerminalLeader(TerminalLeader):
         sys.stdout.write("".join([self.ANSI_CLEAR_PREVIOUS_LINE] * cnt))
         sys.stdout.flush()
 
-    def ask_yes_no(self, question_without_legend: str) -> bool:
+    def ask_yes_no(self, question_without_yn: str) -> bool:
         # Also cleans question from the console.
         self._save_cursor_position()
-        sys.stdout.write(question_without_legend + " [y/n]: ")
+        sys.stdout.write(question_without_yn + " [y/n]: ")
         sys.stdout.flush()
-        result = self.read_user_input().lower() == "y"
+        result = input().lower() == "y"
         self._clear_up_to_saved_position()
         return result
 
