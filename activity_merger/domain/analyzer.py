@@ -29,7 +29,10 @@ ANALYZE_MODE_TUNER = "FOR_TUNER"
 ANALYZE_MODES = [ANALYZE_MODE_ACTIVITIES, ANALYZE_MODE_DEBUG, ANALYZE_MODE_TUNER]
 
 
-def _increment_metric(metrics: Dict[str, Tuple[int, float]], metric_name: str, interval: Interval):
+def increment_metric(metrics: Dict[str, Tuple[int, float]], metric_name: str, interval: Interval):
+    """
+    TODO replace with `Metrics` class. 
+    """
     metric = metrics.get(metric_name, (0, 0))
     metrics[metric_name] = (metric[0] + 1, metric[1] + interval.get_duration())
 
@@ -149,24 +152,50 @@ class ProblemReporter:
                         self.__class__.__name__, self.rule, self.kwargs)
 
 
+def get_eventkeyhandlers_per_bucket_prefix(custom_rules: Dict[str, List[EventKeyHandler]])\
+        -> Dict[str, List[EventKeyHandler]]:
+    """
+    Builds dictionary of EventKeyHandler-s per ActivityWatch bucket name prefix aka "rules" from
+    default rules and custom ones.
+    :param custom_rules: Custom dictionary of EventKeyHandler-s per ActivityWatch bucket name prefix.
+    :return: Full set of rules.
+    """
+    bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]] = dict(custom_rules)
+    if BUCKET_AFK_PREFIX not in bucket_prefix_to_ruleshandler:
+        bucket_prefix_to_ruleshandler[BUCKET_AFK_PREFIX] = DEFAULT_AFK_RULES
+    if BUCKET_STOPWATCH_PREFIX not in bucket_prefix_to_ruleshandler:
+        bucket_prefix_to_ruleshandler[BUCKET_STOPWATCH_PREFIX] = DEFAULT_STOPWATCH_RULES
+    return bucket_prefix_to_ruleshandler
+
+
+def find_handler_for_event(event: Event, eventkeyhandlers_per_bucket_prefix: Dict[str, List[EventKeyHandler]])\
+        -> EventKeyHandler:
+    """
+    Finds handler for the given event.
+    :param event: Event to find handler for.
+    :param eventkeyhandlers_per_bucket_prefix: Map of rules to use.
+    :return: Handler for the given event.
+    """
+    for bucket_prefix, bucket_handlers in eventkeyhandlers_per_bucket_prefix.items():
+        if event.bucket_id.startswith(bucket_prefix):
+            for bucket_handler in bucket_handlers:
+                if bucket_handler.key in event.data:
+                    return bucket_handler
+    return None
+
+
 def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int, float]],
-        bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]], ignore_hints: List[str]) -> RuleResult:
+        eventkeyhandlers_per_bucket_prefix: Dict[str, List[EventKeyHandler]], ignore_hints: List[str]) -> RuleResult:
     rule_result: RuleResult = None
     # Iterate all events to find out one with higher priority.
     for event in interval.events:
         # Search `EventKeyHandler` by 2 criteria:
         # 1) event bucket ID starts with handler 'bucket_id',
         # 2) handler key exists in event data.
-        handler: EventKeyHandler = None
-        for bucket_prefix, bucket_handlers in bucket_prefix_to_ruleshandler.items():
-            if event.bucket_id.startswith(bucket_prefix):
-                for bucket_handler in bucket_handlers:
-                    if bucket_handler.key in event.data:
-                        handler = bucket_handler
-                        break
+        handler: EventKeyHandler = find_handler_for_event(event, eventkeyhandlers_per_bucket_prefix)
         if not handler:
             ProblemReporter(ProblemReporter.EVENT_WITHOUT_RULE, event=event).report(ignore_hints)
-            _increment_metric(metrics, 'intervals with unknows events', interval)
+            increment_metric(metrics, 'intervals with unknows events', interval)
             continue  # It is OK, some events (inside interval) may don't have handlers intentionally.
         # Find rule by event data. Note that it may be sorted out by priority afterwards.
         rule, descriptions = handler.get_rule(event)
@@ -188,7 +217,7 @@ def _window_to_activity(window: RuleResultsWindow, rule_result: RuleResult, acti
         # Here may be a reason in "too specific" rules which leads to too small activities.
         # But current algorithm doesn't allow to keep few sliding windows in parallel
         # while person actually may switch too often between different activities.
-        # TODO _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
+        # TODO increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
     activity = window.to_activity()
     activities.append(activity)
     if is_build_debug_buckets:
@@ -219,11 +248,8 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
         raise ValueError(f"Analyze mode '{analyze_mode}' is not supported. Are supported only {ANALYZE_MODES}.")
     is_build_debug_buckets = analyze_mode in (ANALYZE_MODE_DEBUG, ANALYZE_MODE_TUNER)
     # Assemble full set of EventKeyHandler-s from predifined ones and custom.
-    bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]] = dict(custom_rules)
-    if BUCKET_AFK_PREFIX not in bucket_prefix_to_ruleshandler:
-        bucket_prefix_to_ruleshandler[BUCKET_AFK_PREFIX] = DEFAULT_AFK_RULES
-    if BUCKET_STOPWATCH_PREFIX not in bucket_prefix_to_ruleshandler:
-        bucket_prefix_to_ruleshandler[BUCKET_STOPWATCH_PREFIX] = DEFAULT_STOPWATCH_RULES
+    bucket_prefix_to_ruleshandler: Dict[str, List[EventKeyHandler]] = \
+        get_eventkeyhandlers_per_bucket_prefix(custom_rules)
     # Prepare to loop through intervals with searching rules, building report and metrics.
     # Go to the first interval.
     cur_interval: Interval = interval.iterate_prev()
@@ -254,15 +280,15 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
         # Gather some important metrics at start.
         is_not_afk = any(x.bucket_id.startswith(BUCKET_AFK_PREFIX) for x in cur_interval.events)
         if is_not_afk:
-            _increment_metric(metrics, 'not afk intervals', cur_interval)
+            increment_metric(metrics, 'not afk intervals', cur_interval)
         # NOTE: order is very important below.
         # Decide whether to count this interval or not and update metrics.
         if rule_result is None:
             ProblemReporter(ProblemReporter.MISSED_RULE, cur_interval=cur_interval).report(ignore_hints)
-            _increment_metric(metrics, 'intervals without rules', cur_interval)
+            increment_metric(metrics, 'intervals without rules', cur_interval)
             continue
         # Update per-rule-name metric. It should include all rules (i.e. "skip", "placeholder", etc.).
-        _increment_metric(metrics, str(rule_result.rule), cur_interval)
+        increment_metric(metrics, str(rule_result.rule), cur_interval)
         # Fill up BUCKET_DEBUG_RULE_RESULTS before handling deferred intervals
         # to represent logic of choosing rule by events in interval.
         if is_build_debug_buckets:
@@ -276,20 +302,20 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
         # Append deferred intervals if there are such.
         if deferred_intervals is not None:
             rule_result.intervals += deferred_intervals
-            _increment_metric(metrics, 'intervals merged to next rule', cur_interval)
+            increment_metric(metrics, 'intervals merged to next rule', cur_interval)
             deferred_intervals = []
         # Check if rule says skip interval from the report.
         if rule_result.rule.skip:
             LOG.debug("Skipping %f sec %d interval(s) because of %s priority is highest for %s.",
                       round(duration, 1), len(rule_result.intervals), rule_result.rule, rule_result.event)
-            _increment_metric(metrics, 'intervals with rule to skip', cur_interval)
+            increment_metric(metrics, 'intervals with rule to skip', cur_interval)
             continue
         # Check if rule is a placeholder and provide all information about interval to write appropriate rule for it.
         if rule_result.rule.is_placeholder:
             ProblemReporter(ProblemReporter.WEEK_RULE, cur_interval=cur_interval).report(ignore_hints)
-            _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
+            increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
         # Update 'total_intervals' metric.
-        _increment_metric(metrics, 'total intervals', cur_interval)
+        increment_metric(metrics, 'total intervals', cur_interval)
         # Defer interval if need. Note that `activity_counter` shouldn't be touched by this rule.
         if rule_result.rule.merge_next:
             deferred_intervals.append(cur_interval)
@@ -318,7 +344,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                 if window.duration > TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS:
                     ProblemReporter(ProblemReporter.TOO_WIDE_RULE, rule_result=rule_result, window=window)\
                         .report(ignore_hints)
-                    _increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
+                    increment_metric(metrics, 'intervals need to reveal rule for', cur_interval)
                 is_start_new_window = False
         if is_start_new_window:
             window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)

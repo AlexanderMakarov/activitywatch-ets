@@ -10,7 +10,7 @@ Lightweight representation of ActivityWatcher event without "id" field but with 
 """
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(eq=True, order=True)
 class Rule:
     """
     Structure which represents how to compare related event with others.
@@ -48,14 +48,18 @@ class Rule:
     def __repr__(self) -> str:
         desc = ""
         if self.subhandler:
-            desc = f"with subhandler {self.subhandler}"
-        elif self.skip:
-            desc = "to skip"
-        elif self.merge_next:
-            desc = "to merge with next interval"
-        elif self.is_placeholder:
-            desc = "placeholder"
-        return f"Rule '{self.key_pattern}', priority={self.priority}, {desc}"
+            desc += f", with subhandler {self.subhandler}"
+        if self.skip:
+            desc += ", to skip"
+        if self.merge_next:
+            desc += ", to merge with next interval"
+        if self.is_placeholder:
+            desc += ", placeholder"
+        return f"Rule '{self.key_pattern}', priority={self.priority}{desc}"
+
+    def __hash__(self) -> int:
+        return hash((self.key_pattern, self.skip, self.merge_next, self.is_placeholder, hash(self.subhandler)))
+
 
 class EventKeyHandler:
     """
@@ -84,7 +88,7 @@ class EventKeyHandler:
         Searches rule for specified event.
         :param event: Event to find rule for.
         :return: `Rule` handling specified event and ordered list of matching key value description-s in order of rule
-        handlers which point to the rule.
+        handlers which point to the rule. If there are no such rule then returns two None values.
         """
         value = event.data[self.key]
         descriptions = []
@@ -101,3 +105,6 @@ class EventKeyHandler:
             matched_rule, subhandler_descriptions = matched_rule.subhandler.get_rule(event)
             descriptions.extend(subhandler_descriptions)
         return matched_rule, descriptions
+
+    def __hash__(self) -> int:
+        return hash((self.key) + (r.__hash__() for r in self.rules))

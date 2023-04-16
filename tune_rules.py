@@ -4,11 +4,12 @@ import os
 import sys
 import argparse
 import copy
-# import pickle
+import dataclasses
 import dill as pickle  # For pickle-ing lambdas need to use 'dill' package.
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Tuple
 import contextlib
 import aw_client
+from activity_merger.domain.tuner import adjust_rules
 # Don't use convenient pyinput because https://pynput.readthedocs.io/en/latest/limitations.html#platform-limitations
 # For Unix terminal:
 try:
@@ -23,36 +24,24 @@ except ImportError:
 from pick import pick
 
 from activity_merger.config.config import LOG, MIN_DURATION_SEC, RULES, BUCKET_DEBUG_RAW_RULE_RESULTS
-from activity_merger.domain.input_entities import EventKeyHandler, Event
+from activity_merger.domain.input_entities import EventKeyHandler, Event, Rule
 from activity_merger.domain.interval import Interval
 from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date
-from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER
+from activity_merger.domain.analyzer import get_eventkeyhandlers_per_bucket_prefix, find_handler_for_event,\
+                                            analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER
 from activity_merger.domain.output_entities import AnalyzerResult
+from activity_merger.domain.metrics import Metrics
+from activity_merger.domain.tuner import Decision, adjust_rules
 from get_activities import get_interval, reload_debug_buckets, print_analyzer_result
 
 
-class Decision:
-    """
-    Shallow wrapper around 'Interval' without recursive links and with extra information
-    like user decision for this interval and problems with them.
-    """
-    SKIP = 1
-    MERGE_NEXT = 2
+@dataclasses.dataclass(order=True)
+class RuleNode:
+    rule: Rule
+    parent: 'RuleNode'
+    children: List['RuleNode']
+    # proposed_weight: int
 
-    def __init__(self, interval: Interval) -> None:
-        # Copy interval without 'prev' and 'next' attributes to don't get errors caused by big recursion.
-        self.interval = Interval(interval.start_time, interval.end_time)
-        self.interval.events = interval.events
-        # Cases:
-        # - user decided (any, True)
-        # - interval looks the same as decided by user so apply the same decision TODO do we need?
-        self.decision = None
-        self.is_user_decision = False
-        self.problem = None
-
-    def set_user_decision(self, decision):
-        self.decision = decision
-        self.is_user_decision = True
 
 class Context:
     FILE_PATH = os.path.abspath("tune_rules-context.pickle")
@@ -95,6 +84,26 @@ class Context:
     def get_undecided_intervals(self) -> List[Decision]:
         return [x for x in self.decisions if not x.decision]
 
+    def _find_rules_per_decision(self, decision: Decision, eventkeyhandlers_per_bucket_prefix) -> Tuple[Rule]:
+        rules = []
+        for event in decision.events:
+            handler = find_handler_for_event(event, eventkeyhandlers_per_bucket_prefix)
+            if not handler:
+                continue
+            rule, _ = handler.get_rule(event)
+            if rule:
+                rules.append(rule)
+        return tuple(sorted(rules))
+
+    def _incosistent_decision_log(self, decision_object, group_decision_obj):
+        a = (Decision.decision_item_to_str(x) for x in group_decision_obj.decision)
+        b = (Decision.decision_item_to_str(x) for x in decision_object.decision)
+        LOG.info("Inconsistency in decisions:\n"
+                 "  for %s decision is\n    %s\n"
+                 "  while for %s decision is\n    %s",
+                 decision_object.interval.to_str(), "\n    ".join(b),
+                 group_decision_obj, "\n    ".join(a))
+
     def recalculate_rules(self):
         """
         Modifies rules itself basing on decisions. If something contradicting or not not enough in decisions then
@@ -110,9 +119,42 @@ class Context:
         # 2. correct rules basing on right decisions
         # 3. try to apply rules to all remained intervals and calculate activities
         # 4. print statistic
+        # -----------
+        # 1a - group decisons (intervals) by rules matching events inside.
+        eventkeyhandlers_per_bucket_prefix = get_eventkeyhandlers_per_bucket_prefix(self.rules)
+        combination_rules: Dict[Tuple, List[Decision]] = {}
+        metrics = Metrics({
+            'inconsistent_decision', self._incosistent_decision_log,
+        }, None)
         for decision in self.decisions:
-            pass
+            if decision.decision:
+                rules = self._find_rules_per_decision(decision, eventkeyhandlers_per_bucket_prefix)
+                combination_rules.get(rules, set()).append(decision)
+        # 1b + 2 - analyze resulting groups and either print contradictions or make correction to rules.
+        rules_tree: RuleNode = None
+        for rules, decision_objects in combination_rules.items():
+            group_decision_obj = decision_objects[0]
+            # Check for "no contradictions". TODO distinguish which rule is not specific enough.
+            is_valid = True
+            for decision_object in decision_objects:
+                if decision_object.decision != group_decision_obj.decision:
+                    metrics.report('inconsistent_decision', decision_object, decision_object=decision_object,
+                                   group_decision_obj=group_decision_obj)
+                    is_valid = False
+            # If valid then build rules linked list with weights.
+            if is_valid:
+                # Need to build structure like: rA>rB, rC>rD, rD>rB, etc.
+                # And sort them into a tree like: rB<rD<rC
+                #                                   <rA
+                # If it is impossible to build a tree/DAG (there are cycles) then report about all cases and fail.
+                # Next scatter weights above this tree trying to keep at distance from each other and don't change.
+                if rules_tree:
+                    pass
+        # Generate code in python to build a tree from dictionary of multiple "Rule" objects per multiple "Decision" objects.
+        # If some decisions makes loops in this tree then show warnings.
+
         raise NotImplementedError("")
+        return metrics
 
 
 class TerminalLeader:
@@ -198,12 +240,10 @@ class TerminalLeader:
         :param undecided_list: List of undecided 'Decision'-s to decide on.
         :return: `True` if need to stop tuning and just print result, `False` to proceed with one more iteration. 
         """
-        if not self.ask_yes_no("Proceed with 'decide for interval' session?"):
-            return True
         sys.stdout.write(
             "Next will be presented %d intervals with options to choose. "
             "Please open them in http://localhost:5600/#/timeline '%s' bucket as well. "
-            "Note that this page with debug information may be quite heavy and take few GB in your RAM. "
+            "Note that this page with debug information may be quite heavy and slow due to number of elements. "
             "Point (with \u2191 and \u2193) and press 'Space' on one or few options you think should represent "
             "each interval. Press 'Enter' to apply and proceed. Press 'Escape' or choose nothing to stop deciding."
             "\nNote that for special behavior usually need to choose recorded event as well because:\n"
@@ -213,6 +253,8 @@ class TerminalLeader:
             (len(undecided_list), BUCKET_DEBUG_RAW_RULE_RESULTS, self.SKIP_TEXT, self.MERGE_TEXT)
         )
         sys.stdout.flush()
+        if not self.ask_yes_no("Proceed with 'decide for interval' session?"):
+            return True
         cnt_decided = 0
         for decision in undecided_list:
             selected = self._ask_decision(decision.interval)
@@ -355,7 +397,8 @@ class UnixTerminalLeader(TerminalLeader):
                     break
         finally:
             # Revert TTY attributes.
-            termios.tcsetattr(fd, termios.TCSAFLUSH, old)
+            # TODO fix - doesn't revert in xfce4-terminal. STR: run once, stop, try again - menu doesn't clean.
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
             # NOTE breaks cursor movements in xfce4-terminal sys.stdout.write(self.ANSI_SHOW_CURSOR)
         return [x[0] for x in menu if x[2]]
 
@@ -372,14 +415,26 @@ def ask_decision_and_correct_rules(context: Context) -> bool:
     else:
         leader = UnixTerminalLeader()
     # Calculate which decisions need to make.
-    undecided_intervals = context.get_undecided_intervals()
-    # Interact with user asking for "proceed?" and decisions.
+    undecided_intervals: List[Decision] = context.get_undecided_intervals()
+    # Interact with user asking for decisions like "this event describes this interval".
     is_exit = leader.ask_decisions(undecided_intervals)
-    decided_intervals = [x for x in undecided_intervals if x.decision]
-    LOG.info("Got decisions for %d from %d asked intervals.", len(decided_intervals), len(undecided_intervals))
-    # Calculate new rules and show problems.
-    context.recalculate_rules()
-    assert False, "Need to complete code"
+    # Find out which intervals were decided on this round.
+    decided_intervals_this_round = [x for x in undecided_intervals if x.decision]
+    decided_intervals = [x for x in context.decisions if x.decision]
+    LOG.info("Got decisions for %d from %d asked intervals. Total %d decided intervals from %d.",
+             len(decided_intervals_this_round), len(undecided_intervals), len(decided_intervals),
+             len(context.decisions))
+    # Check if something was changed and adjust rules if yes.
+    if decided_intervals:
+        # Find out rules for each event in decided intervals (not this round, but all) to adjust them by decisions.
+        eventkeyhandlers_per_bucket_prefix = get_eventkeyhandlers_per_bucket_prefix(context.rules)
+        for decision in decided_intervals:
+            # TODO print which rules were chosen per event.
+            decision.set_rules_per_event(eventkeyhandlers_per_bucket_prefix)
+        # Investigated decisions and adjust priorities for rules.
+        rules, metrics = adjust_rules(decided_intervals, context.rules)
+        LOG.info(metrics.to_str())
+        assert False, "Need to complete code"
     return is_exit
 
 
