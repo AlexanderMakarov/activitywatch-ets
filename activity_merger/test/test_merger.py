@@ -296,7 +296,7 @@ class TestMerger(unittest.TestCase):
             None,
             [AFK_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 0, ''),
+                ('  In result got %d intervals. Details:\n  %s', 0, ''),
                 ("No AFK events found in %s..%s. Stopping here - no more events expected.", start_time, end_time)
             ]
         ),
@@ -309,7 +309,7 @@ class TestMerger(unittest.TestCase):
             inerval_for_1_event,
             [AFK_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1')
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1')
             ]
         ),
         (
@@ -321,7 +321,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1]), (2, 1, [event_2])]),
             [AFK_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
+                ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
             ]
         ),
         (
@@ -333,7 +333,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1])]),
             [AFK_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1,
+                ('  In result got %d intervals. Details:\n  %s', 1,
                  'cnt_new_interval: 1\n  cnt_handled_events: 1')
             ]
         ),
@@ -346,7 +346,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1, event_1_bucket2])]),
             [AFK_BUCKET_ID, AFK_BUCKET_ID2],
             [
-                ('In result got %d intervals. Details:\n  %s', 1,
+                ('  In result got %d intervals. Details:\n  %s', 1,
                  'cnt_new_interval: 1\n  cnt_handled_events: 2\n  cnt_match_interval: 1')
             ]
         ),
@@ -359,7 +359,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1]), (2, 1, [event_2_bucket2])]),
             [AFK_BUCKET_ID, AFK_BUCKET_ID2],
             [
-                ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
+                ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
             ]
         ),
         (
@@ -371,7 +371,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2])]),
             [AFK_BUCKET_ID, AFK_BUCKET_ID2],
             [
-                ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
+                ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2')
             ]
         ),
         (
@@ -384,7 +384,7 @@ class TestMerger(unittest.TestCase):
                              (3, 1, [event_1l3_data_from_1l2])]),
             [AFK_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 3,
+                ('  In result got %d intervals. Details:\n  %s', 3,
                  'cnt_new_interval: 1\n  cnt_handled_events: 2\n  cnt_inside_interval: 1')
             ]
         ),
@@ -397,7 +397,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1]), (2, 1, [event_2_bucket2]), (3, 1, [event_3])]),
             [AFK_BUCKET_ID, AFK_BUCKET_ID2],
             [
-                ('In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
+                ('  In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
             ]
         ),
         (
@@ -409,7 +409,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2]), (3, 1, [event_3_bucket2])]),
             [AFK_BUCKET_ID, AFK_BUCKET_ID2],
             [
-                ('In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
+                ('  In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
             ]
         ),
         (
@@ -421,7 +421,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1_bucket2]), (2, 1, [event_2]), (4, 1, [event_4_bucket2])]),
             [AFK_BUCKET_ID, AFK_BUCKET_ID2],
             [
-                ('In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
+                ('  In result got %d intervals. Details:\n  %s', 3, 'cnt_new_interval: 3\n  cnt_handled_events: 3')
             ]
         ),
         (
@@ -433,7 +433,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 3, [event_1l3_data_from_1l2])]),
             [AFK_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1,
+                ('  In result got %d intervals. Details:\n  %s', 1,
                  'cnt_new_interval: 1\n  cnt_handled_events: 1')
             ]
         ),
@@ -447,7 +447,7 @@ class TestMerger(unittest.TestCase):
                              (4, 1, [event_4_bucket2])]),
             [AFK_BUCKET_ID, AFK_BUCKET_ID2],
             [
-                ('In result got %d intervals. Details:\n  %s', 3,
+                ('  In result got %d intervals. Details:\n  %s', 3,
                  'cnt_new_interval: 2\n  cnt_handled_events: 3\n  cnt_split_one_interval: 1')
             ]
         ),
@@ -461,7 +461,7 @@ class TestMerger(unittest.TestCase):
                              (3, 1, [event_1l4, event_3_bucket2]), (4, 1, [event_1l4])]),
             [AFK_BUCKET_ID, AFK_BUCKET_ID2],
             [
-                ('In result got %d intervals. Details:\n  %s', 4,
+                ('  In result got %d intervals. Details:\n  %s', 4,
                  'cnt_new_interval: 1\n  cnt_handled_events: 3\n  cnt_inside_interval: 1\n  cnt_split_one_interval: 1')
             ]
         ),
@@ -474,7 +474,7 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
                 ("'%s' bucket doesn't have events in %s..%s.", SOME_BUCKET_ID, start_time, build_datetime(2, day=1)),
             ]
         ),
@@ -487,9 +487,9 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1, sevent_1])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_handled_events: 1\n  cnt_match_interval: 1'),
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_handled_events: 1\n  cnt_match_interval: 1'),
             ]
         ),
         (
@@ -501,9 +501,9 @@ class TestMerger(unittest.TestCase):
             build_intervals([(2, 1, [event_2])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_skipped_before_afk: 1'),
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_skipped_before_afk: 1'),
             ]
         ),
         (
@@ -515,9 +515,9 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_skipped_after_afk: 1'),
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_skipped_after_afk: 1'),
             ]
         ),
         (
@@ -529,9 +529,9 @@ class TestMerger(unittest.TestCase):
             build_intervals([(2, 1, [event_2l2, sevent_1l2]), (3, 1, [event_2l2])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-                ('In result got %d intervals. Details:\n  %s', 2,
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+                ('  In result got %d intervals. Details:\n  %s', 2,
                  'cnt_handled_events: 1\n  cnt_split_one_interval: 1'),
             ]
         ),
@@ -544,9 +544,9 @@ class TestMerger(unittest.TestCase):
             build_intervals([(1, 1, [event_1l2]), (2, 1, [event_1l2, sevent_2l2])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-                ('In result got %d intervals. Details:\n  %s', 2,
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+                ('  In result got %d intervals. Details:\n  %s', 2,
                  'cnt_handled_events: 1\n  cnt_split_few_intervals: 1'),
             ]
         ),
@@ -559,9 +559,9 @@ class TestMerger(unittest.TestCase):
             build_intervals([(2, 1, [event_2, sevent_1l3])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-                ('In result got %d intervals. Details:\n  %s', 1,
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+                ('  In result got %d intervals. Details:\n  %s', 1,
                  'cnt_handled_events: 1\n  cnt_split_few_intervals: 1'),
             ]
         ),
@@ -574,9 +574,9 @@ class TestMerger(unittest.TestCase):
             build_intervals([(2, 1, [event_2, sevent_1l6]), (4, 1, [event_4, sevent_1l6])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-                ('In result got %d intervals. Details:\n  %s', 2,
+                ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+                ('  In result got %d intervals. Details:\n  %s', 2,
                  'cnt_handled_events: 1\n  cnt_split_few_intervals: 1'),
             ]
         ),
@@ -590,9 +590,9 @@ class TestMerger(unittest.TestCase):
                              (4, 1, [event_1l4]), (5, 1, [event_5])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 2),
-                ('In result got %d intervals. Details:\n  %s', 5,
+                ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 2),
+                ('  In result got %d intervals. Details:\n  %s', 5,
                  'cnt_handled_events: 2\n  cnt_inside_interval: 1\n  cnt_split_one_interval: 1'),
             ]
         ),
@@ -605,9 +605,9 @@ class TestMerger(unittest.TestCase):
         #     build_intervals([(1, 1, [event_1, sevent_1l2]), (3, 1, [event_3, sevent_2l2])]),
         #     [AFK_BUCKET_ID, SOME_BUCKET_ID],
         #     [
-        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
-        #         ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_handled_events: 1\n  cnt_split_one_interval: 1'),
+        #         ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
+        #         ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+        #         ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_handled_events: 1\n  cnt_split_one_interval: 1'),
         #     ]
         # ),
         (
@@ -620,9 +620,10 @@ class TestMerger(unittest.TestCase):
                              (3, 1, [event_2l2, sevent_3l2])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 2),
-                ('In result got %d intervals. Details:\n  %s', 3, 'cnt_handled_events: 2\n  cnt_split_few_intervals: 2'),
+                ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 2),
+                ('  In result got %d intervals. Details:\n  %s', 3,
+                 'cnt_handled_events: 2\n  cnt_split_few_intervals: 2'),
             ]
         ),
         (
@@ -635,9 +636,9 @@ class TestMerger(unittest.TestCase):
                              (7, 2, [event_1l8])]),
             [AFK_BUCKET_ID, SOME_BUCKET_ID],
             [
-                ('In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
-                ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 2),
-                ('In result got %d intervals. Details:\n  %s', 4,
+                ('  In result got %d intervals. Details:\n  %s', 1, 'cnt_new_interval: 1\n  cnt_handled_events: 1'),
+                ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 2),
+                ('  In result got %d intervals. Details:\n  %s', 4,
                  'cnt_handled_events: 2\n  cnt_inside_interval: 1\n  cnt_split_one_interval: 1'),
             ]
         ),
@@ -650,9 +651,9 @@ class TestMerger(unittest.TestCase):
         #     build_intervals([(2, 1, [event_2, sevent_1l6]), (4, 1, [event_4, sevent_1l6, sevent_3l2_bucket2])]),
         #     [AFK_BUCKET_ID, SOME_BUCKET_ID, SOME_BUCKET_ID2],
         #     [
-        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
-        #         ("Applying '%s' bucket %s events.", SOME_BUCKET_ID, 1),
-        #         ('In result got %d intervals. Details:\n  %s', 2, 'cnt_handled_events: 1\n  cnt_split_few_intervals: 1'),
+        #         ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_new_interval: 2\n  cnt_handled_events: 2'),
+        #         ("Applying '%s' bucket %d events:", SOME_BUCKET_ID, 1),
+        #         ('  In result got %d intervals. Details:\n  %s', 2, 'cnt_handled_events: 1\n  cnt_split_few_intervals: 1'),
         #     ]
         # ),
     ])

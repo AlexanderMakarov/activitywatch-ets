@@ -24,8 +24,10 @@ Other details and more fine-grained rules may be checked in [config.py](/activit
 ## Setup
 
 - Install Python 3.6+.
+- Create venv with `python -m venv .venv` (be careful with version of Python).
+    Activate it with something like `source venv/bin/activate`.
 - Open root folder and run `pip3 install -r requirements.txt`.
-- (only for Outlook Calendar events scraping) Install [geckodriver](https://github.com/mozilla/geckodriver) from GitHub repo [Releases](https://github.com/mozilla/geckodriver/releases) page. For Linux it is just extracting binary into some place in PATH.
+- (only for Outlook Calendar events scraping) Install [geckodriver](https://github.com/mozilla/geckodriver) from GitHub repo [Releases](https://github.com/mozilla/geckodriver/releases) page. For Linux it is just extracting binary into some place in $PATH.
 
 ## ActivityWatch extra data.
 
@@ -100,7 +102,7 @@ Note that for `RULES` configuration it would be great to have:
   Better to remember answers or provide ability to reiterate only some of events, for example
   those where were issues previous iteration. It means database...
 - [ ] Complete get_activities.py
-- [ ] Prepare script to run all event importers and get_activities.py for the specific date.
+- [x] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust `RULES` and code if need.
 - [ ] Use for ETS for a few days. Adjust `RULES`.
 - [x] Write tests for merger with Stopwatch events involvement.

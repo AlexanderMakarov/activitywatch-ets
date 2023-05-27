@@ -1,7 +1,7 @@
 import datetime
 from typing import List, Callable
 from .input_entities import Event
-from ..helpers.helpers import *
+from ..helpers.helpers import from_start_to_end_to_str, seconds_to_int_timedelta, event_data_to_str
 
 
 class Interval:

@@ -5,11 +5,10 @@ import sys
 import argparse
 import copy
 import dataclasses
-import dill as pickle  # For pickle-ing lambdas need to use 'dill' package.
+import dill  # For pickle-ing lambdas need to use 'dill' package.
 from typing import Any, List, Dict, Tuple
 import contextlib
 import aw_client
-from activity_merger.domain.tuner import adjust_rules
 # Don't use convenient pyinput because https://pynput.readthedocs.io/en/latest/limitations.html#platform-limitations
 # For Unix terminal:
 try:
@@ -31,39 +30,37 @@ from activity_merger.domain.analyzer import get_eventkeyhandlers_per_bucket_pref
                                             analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.domain.metrics import Metrics
-from activity_merger.domain.tuner import Decision, adjust_rules
+from activity_merger.domain.tuner import IntervalWithDecision, SKIP_TEXT, MERGE_TEXT, TUNER_ABILITIES_TEXT,\
+                                         adjust_priorities
 from get_activities import get_interval, reload_debug_buckets, print_analyzer_result
 
 
-@dataclasses.dataclass(order=True)
-class RuleNode:
-    rule: Rule
-    parent: 'RuleNode'
-    children: List['RuleNode']
-    # proposed_weight: int
-
-
 class Context:
-    FILE_PATH = os.path.abspath("tune_rules-context.pickle")
+    """
+    Container for "tune rules" iterations.
+    """
 
-    def __init__(self, decisions: List[Decision], first_interval: Interval, rules: Dict[str, List[EventKeyHandler]])\
+    SAVE_FILE_PATH = os.path.abspath("tune_rules-context.dill")
+
+    def __init__(self, intervals: List[IntervalWithDecision], rules: Dict[str, List[EventKeyHandler]])\
             -> None:
-        self.decisions = decisions
-        self.first_interval = first_interval
-        self.rules = rules
+        self.intervals: List[IntervalWithDecision] = intervals
+        self.rules: Dict[str, List[EventKeyHandler]] = rules
 
     def save(self):
-        tmp = self.first_interval
-        try:
-            self.first_interval = None  # Can't save 'Interval' due to deep recursion.
-            with open(Context.FILE_PATH, "wb") as f:
-                pickle.dump(self, f)
-            LOG.info("Saved current context into %s file.", Context.FILE_PATH)
-        finally:
-            self.first_interval = tmp
+        """
+        Saves itself into `SAVE_FILE_PATH` file.
+        """
+        # We can't save 'self' as is due to deep recursions in Interval-s.
+        # Prepare copy which may be restored into full object on "load".
+        serializable_intervals = [x.get_serializable_copy() for x in self.intervals]
+        tmp = Context(serializable_intervals, self.rules)
+        with open(Context.SAVE_FILE_PATH, "wb") as f:
+            dill.dump(tmp, f)
+        LOG.info("Saved current context into %s file.", Context.SAVE_FILE_PATH)
 
     @staticmethod
-    def build_intervals_from_decisions(decisions: List[Decision]) -> Interval:
+    def build_intervals_from_decisions(decisions: List[IntervalWithDecision]) -> Interval:
         interval = None
         for decision in decisions:
             d_interval = decision.interval
@@ -73,20 +70,33 @@ class Context:
         return interval
 
     @staticmethod
-    def read_from_file() -> 'Decision':
-        with open(Context.FILE_PATH, "rb") as f:
-            result: Context = pickle.load(f)
-            result.first_interval = Context.build_intervals_from_decisions(result.decisions)
-            result.first_interval = result.first_interval.iterate_prev()
-        LOG.info("Restored context with %d intervals from %s file.", len(result.decisions), Context.FILE_PATH)
+    def read_from_file() -> 'Context':
+        with open(Context.SAVE_FILE_PATH, "rb") as f:
+            result: Context = dill.load(f)
+            intervals = []
+            prev = None
+            nxt = None
+            for i, interval in enumerate(result.intervals):
+                if i == 0:
+                    prev = None
+                else:
+                    prev = result.intervals[i - 1]
+                if i == len(result.intervals) - 1:
+                    nxt = None
+                else:
+                    nxt = result.intervals[i + 1]
+                intervals.append(IntervalWithDecision.from_serializable_copy(interval, prev, nxt))
+            result.intervals = intervals
+        LOG.info("Restored context with %d intervals from %s file.", len(result.decisions), Context.SAVE_FILE_PATH)
         return result
 
-    def get_undecided_intervals(self) -> List[Decision]:
-        return [x for x in self.decisions if not x.decision]
+    def get_undecided_intervals(self) -> List[IntervalWithDecision]:
+        return [x for x in self.intervals if not x.decision]
 
-    def _find_rules_per_decision(self, decision: Decision, eventkeyhandlers_per_bucket_prefix) -> Tuple[Rule]:
+    def _find_rules_per_interval(self, interval: IntervalWithDecision, eventkeyhandlers_per_bucket_prefix)\
+            -> Tuple[Rule]:
         rules = []
-        for event in decision.events:
+        for event in interval.events:
             handler = find_handler_for_event(event, eventkeyhandlers_per_bucket_prefix)
             if not handler:
                 continue
@@ -95,75 +105,12 @@ class Context:
                 rules.append(rule)
         return tuple(sorted(rules))
 
-    def _incosistent_decision_log(self, decision_object, group_decision_obj):
-        a = (Decision.decision_item_to_str(x) for x in group_decision_obj.decision)
-        b = (Decision.decision_item_to_str(x) for x in decision_object.decision)
-        LOG.info("Inconsistency in decisions:\n"
-                 "  for %s decision is\n    %s\n"
-                 "  while for %s decision is\n    %s",
-                 decision_object.interval.to_str(), "\n    ".join(b),
-                 group_decision_obj, "\n    ".join(a))
-
-    def recalculate_rules(self):
-        """
-        Modifies rules itself basing on decisions. If something contradicting or not not enough in decisions then
-        explains it in logs.
-        TODO saves decisions from this iterations and clears problems ones to ask user for decision one more time.
-        """
-        # 1. Iterate all decisions to:
-        #   - checks which are decided
-        #   - find contradictions like:
-        #     * for similar set of events decisions are different in intervals
-        #   - print contradictions
-        #   - gather statistic (first part)
-        # 2. correct rules basing on right decisions
-        # 3. try to apply rules to all remained intervals and calculate activities
-        # 4. print statistic
-        # -----------
-        # 1a - group decisons (intervals) by rules matching events inside.
-        eventkeyhandlers_per_bucket_prefix = get_eventkeyhandlers_per_bucket_prefix(self.rules)
-        combination_rules: Dict[Tuple, List[Decision]] = {}
-        metrics = Metrics({
-            'inconsistent_decision', self._incosistent_decision_log,
-        }, None)
-        for decision in self.decisions:
-            if decision.decision:
-                rules = self._find_rules_per_decision(decision, eventkeyhandlers_per_bucket_prefix)
-                combination_rules.get(rules, set()).append(decision)
-        # 1b + 2 - analyze resulting groups and either print contradictions or make correction to rules.
-        rules_tree: RuleNode = None
-        for rules, decision_objects in combination_rules.items():
-            group_decision_obj = decision_objects[0]
-            # Check for "no contradictions". TODO distinguish which rule is not specific enough.
-            is_valid = True
-            for decision_object in decision_objects:
-                if decision_object.decision != group_decision_obj.decision:
-                    metrics.report('inconsistent_decision', decision_object, decision_object=decision_object,
-                                   group_decision_obj=group_decision_obj)
-                    is_valid = False
-            # If valid then build rules linked list with weights.
-            if is_valid:
-                # Need to build structure like: rA>rB, rC>rD, rD>rB, etc.
-                # And sort them into a tree like: rB<rD<rC
-                #                                   <rA
-                # If it is impossible to build a tree/DAG (there are cycles) then report about all cases and fail.
-                # Next scatter weights above this tree trying to keep at distance from each other and don't change.
-                if rules_tree:
-                    pass
-        # Generate code in python to build a tree from dictionary of multiple "Rule" objects per multiple "Decision" objects.
-        # If some decisions makes loops in this tree then show warnings.
-
-        raise NotImplementedError("")
-        return metrics
-
 
 class TerminalLeader:
     """
     Abstract matching song leader which expects user answers in terminal. Wraps `Matcher`, manages "ask - answer -
     check" flow and prints statistic at the end. Delegates operating system specific actions to inheritors.
     """
-    SKIP_TEXT = 'skip from activities'
-    MERGE_TEXT = 'merge with next interval'
 
     def __init__(self):
         pass
@@ -201,8 +148,8 @@ class TerminalLeader:
     def _ask_decision(self, interval: Interval) -> List[Any]:
         interval_desc = interval.to_str(only_time=True)
         options = {  # Use keys as 'value to present to user' and values to return result.
-            self.SKIP_TEXT: Decision.SKIP,
-            self.MERGE_TEXT: Decision.MERGE_NEXT,
+            SKIP_TEXT: Decision.SKIP,
+            MERGE_TEXT: Decision.MERGE_NEXT,
         }
         for event in interval.events:
             options[f"{event.bucket_id}: {event_data_to_str(event)}"] = event
@@ -212,8 +159,8 @@ class TerminalLeader:
         while True:
             selected: List[str] = self._ask_multiselect_question(interval_desc, list(options.keys()))
             # Check for validity.
-            if self.SKIP_TEXT in selected and self.MERGE_TEXT in selected:
-                LOG.warning("It is impossible to both %s and %s. Please reconsider.", self.SKIP_TEXT, self.MERGE_TEXT)
+            if SKIP_TEXT in selected and MERGE_TEXT in selected:
+                LOG.warning("It is impossible to both %s and %s. Please reconsider.", SKIP_TEXT, MERGE_TEXT)
                 continue
             # Build text explanation of choice.
             result_desc_items = []  # Clear from previous attempt values.
@@ -240,23 +187,31 @@ class TerminalLeader:
         :param undecided_list: List of undecided 'Decision'-s to decide on.
         :return: `True` if need to stop tuning and just print result, `False` to proceed with one more iteration. 
         """
-        sys.stdout.write(
-            "Next will be presented %d intervals with options to choose. "
-            "Please open them in http://localhost:5600/#/timeline '%s' bucket as well. "
-            "Note that this page with debug information may be quite heavy and slow due to number of elements. "
-            "Point (with \u2191 and \u2193) and press 'Space' on one or few options you think should represent "
-            "each interval. Press 'Enter' to apply and proceed. Press 'Escape' or choose nothing to stop deciding."
-            "\nNote that for special behavior usually need to choose recorded event as well because:\n"
-            "- %s - need to point event causing skipping,\n"
+        sys.stdout.write(  # TODO reduce coupling with 'tuner'.
+            "INSTRUCTION: Please open chosen date on http://localhost:5600/#/timeline to see '%s' bucket debug "
+            "events. Note that with all debug events this page may be quite slow in browser. "
+            "You will be asked about all %d intervals from '%s' bucket to chose how given interval should be "
+            "handled in order to provide right 'activity' in resulting report."
+            "\nNote that always better to choose one or multiple recorded events because:\n"
+            "- %s - need to point event causing skipping.\n"
             "- %s - need to point event which makes this interval borrow meaning of the next interval. "
-            "Except case when you decided to merge with next because of absence of event in the some bucket.\n" % \
-            (len(undecided_list), BUCKET_DEBUG_RAW_RULE_RESULTS, self.SKIP_TEXT, self.MERGE_TEXT)
+            "Choose 'afk' bucket event if you don't sure/know what happened those time.\n"
+            "- in all cases - because more data means more precision.\n"
+            "Sometimes lack of events or 'too general events' on interval just means that need to add more rules "
+            "into configuration to provide more information for decisions.\n"
+            "Tuner may do the following corrections to rules: %s.\n"
+            "So point your decision (with \u2191 and \u2193) and press 'Space' on one or few options. "
+            "Press 'Enter' to apply and proceed. Press 'Escape' or choose nothing to stop deciding. "
+            "If you haven't provided decision for each interval then remained will be re-evaluated with existing "
+            "decisions. Note that all contradicting decisions will be noted and handed by 'first decision' strategy.\n"
+             % (BUCKET_DEBUG_RAW_RULE_RESULTS, len(undecided_list), BUCKET_DEBUG_RAW_RULE_RESULTS, SKIP_TEXT,
+                MERGE_TEXT, TUNER_ABILITIES_TEXT)
         )
         sys.stdout.flush()
         if not self.ask_yes_no("Proceed with 'decide for interval' session?"):
             return True
         cnt_decided = 0
-        for decision in undecided_list:
+        for decision in undecided_list:  # TODO add 'redo' or 'next'.
             selected = self._ask_decision(decision.interval)
             if selected:
                 decision.set_user_decision(selected)
@@ -407,34 +362,39 @@ def ask_decision_and_correct_rules(context: Context) -> bool:
     """
     Interacts with user asking about required intervals decisions, next makes suggestion for "analyze" rules.
     :param context: Context with "what to ask" and current progress.
-    :return: Flag that user chose to stop tuning.
+    :return: `True` if user chose to stop tuning, `False` if all decisions were made.
     """
     if sys.platform.startswith("win"):
         LOG.error("Windows terminal is not supported yet")
-        # leader = WindowsTerminalLeader()
+        # leader = WindowsTerminalLeader() TODO
     else:
         leader = UnixTerminalLeader()
     # Calculate which decisions need to make.
-    undecided_intervals: List[Decision] = context.get_undecided_intervals()
+    undecided_intervals: List[IntervalWithDecision] = context.get_undecided_intervals()
     # Interact with user asking for decisions like "this event describes this interval".
     is_exit = leader.ask_decisions(undecided_intervals)
     # Find out which intervals were decided on this round.
     decided_intervals_this_round = [x for x in undecided_intervals if x.decision]
-    decided_intervals = [x for x in context.decisions if x.decision]
+    decided_intervals: List[IntervalWithDecision] = [x for x in context.decisions if x.decision]
     LOG.info("Got decisions for %d from %d asked intervals. Total %d decided intervals from %d.",
              len(decided_intervals_this_round), len(undecided_intervals), len(decided_intervals),
              len(context.decisions))
     # Check if something was changed and adjust rules if yes.
     if decided_intervals:
-        # Find out rules for each event in decided intervals (not this round, but all) to adjust them by decisions.
+        # Find out rules for each event in all decided so far intervals to adjust them by decisions.
         eventkeyhandlers_per_bucket_prefix = get_eventkeyhandlers_per_bucket_prefix(context.rules)
         for decision in decided_intervals:
             # TODO print which rules were chosen per event.
             decision.set_rules_per_event(eventkeyhandlers_per_bucket_prefix)
         # Investigated decisions and adjust priorities for rules.
-        rules, metrics = adjust_rules(decided_intervals, context.rules)
-        LOG.info(metrics.to_str())
-        assert False, "Need to complete code"
+        metrics = adjust_priorities(decided_intervals)
+        LOG.info("By %d decided intervals on this round made following adjustments to rules:\n%s",
+                 len(decided_intervals_this_round), metrics.to_str())
+        # Use metrics to calculate percentage of changes.
+        total_rules = metrics.get_metric('total_rules')
+        total_unique_updated_rules = metrics.get_metric('total_unique_updated_rules')
+        # TODO output rules 'to paste into file'.
+        LOG.info("Adjusted %f.2%% rules. Result:\n%s", 100 * (total_unique_updated_rules / total_rules), context.rules)
     return is_exit
 
 
@@ -458,10 +418,10 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
             return None
         # Scroll to the first/oldest interval.
         interval = interval.iterate_prev()
-        # Prepare context: make Session from 'interval' and make deep clone of rules.
-        decisions = []
-        interval.iterate_next(lambda x: decisions.append(Decision(x)))
-        context = Context(decisions, interval, copy.deepcopy(RULES))
+        # Prepare context: make Decision-s from Interval-s and make deep clone of rules.
+        intervals_list = []
+        interval.iterate_next(lambda x: intervals_list.append(IntervalWithDecision(x)))
+        context = Context(intervals_list, copy.deepcopy(RULES))
         # Save context right away to skip steps above next time.
         context.save()
     analyzer_result: AnalyzerResult
@@ -511,7 +471,8 @@ def main():
         events_date = (events_date - datetime.timedelta(days=args.back_days))
     tune_rules(events_date, args.is_use_saved)
 
-@contextlib.contextmanager  # TODO remove
+
+@contextlib.contextmanager  # TODO remove after fixing all terminal issues
 def raw_mode(file):
     old_attrs = termios.tcgetattr(file.fileno())
     new_attrs = old_attrs[:]
@@ -523,7 +484,7 @@ def raw_mode(file):
         termios.tcsetattr(file.fileno(), termios.TCSADRAIN, old_attrs)
 
 
-def main2():
+def main2():  # TODO remove after fixing all terminal issues
     print('exit with ^C or ^D')
     with raw_mode(sys.stdin):
         try:

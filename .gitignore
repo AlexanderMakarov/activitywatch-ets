@@ -4,4 +4,6 @@
 *.png
 .vscode
 config*.py
-*.pickle
+*.dill
+.venv
+*.tmp

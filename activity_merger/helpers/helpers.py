@@ -3,10 +3,10 @@ import logging
 import argparse
 import os
 from typing import List
-from ..domain.input_entities import Event
-from ..config.config import CURRENT_TIMEZONE
 import aw_client
 import aw_core.models as awmodels
+from ..domain.input_entities import Event
+from ..config.config import CURRENT_TIMEZONE
 
 
 def setup_logging() -> logging.Logger:
