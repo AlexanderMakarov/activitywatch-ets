@@ -29,7 +29,6 @@ from activity_merger.helpers.helpers import event_data_to_str, setup_logging, va
 from activity_merger.domain.analyzer import get_eventkeyhandlers_per_bucket_prefix, find_handler_for_event,\
                                             analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER
 from activity_merger.domain.output_entities import AnalyzerResult
-from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.tuner import IntervalWithDecision, SKIP_TEXT, MERGE_TEXT, TUNER_ABILITIES_TEXT,\
                                          adjust_priorities
 from get_activities import get_interval, reload_debug_buckets, print_analyzer_result
@@ -60,17 +59,10 @@ class Context:
         LOG.info("Saved current context into %s file.", Context.SAVE_FILE_PATH)
 
     @staticmethod
-    def build_intervals_from_decisions(decisions: List[IntervalWithDecision]) -> Interval:
-        interval = None
-        for decision in decisions:
-            d_interval = decision.interval
-            # 'interval if interval else None' below is needed because Pyton passes value by link always.
-            interval = Interval(d_interval.start_time, d_interval.end_time, interval if interval else None)
-            interval.events = d_interval.events
-        return interval
-
-    @staticmethod
     def read_from_file() -> 'Context':
+        """
+        Reads context of tuning from the `SAVE_FILE_PATH` file.
+        """
         with open(Context.SAVE_FILE_PATH, "rb") as f:
             result: Context = dill.load(f)
             intervals = []
@@ -87,10 +79,15 @@ class Context:
                     nxt = result.intervals[i + 1]
                 intervals.append(IntervalWithDecision.from_serializable_copy(interval, prev, nxt))
             result.intervals = intervals
-        LOG.info("Restored context with %d intervals from %s file.", len(result.decisions), Context.SAVE_FILE_PATH)
+        undecided_intervals = result.get_undecided_intervals()
+        LOG.info("Restored context from '%s' file with %d intervals where %d are undecedied.",
+                 Context.SAVE_FILE_PATH, len(result.intervals), len(undecided_intervals))
         return result
 
     def get_undecided_intervals(self) -> List[IntervalWithDecision]:
+        """
+        :return: List of `IntervalWithDecision`-s which are not decided yet.
+        """
         return [x for x in self.intervals if not x.decision]
 
     def _find_rules_per_interval(self, interval: IntervalWithDecision, eventkeyhandlers_per_bucket_prefix)\
@@ -148,8 +145,8 @@ class TerminalLeader:
     def _ask_decision(self, interval: Interval) -> List[Any]:
         interval_desc = interval.to_str(only_time=True)
         options = {  # Use keys as 'value to present to user' and values to return result.
-            SKIP_TEXT: Decision.SKIP,
-            MERGE_TEXT: Decision.MERGE_NEXT,
+            SKIP_TEXT: IntervalWithDecision.SKIP,
+            MERGE_TEXT: IntervalWithDecision.MERGE_NEXT,
         }
         for event in interval.events:
             options[f"{event.bucket_id}: {event_data_to_str(event)}"] = event
@@ -170,9 +167,9 @@ class TerminalLeader:
                 result.append(value)
                 if isinstance(value, Event):
                     result_desc_items.append(f"event from {value.bucket_id}")
-                elif value == Decision.SKIP:
+                elif value == IntervalWithDecision.SKIP:
                     result_desc_items.append('skip')
-                elif value == Decision.MERGE_NEXT:
+                elif value == IntervalWithDecision.MERGE_NEXT:
                     result_desc_items.append('merge with next')
                 else:
                     raise ValueError(f"Got wrong selected option '{key}.")
@@ -180,11 +177,11 @@ class TerminalLeader:
         LOG.info("%s %s", interval_desc, ', '.join(result_desc_items))
         return result
 
-    def ask_decisions(self, undecided_list: List[Decision]) -> bool:
+    def ask_decisions(self, undecided_list: List[IntervalWithDecision]) -> bool:
         """
         Interacts with user asking decisions for given list of Interval-s. At start displays legend and asks if need
         proceed.
-        :param undecided_list: List of undecided 'Decision'-s to decide on.
+        :param undecided_list: List of undecided 'IntervalWithDecision'-s to decide on.
         :return: `True` if need to stop tuning and just print result, `False` to proceed with one more iteration. 
         """
         sys.stdout.write(  # TODO reduce coupling with 'tuner'.
@@ -212,7 +209,7 @@ class TerminalLeader:
             return True
         cnt_decided = 0
         for decision in undecided_list:  # TODO add 'redo' or 'next'.
-            selected = self._ask_decision(decision.interval)
+            selected = self._ask_decision(decision)
             if selected:
                 decision.set_user_decision(selected)
                 cnt_decided += 1
@@ -428,7 +425,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     LOG.info("---- Tuning started.")
     while True:
         # Analyze interval with hiding all problems logs. Upload debug buckets.
-        analyzer_result = analyze_intervals(context.first_interval, MIN_DURATION_SEC, context.rules,
+        analyzer_result = analyze_intervals(context.intervals[0], MIN_DURATION_SEC, context.rules,
                                             ProblemReporter.SUPPORTED_PROBLEMS, ANALYZE_MODE_TUNER)
         reload_debug_buckets(analyzer_result, client)
         # Interact with user.
