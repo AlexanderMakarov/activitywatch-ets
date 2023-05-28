@@ -1,25 +1,69 @@
-# ActivityWatch extentions to fill up ETS
+# ActivityWatch extentions to assemble time reports for employer
 
 ## Idea
 
+Different organizations require to fill up daily time reports in a way like:
+- 1 hour - updated X
+- 0.5 hour - meeting with Y
+- 2 hours - implemented Z
+
+And usually most part of these activities happens on the computer. Especially for IT.
+
 [ActivityWatch](https://activitywatch.net/) allows to measure a lot of different activities happened on a computer(s).
 For "real time" measurement see [ActivityWatch Watchers list](https://docs.activitywatch.net/en/latest/watchers.html).
-For "on demand" measurements see [ActivityWatch Importers list](https://docs.activitywatch.net/en/latest/importers.html).
-But data from these sources is not enough to report your working hours to the employeer/clients or directly to yourself to adjust time management.
+For "on demand" measurements see 
+[ActivityWatch Importers list](https://docs.activitywatch.net/en/latest/importers.html).
 
-So the idea is to use out-of-the-box ActivityWatch data:
-- AFK status from OS,
-- active window from OS,
-- browser events,
-- IDEA (Jetbrains IDE) events
-enhance it with data from working environment - Jira Cloud and MS Exchange Calendar (aka OWA, Office 365 Mail)
-and somehow combine total ~2500 events per day into 10-20 activities by some predefined rules.
-List of gneral rules for such adjustments:
+ActivityWatch has [Categorization feature](https://docs.activitywatch.net/en/latest/features/categorization.html)
+which allows to configure tree of "Categories" and filter events into these categories with (May 2023)
+> The regular expression is matched on the ‘app’ and ‘title’ value of events (not yet URLs).
+
+For time reports this feature is not flexible enough because:
+1. For "time reports" we need name activity in a specific way. Not from predifined categories.
+    I.e. mention that we worked exactly on "X" and meeting was especially with "Y".
+2. Regexp on ‘app’ and ‘title’ value is not enough usually. Various event watchers and importers provide
+    different events with different `data` fields.
+3. ActivityWatch doesn't count events happened during "AFK" periods. But in some cases is it wrong behavior -
+    imagine meetings where you just talking or listening without even moving mouse, time spent on watching
+    education/promotion (for work) videos, cases when your coworkers asked some (relevant to work) question.
+4. Some "unclear" intervals should be skipped as "not working" but some have to be added to next "working" interval.
+    For example time to open browser page (via bookmarks or Google) depends on where you are ending up.
+    Or browsing in files of your computer may mean either searching photos from last corporative or searching
+    working report asked by your coworker.
+5. Parallel events should be distinguishable. For example if you've switched to web browser and started 
+    to open various sites during writing code in IDE it most probably you need to search some information
+    required to complete code, not to switch on private task or entertainmment (are you ;) ?). Or if you've
+    started some Jira item, next spent some time on "scrum" meeting, next returned to IDE and next completed Jira
+    task then meeting duration hardly should be reported under mentioned Jira item.
+    One more "specific" example - while you are working on sharing some data from your applicaiton to
+    Reddit/Facebook/etc. - most probably you are opening these sites to debug your feature working,
+    not to check new posts in your account (are you ;) ?).
+6. Data from existing ActivityWatch watchers and importers usually is not enough. More data - more precise reports
+    may be generated.
+
+So the idea is to use out-of-the-box ActivityWatch data, enhance it with data from working environment:
+- Jira Cloud ([get_jira_events.py](/get_jira_events.py))
+- MS Exchange Calendar ([get_outlook_events.py](/get_outlook_events.py)) - aka OWA, Office 365 Mail)
+- 
+and combine total ~2500 events per day
+(depends on number of watchers/importers and style of work) into 10+ activities by set of predefined rules.
+Activities are expected to have quite long description each time and would require manual correction
+but main purpose - provide a way to don't rely on a memory during time reports assembling but on data.
+It would allow to reduce effort on time reports and improve own time management.
+See [get_activities.py](/get_activities.py) script.
+
+Default restrictions for "activities" are:
 - Activity can't be longer than 2 hours and duration is rounded to 0.25 hour.
-- "Working" activities are separated from "not working" happening on the same computer.
-- Activities shorter than 1 second are skipped.
+- "Not working" activities may be skipped.
 - All timestamps are rounded to seconds.
-Other details and more fine-grained rules may be checked in [config.py](/activity_merger/config/config.py) file.
+- Activities shorter than 1 second are skipped.
+
+Each `Activity` is assembled from `Interval`-s matched by `Rule`-s which, in turn,
+have patterns to match ActivityWatch events, way to describe activity and priority among other rules.
+Repo contains list of predefined `Rule`-s but anyway it should be configured personally.
+To simplify `Rule`-s configuration there is [tune_rules.py](/tune_rules.py) script.
+
+Everything is configured in [config.py](/activity_merger/config/config.py) file.
 
 ## Setup
 
@@ -59,6 +103,8 @@ open Calendar with the specified date, grab from the screen bars of events, pars
 and send resulting data into ActivityWatch.
 
 ## Merging all ActivityWatch events into few activities
+
+TODO update with tune_rules.py
 
 First of all need to adjust merger options for your needs.
 I.e. configure `MIN_DURATION_SEC` and `TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS` in [config.py](/activity_merger/config/config.py) file.

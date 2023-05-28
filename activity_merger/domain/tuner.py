@@ -1,6 +1,5 @@
 from typing import List, Dict, Tuple, Set, Union
-import copy
-from activity_merger.domain.input_entities import Event, EventKeyHandler, Rule
+from activity_merger.domain.input_entities import EventKeyHandler, Rule
 from activity_merger.domain.interval import Interval
 from activity_merger.domain.analyzer import find_handler_for_event
 from activity_merger.domain.metrics import Metrics
@@ -24,7 +23,7 @@ class IntervalWithDecision(Interval):
         # - user decided (any, True)
         # - interval looks the same as decided by user so apply the same decision TODO do we need?
         self.decision: Set = None  # What user chose: SKIP, MERGE_NEXT, any number of Event-s.
-        self.rules_per_event: Dict[Event, Rule] = dict()  # Rules which on this stage describes Event-s.
+        self.rules: List[Rule] = []  # Sorted rules which on this stage describes Event-s inside.
         self.is_user_decision = False  # Flag that decision was made by user TODO is it right?
         self.problem = None
 
@@ -37,28 +36,33 @@ class IntervalWithDecision(Interval):
         return tmp
 
     @staticmethod
-    def from_serializable_copy(self, prev: 'IntervalWithDecision', nxt: 'IntervalWithDecision')\
-            -> 'IntervalWithDecision':
-        tmp = self.__class__.__new__(self.__class__)
+    def from_serializable_copy(self, prev: 'IntervalWithDecision') -> 'IntervalWithDecision':
+        tmp: IntervalWithDecision = self.__class__.__new__(self.__class__)
         tmp.__dict__.update(self.__dict__)
-        tmp.prev = prev if tmp.prev else None
-        tmp.next = nxt if tmp.prev else None
+        if prev:
+            tmp.set_prev(prev)
         return tmp
-        
 
     def set_user_decision(self, decision: Set[Union[int, Rule]]):
         self.decision = decision
         self.is_user_decision = True
 
-    def set_rules_per_event(self, eventkeyhandlers_per_bucket_prefix: Dict[str, List[EventKeyHandler]]):
+    def set_rules(self, eventkeyhandlers_per_bucket_prefix: Dict[str, List[EventKeyHandler]], metrics: Metrics):
+        # TODO merge with analyzer._find_out_rule_for_interval
+        rules = []
         for event in self.events:
-            handler = find_handler_for_event(event, eventkeyhandlers_per_bucket_prefix)
+            handler: EventKeyHandler = find_handler_for_event(event, eventkeyhandlers_per_bucket_prefix)
             rule = None
             if not handler:
-                self.rules_per_event[event] = rule
+                metrics.increment('events without handlers', self)
                 continue
             rule, _ = handler.get_rule(event)
-            self.rules_per_event[event] = rule
+            if rule:
+                rules.append(rule)
+                metrics.increment(str(rule), self)
+            else:
+                metrics.increment('events with handler but without rule', self)
+        self.rules = sorted(rules)
 
     @staticmethod
     def decision_item_to_str(item) -> str:
@@ -77,6 +81,9 @@ def _incosistent_decision_log(interval_with_decision, group_decision_obj):
                 "  while for %s decision is\n    %s",
                 interval_with_decision.to_str(), "\n    ".join(b),
                 group_decision_obj, "\n    ".join(a))
+
+
+# def adjust_priorities2(decision_items: List[ItemToDecide]) -> Metrics:
 
 
 def adjust_priorities(decisions: List[IntervalWithDecision]) -> Metrics:

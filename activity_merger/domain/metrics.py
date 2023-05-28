@@ -16,6 +16,7 @@ class Metrics:
     """
     Object to track metrics of actions related to `Interval`-s.
     Each metric has name, counter of occurrences and total duration.
+    Also ther is an ability to suppress some metrics in "reporting" methods.
     """
 
     def __init__(self, handler_per_metric: Dict[str, Callable], suppressed_problems: Set[str], **kwargs) -> None:
@@ -36,7 +37,7 @@ class Metrics:
             metric.duration + interval.get_duration() if interval else 0
         )
 
-    def increment_and_report(self, metric_name: str, interval: Interval, **kwargs):
+    def increment_and_call_handler(self, metric_name: str, interval: Interval, **kwargs):
         """
         Increment metric on one event with given `Interval` duration and reports it with specified handler.
         Rejects new metrics.
@@ -60,18 +61,21 @@ class Metrics:
 
     def get_metric(self, metric_name: str) -> Optional[Metric]:
         """
-        Returns one metric by name.
+        Returns one metric by name. Doesn't use/filter by `suppressed_problems`.
         :param metric_name: Name of metric to return.
-        :return: The metric.
+        :return: The metric if extists, else None.
         """
-        return self.metrics[metric_name]
+        return self.metrics.get(metric_name)
 
-    def to_str(self, is_exclude_zero: bool = True) -> List[str]:
+    def to_strings(self, is_exclude_zero: bool = True) -> List[str]:
         """
-        Returns list of strings with metrics.
+        Returns list of strings with metrics except `suppressed_problems`.
         :param is_exclude_zero: Flag to return not all metrics but only not 0.
         :return: Ready to print metrics in strings list.
         """
-        sorted_metric_entries = sorted(self.metrics.items(), key=lambda x: x[1][1], reverse=True)
+        metrics_to_return = self.metrics.items()
+        if self.suppressed_problems:
+            metrics_to_return = {(k, v) for k, v in self.metrics.items() if k not in self.suppressed_problems}
+        sorted_metric_entries = sorted(metrics_to_return, key=lambda x: x[1][1], reverse=True)
         return (f"{x[1].cnt:4} on {datetime.timedelta(seconds=x[1].duration)} - {x[0]}" for x in sorted_metric_entries
                 if not is_exclude_zero or x[1].cnt > 0)

@@ -4,7 +4,7 @@ from typing import List, Dict, Tuple, Any
 
 from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,\
                             BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
-from .interval import Interval
+from .interval import Interval, intervals_duration
 from .input_entities import EventKeyHandler, Rule, Event
 from .output_entities import RuleResult, Activity, AnalyzerResult
 from ..helpers.helpers import seconds_to_int_timedelta, event_data_to_str
@@ -35,11 +35,6 @@ def increment_metric(metrics: Dict[str, Tuple[int, float]], metric_name: str, in
     """
     metric = metrics.get(metric_name, (0, 0))
     metrics[metric_name] = (metric[0] + 1, metric[1] + interval.get_duration())
-
-
-def _intervals_duration(intervals: List[Interval]):
-    # Note that 'last end minus first start' doesn't work due to possible gaps between intervals.
-    return sum(x.get_duration() for x in intervals)
 
 
 @dataclasses.dataclass
@@ -76,7 +71,7 @@ class RuleResultsWindow:
         :param rule_result: RuleResult to add.
         """
         self.rule_results.append(rule_result)
-        self.duration += _intervals_duration(rule_result.intervals)
+        self.duration += intervals_duration(rule_result.intervals)
         # If new rule has more priority than all existing in window then update windows priority and description.
         if rule_result.rule.priority >= self.priority:
             self.priority = rule_result.rule.priority
@@ -194,8 +189,9 @@ def _find_out_rule_for_interval(interval: Interval, metrics: Dict[str, Tuple[int
         # 2) handler key exists in event data.
         handler: EventKeyHandler = find_handler_for_event(event, eventkeyhandlers_per_bucket_prefix)
         if not handler:
+            # TODO replace with Metrics instance.
             ProblemReporter(ProblemReporter.EVENT_WITHOUT_RULE, event=event).report(ignore_hints)
-            increment_metric(metrics, 'intervals with unknows events', interval)
+            increment_metric(metrics, 'unknown events occurencies', interval)
             continue  # It is OK, some events (inside interval) may don't have handlers intentionally.
         # Find rule by event data. Note that it may be sorted out by priority afterwards.
         rule, descriptions = handler.get_rule(event)
@@ -259,7 +255,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
     metrics = {  # Put default metrics. Next it will be appended by per-rule metrics.
         'total intervals': (0, 0.0),
         'not afk intervals': (0, 0.0),
-        'intervals with unknows events': (0, 0.0),
+        'unknown events occurencies': (0, 0.0),
         'intervals without rules': (0, 0.0),
         'intervals merged to next rule': (0, 0.0),
         'intervals with rule to skip': (0, 0.0),
@@ -298,7 +294,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: Dict[st
                     'rule': str(rule_result.rule),
                     'events_cnt': len(cur_interval.events),
                 }))
-        duration = _intervals_duration(rule_result.intervals)
+        duration = intervals_duration(rule_result.intervals)
         # Append deferred intervals if there are such.
         if deferred_intervals is not None:
             rule_result.intervals += deferred_intervals

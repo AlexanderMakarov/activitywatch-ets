@@ -4,7 +4,7 @@ import os
 import sys
 import argparse
 import copy
-import dataclasses
+import collections
 import dill  # For pickle-ing lambdas need to use 'dill' package.
 from typing import Any, List, Dict, Tuple
 import contextlib
@@ -24,19 +24,20 @@ from pick import pick
 
 from activity_merger.config.config import LOG, MIN_DURATION_SEC, RULES, BUCKET_DEBUG_RAW_RULE_RESULTS
 from activity_merger.domain.input_entities import EventKeyHandler, Event, Rule
-from activity_merger.domain.interval import Interval
-from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date
+from activity_merger.domain.interval import Interval, intervals_duration
+from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date, seconds_to_int_timedelta
 from activity_merger.domain.analyzer import get_eventkeyhandlers_per_bucket_prefix, find_handler_for_event,\
                                             analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER
 from activity_merger.domain.output_entities import AnalyzerResult
+from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.tuner import IntervalWithDecision, SKIP_TEXT, MERGE_TEXT, TUNER_ABILITIES_TEXT,\
                                          adjust_priorities
 from get_activities import get_interval, reload_debug_buckets, print_analyzer_result
 
 
-class Context:
+class Context:  # TODO move to 'tuner.py'.
     """
-    Container for "tune rules" iterations.
+    Container for "tune rules" data. Allows save and restore data.
     """
 
     SAVE_FILE_PATH = os.path.abspath("tune_rules-context.dill")
@@ -67,21 +68,21 @@ class Context:
             result: Context = dill.load(f)
             intervals = []
             prev = None
-            nxt = None
+            # Note that `intervals` are stored without `next` and `prev` fields to avoid recursion.
+            # Restore these links assuming that intervals were saved in order of initial linked list.
             for i, interval in enumerate(result.intervals):
+                # Get `prev`.
                 if i == 0:
                     prev = None
                 else:
-                    prev = result.intervals[i - 1]
-                if i == len(result.intervals) - 1:
-                    nxt = None
-                else:
-                    nxt = result.intervals[i + 1]
-                intervals.append(IntervalWithDecision.from_serializable_copy(interval, prev, nxt))
+                    prev = intervals[-1]
+                # Append deep copies (not de-serialized objects) to restore all methods on 'custom' class objects.
+                intervals.append(IntervalWithDecision.from_serializable_copy(interval, prev))
             result.intervals = intervals
         undecided_intervals = result.get_undecided_intervals()
-        LOG.info("Restored context from '%s' file with %d intervals where %d are undecedied.",
-                 Context.SAVE_FILE_PATH, len(result.intervals), len(undecided_intervals))
+        total_rules = result.get_number_of_rules()
+        LOG.info("Restored context from '%s' file with %d/%d undecided intervals and %d rules.",
+                 Context.SAVE_FILE_PATH, len(undecided_intervals), len(result.intervals), total_rules)
         return result
 
     def get_undecided_intervals(self) -> List[IntervalWithDecision]:
@@ -90,17 +91,81 @@ class Context:
         """
         return [x for x in self.intervals if not x.decision]
 
-    def _find_rules_per_interval(self, interval: IntervalWithDecision, eventkeyhandlers_per_bucket_prefix)\
-            -> Tuple[Rule]:
-        rules = []
-        for event in interval.events:
-            handler = find_handler_for_event(event, eventkeyhandlers_per_bucket_prefix)
-            if not handler:
-                continue
-            rule, _ = handler.get_rule(event)
-            if rule:
-                rules.append(rule)
-        return tuple(sorted(rules))
+    def get_number_of_rules(self) -> int:
+        """
+        :return: Number of `Rule`-s inside. Includes rules in subhandlers.
+        """
+        result = 0
+        for bucket_handlers in self.rules.values():
+            for handler in bucket_handlers:
+                result += Context._get_number_of_rules_in_handler(handler)
+        return result
+
+    @staticmethod
+    def _get_number_of_rules_in_handler(eventkeyhandler: EventKeyHandler) -> int:
+        result = 0
+        rule: Rule
+        for rule in eventkeyhandler.rules.values():
+            result += 1
+            if rule.subhandler:
+                result += Context._get_number_of_rules_in_handler(rule.subhandler)
+        return result
+
+    def set_rules_to_intervals(self) -> Metrics:
+        """
+        Sets rules for all intervals inside.
+        :return: `Metrics` with information about used rules. It has "suppressed" metric "used rules".
+        """
+        eventkeyhandlers_per_bucket_prefix = get_eventkeyhandlers_per_bucket_prefix(self.rules)
+        metrics = Metrics({}, {'used rules'})
+        used_rules = set()
+        for interval in self.intervals:
+            interval.set_rules(eventkeyhandlers_per_bucket_prefix, metrics)
+            used_rules.update(str(x) for x in interval.rules)
+        metrics.override('used rules', len(used_rules), 0)
+        return metrics
+
+
+class ItemToDecide():
+    __slots__ = ('rules', 'intervals', 'sum_duration', 'decision')
+    
+    def __init__(self, rules: List[Rule], intervals: List[IntervalWithDecision], sum_duration):
+        self.rules = rules
+        self.intervals = intervals
+        self.sum_duration = sum_duration
+        self.decision = None
+
+    def set_user_decision(self, decision):
+        self.decision = decision
+        for interval in self.intervals:
+            interval.decision = decision
+
+    def to_str(self) -> str:
+        rules_str = [str(x) for x in self.rules]
+        examples = [self.intervals[0].to_str()]
+        if len(self.intervals) > 1:
+            examples.append(self.intervals[1].to_str())
+        return '%d intervals on %s which capture rules:\n  %s\nExamples:\n  %s' % \
+               (len(self.intervals), seconds_to_int_timedelta(self.sum_duration), "\n  ".join(rules_str),
+                "\n  ".join(examples))
+
+
+def _find_items_to_decide(decisions: List[IntervalWithDecision]) -> List[ItemToDecide]:
+    metrics = Metrics({}, None)
+    input_rules_to_intervals: Dict[Tuple[Rule], List[IntervalWithDecision]] = {}
+    for decision in decisions:
+        input_rules = set(decision.rules)
+        input_rules_tuple = tuple(sorted(input_rules, key=lambda r: r.key_pattern))
+        intervals_with_same_rules = input_rules_to_intervals.get(input_rules_tuple)
+        if intervals_with_same_rules:
+            intervals_with_same_rules.append(decision)
+            metrics.increment('intervals with same rules', decision)
+            metrics.increment(str(input_rules_tuple), decision)
+        else:
+            input_rules_to_intervals[input_rules_tuple] = [decision]
+    LOG.info("Found %d items to decide:\n  %s",
+             len(input_rules_to_intervals), "\n  ".join(metrics.to_strings()))
+    return [ItemToDecide(k, v, intervals_duration(v)) for k, v in input_rules_to_intervals.items()]
 
 
 class TerminalLeader:
@@ -142,14 +207,14 @@ class TerminalLeader:
         result = pick(options, question, multiselect=True, default_index=2, min_selection_count=1)
         return result
 
-    def _ask_decision(self, interval: Interval) -> List[Any]:
-        interval_desc = interval.to_str(only_time=True)
+    def _ask_decision(self, item_to_decide: ItemToDecide) -> List[Any]:
+        interval_desc = item_to_decide.to_str()
         options = {  # Use keys as 'value to present to user' and values to return result.
             SKIP_TEXT: IntervalWithDecision.SKIP,
             MERGE_TEXT: IntervalWithDecision.MERGE_NEXT,
         }
-        for event in interval.events:
-            options[f"{event.bucket_id}: {event_data_to_str(event)}"] = event
+        for rule in item_to_decide.rules:
+            options[str(rule)] = rule
         # Start loop of asking. Because some answers may contradict each other.
         result_desc_items: List[str]
         result = []
@@ -157,7 +222,7 @@ class TerminalLeader:
             selected: List[str] = self._ask_multiselect_question(interval_desc, list(options.keys()))
             # Check for validity.
             if SKIP_TEXT in selected and MERGE_TEXT in selected:
-                LOG.warning("It is impossible to both %s and %s. Please reconsider.", SKIP_TEXT, MERGE_TEXT)
+                LOG.warning("It is impossible to choose both %s and %s. Please reconsider.", SKIP_TEXT, MERGE_TEXT)
                 continue
             # Build text explanation of choice.
             result_desc_items = []  # Clear from previous attempt values.
@@ -165,8 +230,8 @@ class TerminalLeader:
             for key in selected:
                 value = options.get(key, None)
                 result.append(value)
-                if isinstance(value, Event):
-                    result_desc_items.append(f"event from {value.bucket_id}")
+                if isinstance(value, Rule):
+                    result_desc_items.append(str(value))
                 elif value == IntervalWithDecision.SKIP:
                     result_desc_items.append('skip')
                 elif value == IntervalWithDecision.MERGE_NEXT:
@@ -177,14 +242,14 @@ class TerminalLeader:
         LOG.info("%s %s", interval_desc, ', '.join(result_desc_items))
         return result
 
-    def ask_decisions(self, undecided_list: List[IntervalWithDecision]) -> bool:
+    def ask_decisions(self, items_to_decide: List[ItemToDecide]) -> bool:
         """
-        Interacts with user asking decisions for given list of Interval-s. At start displays legend and asks if need
+        Interacts with user asking decisions for given list of items. At start displays legend and asks if need
         proceed.
-        :param undecided_list: List of undecided 'IntervalWithDecision'-s to decide on.
+        :param items_to_decide: List of items to make decision for.
         :return: `True` if need to stop tuning and just print result, `False` to proceed with one more iteration. 
         """
-        sys.stdout.write(  # TODO reduce coupling with 'tuner'.
+        sys.stdout.write(  # TODO 1. Rewrite to "items". 2 Reduce coupling with 'tuner'.
             "INSTRUCTION: Please open chosen date on http://localhost:5600/#/timeline to see '%s' bucket debug "
             "events. Note that with all debug events this page may be quite slow in browser. "
             "You will be asked about all %d intervals from '%s' bucket to chose how given interval should be "
@@ -201,19 +266,19 @@ class TerminalLeader:
             "Press 'Enter' to apply and proceed. Press 'Escape' or choose nothing to stop deciding. "
             "If you haven't provided decision for each interval then remained will be re-evaluated with existing "
             "decisions. Note that all contradicting decisions will be noted and handed by 'first decision' strategy.\n"
-             % (BUCKET_DEBUG_RAW_RULE_RESULTS, len(undecided_list), BUCKET_DEBUG_RAW_RULE_RESULTS, SKIP_TEXT,
+             % (BUCKET_DEBUG_RAW_RULE_RESULTS, len(items_to_decide), BUCKET_DEBUG_RAW_RULE_RESULTS, SKIP_TEXT,
                 MERGE_TEXT, TUNER_ABILITIES_TEXT)
         )
         sys.stdout.flush()
-        if not self.ask_yes_no("Proceed with 'decide for interval' session?"):
+        if not self.ask_yes_no("Proceed with 'decide for intervals' session?"):
             return True
         cnt_decided = 0
-        for decision in undecided_list:  # TODO add 'redo' or 'next'.
-            selected = self._ask_decision(decision)
+        for item_to_decide in items_to_decide:  # TODO add 'redo' or 'next'.
+            selected = self._ask_decision(item_to_decide)
             if selected:
-                decision.set_user_decision(selected)
+                item_to_decide.set_user_decision(selected)
                 cnt_decided += 1
-            elif self.ask_yes_no(f"Decided only {cnt_decided} from {len(undecided_list)} intervals. "
+            elif self.ask_yes_no(f"Decided only {cnt_decided} from {len(items_to_decide)} intervals. "
                                  "Are you sure you want to stop earlier?"):
                 break
         return False
@@ -368,30 +433,35 @@ def ask_decision_and_correct_rules(context: Context) -> bool:
         leader = UnixTerminalLeader()
     # Calculate which decisions need to make.
     undecided_intervals: List[IntervalWithDecision] = context.get_undecided_intervals()
+    # Find out rules for all intervals.
+    metrics = context.set_rules_to_intervals()
+    total_rules = context.get_number_of_rules()
+    LOG.info("Set rules for all events in all %d intervals. In result %d/%d rules were used, events per rule:\n  %s",
+                len(context.intervals), metrics.get_metric('used rules').cnt, total_rules,
+                "\n  ".join(metrics.to_strings()))
+    # Get unique rules combination to make decisions for.
+    items_to_decide: List[ItemToDecide] = _find_items_to_decide(context.intervals)
     # Interact with user asking for decisions like "this event describes this interval".
-    is_exit = leader.ask_decisions(undecided_intervals)
+    is_exit = leader.ask_decisions(items_to_decide)
     # Find out which intervals were decided on this round.
-    decided_intervals_this_round = [x for x in undecided_intervals if x.decision]
+    decided_items_this_round = [x for x in items_to_decide if x.decision]
+    # TODO need provide distinguishable good to_str() for Rules including bucket ID.
+    # TODO work with ItemToDecide-s futher
     decided_intervals: List[IntervalWithDecision] = [x for x in context.decisions if x.decision]
     LOG.info("Got decisions for %d from %d asked intervals. Total %d decided intervals from %d.",
-             len(decided_intervals_this_round), len(undecided_intervals), len(decided_intervals),
+             len(decided_items_this_round), len(undecided_intervals), len(decided_intervals),
              len(context.decisions))
     # Check if something was changed and adjust rules if yes.
     if decided_intervals:
-        # Find out rules for each event in all decided so far intervals to adjust them by decisions.
-        eventkeyhandlers_per_bucket_prefix = get_eventkeyhandlers_per_bucket_prefix(context.rules)
-        for decision in decided_intervals:
-            # TODO print which rules were chosen per event.
-            decision.set_rules_per_event(eventkeyhandlers_per_bucket_prefix)
         # Investigated decisions and adjust priorities for rules.
         metrics = adjust_priorities(decided_intervals)
         LOG.info("By %d decided intervals on this round made following adjustments to rules:\n%s",
-                 len(decided_intervals_this_round), metrics.to_str())
+                 len(decided_items_this_round), metrics.to_strings())
         # Use metrics to calculate percentage of changes.
         total_rules = metrics.get_metric('total_rules')
         total_unique_updated_rules = metrics.get_metric('total_unique_updated_rules')
         # TODO output rules 'to paste into file'.
-        LOG.info("Adjusted %f.2%% rules. Result:\n%s", 100 * (total_unique_updated_rules / total_rules), context.rules)
+        LOG.info("Adjusted %f.2%% rules. Result:\n%s  ", 100 * (total_unique_updated_rules / total_rules), context.rules)
     return is_exit
 
 

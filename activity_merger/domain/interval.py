@@ -289,3 +289,13 @@ class Interval:
         self.end_time = self.next.end_time
         self.events.extend(self.next.events)
         self.set_next(self.next.next)
+
+
+def intervals_duration(intervals: List[Interval]) -> float:
+    """
+    Calculates sum of all given intervals duration.
+    Note that 'last end minus first start' doesn't work due to possible gaps between intervals.
+    :param intervals: Intervals to calculate duration for.
+    :return: Duration in seconds.
+    """
+    return sum(x.get_duration() for x in intervals)

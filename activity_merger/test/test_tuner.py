@@ -7,7 +7,7 @@ from parameterized import parameterized
 
 from ..domain.interval import Interval
 from ..domain.tuner import IntervalWithDecision, adjust_priorities
-from ..domain.input_entities import Rule
+from ..domain.input_entities import Rule, Event
 from ..domain.metrics import Metric, Metrics
 from . import build_datetime
 
@@ -43,6 +43,7 @@ def _build_decisions(decisions_and_input_rules: List[Tuple[List[Any], List[Rule]
         decision = IntervalWithDecision(INTERVAL)
         decision.decision = [rules[d] if isinstance(d, Rule) else d
                              for d in entry[0]]
+        # TODO it puts index as a key, should be Event.
         decision.rules_per_event = dict((i, x) for i, x in enumerate(rules[r] for r in entry[1]))
         result.append(decision)
     return result
