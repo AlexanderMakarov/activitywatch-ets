@@ -1,9 +1,10 @@
 import dataclasses
 import datetime
 import collections
-from typing import List, Dict, Tuple
+from typing import List
 
-from .input_entities import Event, Rule
+from .metrics import Metrics
+from .input_entities import Event, Rule2
 from .interval import Interval
 from ..helpers.helpers import seconds_to_int_timedelta, from_start_to_end_to_str
 
@@ -17,14 +18,12 @@ class RuleResult:
     :param event: `Event` choosen by `Rule`.
     :param description: Description of underlying time span obtained by event.
     :param intervals: List of `Interval`-s covering by this rule.
-    :param values: List of `Event` data pieces which pointed on this rule.
     """
 
-    rule: Rule
+    rule: Rule2
     event: Event
     description: str
     intervals: List[Interval]
-    values: List[str]
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(description={self.description}, rule={self.rule})"
@@ -65,7 +64,7 @@ class AnalyzerResult:
     """List of activities."""
     rule_results_counter: collections.Counter
     """Duration of intervals per rule."""
-    metrics: Dict[str, Tuple[int, float]]
+    metrics: Metrics
     """Dictionary of metrics, where each metric is represented by number of intervals and duration."""
     raw_rule_result_debug_events: List[Event]
     """List of 'Event'-s which represents 'RuleResult' chosen for each interval."""

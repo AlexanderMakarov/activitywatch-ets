@@ -1,7 +1,7 @@
 from typing import List, Dict, Tuple, Set, Union
 from activity_merger.domain.input_entities import EventKeyHandler, Rule
 from activity_merger.domain.interval import Interval
-from activity_merger.domain.analyzer import find_handler_for_event
+from activity_merger.domain.analyzer import find_rule_for_event
 from activity_merger.domain.metrics import Metrics
 from ..config.config import LOG
 
@@ -51,7 +51,7 @@ class IntervalWithDecision(Interval):
         # TODO merge with analyzer._find_out_rule_for_interval
         rules = []
         for event in self.events:
-            handler: EventKeyHandler = find_handler_for_event(event, eventkeyhandlers_per_bucket_prefix)
+            handler: EventKeyHandler = find_rule_for_event(event, eventkeyhandlers_per_bucket_prefix)
             rule = None
             if not handler:
                 metrics.increment('events without handlers', self)

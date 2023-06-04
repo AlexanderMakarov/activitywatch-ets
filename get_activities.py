@@ -64,11 +64,9 @@ def print_analyzer_result(analyzer_result: AnalyzerResult):
     Prints 'AnalyzerResult' content as INFO logs.
     :param analyzer_result: Object to describe data in.
     """
-    sorted_metric_entries = sorted(analyzer_result.metrics.items(), key=lambda x: x[1][1], reverse=True)
-    LOG.info("Metrics from intervals analysis (%s):\n  %s",
-             len(analyzer_result.metrics),
-             "\n  ".join(f"{x[1][0]:4} on {datetime.timedelta(seconds=x[1][1])} - {x[0]}"
-                         for x in sorted_metric_entries))
+    sorted_metrics_strings = list(analyzer_result.metrics.to_strings())
+    LOG.info("Metrics from intervals analysis (total %s):\n  %s",
+             len(sorted_metrics_strings), "\n  ".join(sorted_metrics_strings))
     # Print "less than MIN_DURATION_SEC" values from 'activity_counter'.
     dumb_activities = [f"{seconds_to_int_timedelta(v)} {k}"
                        for k, v in analyzer_result.rule_results_counter.most_common() if v >= MIN_DURATION_SEC]
@@ -122,7 +120,7 @@ def main():
                         help="How many days back search events on. I.e. '1' value means 'search for yesterday.")
     parser.add_argument('-i', '--ignore-hints', nargs='*', default=[],
                         help="Hints to ignore in report. Helps filter log messages about rule mistakes. "
-                             f"Supported values in importance order: {ProblemReporter.SUPPORTED_PROBLEMS}. "
+                             f"Supported values in importance order: {ProblemReporter.SUPPORTED_ITEMS.keys()}. "
                              "For example, to understand what need to setup for yourself with default config, use "
                              "'./get_activities.py 2022-12-31 -i TOO_SPECIFIC_RULE TOO_WIDE_RULE' and after it stop "
                              "to report issues remove '-i' part.")

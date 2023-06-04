@@ -26,7 +26,7 @@ from activity_merger.config.config import LOG, MIN_DURATION_SEC, RULES, BUCKET_D
 from activity_merger.domain.input_entities import EventKeyHandler, Event, Rule
 from activity_merger.domain.interval import Interval, intervals_duration
 from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date, seconds_to_int_timedelta
-from activity_merger.domain.analyzer import get_eventkeyhandlers_per_bucket_prefix, find_handler_for_event,\
+from activity_merger.domain.analyzer import get_eventkeyhandlers_per_bucket_prefix, find_rule_for_event,\
                                             analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.domain.metrics import Metrics
@@ -435,9 +435,8 @@ def ask_decision_and_correct_rules(context: Context) -> bool:
     undecided_intervals: List[IntervalWithDecision] = context.get_undecided_intervals()
     # Find out rules for all intervals.
     metrics = context.set_rules_to_intervals()
-    total_rules = context.get_number_of_rules()
     LOG.info("Set rules for all events in all %d intervals. In result %d/%d rules were used, events per rule:\n  %s",
-                len(context.intervals), metrics.get_metric('used rules').cnt, total_rules,
+                len(context.intervals), metrics.get_metric('used rules').cnt, context.get_number_of_rules(),
                 "\n  ".join(metrics.to_strings()))
     # Get unique rules combination to make decisions for.
     items_to_decide: List[ItemToDecide] = _find_items_to_decide(context.intervals)
