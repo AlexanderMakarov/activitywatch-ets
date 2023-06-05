@@ -7,7 +7,7 @@ from parameterized import parameterized
 
 from ..domain.interval import Interval
 from ..domain.tuner import IntervalWithDecision, adjust_priorities
-from ..domain.input_entities import Rule, Event
+from ..domain.input_entities import Rule2, Event
 from ..domain.metrics import Metric, Metrics
 from . import build_datetime
 
@@ -19,21 +19,21 @@ METRIC2_0 = Metric(2, 0)
 METRIC2_2 = Metric(2, INTERVAL.get_duration() * 2)
 METRIC3_0 = Metric(3, 0)
 METRIC4_0 = Metric(4, 0)
-rule1p1 = Rule("1", 1)
-rule1p3 = Rule("1", 3)
-rule1p4 = Rule("1", 4)
-rule1p5 = Rule("1", 5)
-rule1p4m = Rule("1", 4, merge_next=True)
-rule1p4s = Rule("1", 4, skip=True)
-rule2p2 = Rule("2", 2)
-rule2p3 = Rule("2", 3)
-rule2p4 = Rule("2", 4)
-rule2p4s = Rule("2", 4, skip=True)
-rule3p2 = Rule("3", 2)
-rule3p3 = Rule("3", 3)
+rule1p1 = Rule2("1", 1)
+rule1p3 = Rule2("1", 3)
+rule1p4 = Rule2("1", 4)
+rule1p5 = Rule2("1", 5)
+rule1p4m = Rule2("1", 4).merge_next()
+rule1p4s = Rule2("1", 4).skip()
+rule2p2 = Rule2("2", 2)
+rule2p3 = Rule2("2", 3)
+rule2p4 = Rule2("2", 4)
+rule2p4s = Rule2("2", 4).skip()
+rule3p2 = Rule2("3", 2)
+rule3p3 = Rule2("3", 3)
 
 
-def _build_decisions(decisions_and_input_rules: List[Tuple[List[Any], List[Rule]]])\
+def _build_decisions(decisions_and_input_rules: List[Tuple[List[Any], List[Rule2]]])\
         -> List[IntervalWithDecision]:
     # First get all rules and make copy of them to don't modify input rules.
     rules = set(itertools.chain(*(x[1] for x in decisions_and_input_rules)))
@@ -41,7 +41,7 @@ def _build_decisions(decisions_and_input_rules: List[Tuple[List[Any], List[Rule]
     result = []
     for entry in decisions_and_input_rules:
         decision = IntervalWithDecision(INTERVAL)
-        decision.decision = [rules[d] if isinstance(d, Rule) else d
+        decision.decision = [rules[d] if isinstance(d, Rule2) else d
                              for d in entry[0]]
         # TODO it puts index as a key, should be Event.
         decision.rules_per_event = dict((i, x) for i, x in enumerate(rules[r] for r in entry[1]))
@@ -49,12 +49,12 @@ def _build_decisions(decisions_and_input_rules: List[Tuple[List[Any], List[Rule]
     return result
 
 
-def _get_rules_from_intervals(intervals: List[IntervalWithDecision]) -> List[Rule]:
+def _get_rules_from_intervals(intervals: List[IntervalWithDecision]) -> List[Rule2]:
     # Get all rules from all decisions, remove duplicates (full, not by key pattern only) and sort.
     return sorted(set(itertools.chain(*(x.rules_per_event.values() for x in intervals))))
 
 
-def _assertion_env_to_str(actual: List[Rule], expected: List[Rule], index):
+def _assertion_env_to_str(actual: List[Rule2], expected: List[Rule2], index):
     a = (repr(r) for r in actual)
     e = (repr(r) for r in expected)
     al = [(" >" if i == index else "  ") + x for i, x in enumerate(a)]
@@ -186,7 +186,7 @@ class TestTuner(unittest.TestCase):
              'total_updated_rule_priority': METRIC2_2},
         ),
     ])
-    def test_adjust_priorities(self, _, intervals: List[IntervalWithDecision], expected_rules: List[Rule],
+    def test_adjust_priorities(self, _, intervals: List[IntervalWithDecision], expected_rules: List[Rule2],
                                expected_metrics: Metrics):
         # Act
         result: Metrics = adjust_priorities(intervals)

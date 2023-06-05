@@ -1,6 +1,5 @@
 import re
 import collections
-import dataclasses
 from typing import Optional, Tuple, Callable, List, Dict, Union
 
 
@@ -10,182 +9,191 @@ Lightweight representation of ActivityWatcher event without "id" field but with 
 """
 
 
-@dataclasses.dataclass(eq=True, order=True)
-class Rule:  # TODO remove
+class Rule2:
     """
-    Structure which represents how to compare related event with others.
-    :param key_pattern: Regexp pattern to handle intervals of. Make sense only in scope of specific `EventKeyHandler`.
-    :param priority: Priority of the rule, greater value => more chance to be used among other rules on interval.
+    Structure to match ActivityWatch events, tie them with specific behavior, name activities with them.
+    :param pattern: Regexp pattern to handle some value. Value is determined in parent rule.
+    If there is no parent (i.e. this rule is top level) then pattern should match name of the ActivityWatch bucket.
+    :param priority: Priority of the rule, greater value => more chance to describe activity from underlying interval.
     Better to use unique priority values, otherwise conflicts will be solved unpredictably.
     Note that default priority for "afk" watcher 'afk' state is `AFK_RULE_PRIORITY` (500?), 'not-afk' rule - 1,
-    for "watchdog" "enabled" state - `WATCHDOG_RULE_PRIORITY` (1000?). These constants are also used to compound
-    intervals into "activities".
-    :param subhandler: `EventKeyHandler` for the different key of event with its own set of rules.
-    It allows to take into consideration several keys of the event.
-    :param to_string: Lambda which produces rule description from "key pattern" regexp `re.Match`. If `None` then uses
-    the full match (0 group), if returns `None` then doesn't count.
-    :param skip: Flag to skip this activity from reports. May be used for "non working" activities.
-    :param is_placeholder: Flag for "service" rules. They are useless for report and usually 0 priority.
-    Will cause some hints about necessity of new rule to cover related acitivity.
-    :param merge_next: Flag to merge current interval with the next interval rule. Useful for 'new browser tab' like
-    activities (i.e. it is impossible to reveal activity from related event but it is part of next event activity).
+    for "watchdog" "enabled" state - `WATCHDOG_RULE_PRIORITY` (1000?). This way rule may create custom activity even
+    from AFK or "watchdog" event.
+    :param to_string: Way to describe activity represented by underlying interval.
+    If string then is used as is.
+    If lambda then takes `re.match(value)` result and expected to produce string.
+    If `None` then uses the full match (0 group).
+    Note that resulting activity name is assembled from all rules in the tree joined via space (" ") character.
+
+    Use `with_subrules` to buld tree of rules and make more specific activities.
+    See `skip`, `merge_next`, `placeholder` methods to add specific behavior to rules/activities.
     """
-
-    key_pattern: str
-    priority: int
-    subhandler: 'EventKeyHandler' = None
-    to_string: Callable[[str], str] = None
-    skip: bool = False
-    is_placeholder: bool = False
-    merge_next: bool = False
-
-    def get_description(self, match: re.Match) -> Optional[str]:
-        """
-        :return: Description of activity represented by rule or `None` if description should be set by subhandlers.
-        """
-        return match.group(0) if self.to_string is None else self.to_string(match)
-
-    def __repr__(self) -> str:
-        desc = ""
-        if self.subhandler:
-            desc += f", with subhandler {self.subhandler}"
-        if self.skip:
-            desc += ", to skip"
-        if self.merge_next:
-            desc += ", to merge with next interval"
-        if self.is_placeholder:
-            desc += ", placeholder"
-        return f"Rule '{self.key_pattern}', priority={self.priority}{desc}"
-
-    def __hash__(self) -> int:
-        return hash((self.key_pattern, self.skip, self.merge_next, self.is_placeholder, hash(self.subhandler)))
-
-
-class Rule2:
-    __slots__ = ('_pattern', '_regexp', 'priority', 'to_string', '_desc',
-                 '_is_skip', '_is_merge_next', '_is_placeholder',
-                 '_parent', '_data_key', '_subrules')
+    __slots__ = ('__pattern', '__regexp', 'priority', 'to_string',
+                 '__is_skip', '__is_merge_next', '__is_placeholder',
+                 '__parent', '__data_key', '__subrules')
 
     def __init__(self, pattern: str, priority: int, to_string: Union[Callable[[str], str], str] = None):
-        self._pattern = pattern
-        self._regexp = re.compile(pattern)
+        self.__pattern = pattern
+        self.__regexp = re.compile(pattern)
         self.priority = priority
         self.to_string = to_string
-        self._desc = None
-        self._is_skip = False
-        self._is_merge_next = False
-        self._is_placeholder = False
-        self._parent = None
-        self._data_key = None
-        self._subrules = None
+        self.__is_skip = False
+        self.__is_merge_next = False
+        self.__is_placeholder = False
+        self.__parent = None
+        self.__data_key = None
+        self.__subrules = None
 
     def __hash__(self):
-        return hash(self._pattern, self.priority, self._desc,
-                    self._is_skip, self._is_merge_next, self._is_placeholder,
-                    self._data_key)
+        return hash((self.__pattern, self.priority,
+                    self.__is_skip, self.__is_merge_next, self.__is_placeholder,
+                    self.__data_key))
 
     def skip(self) -> 'Rule2':
-        if self._is_merge_next or self._is_placeholder:
-            raise ValueError(f"{self} can't be skipped additionally")
-        self._is_skip = True
+        """
+        Marks rule to skip underlying interval from reports. May be used for "non working" activities.
+        """
+        if self.__is_merge_next or self.__is_placeholder or self.__subrules:
+            raise ValueError(f"{self} can't be skipped - conflicts with other behaviors")
+        self.__is_skip = True
         return self
 
     def merge_next(self) -> 'Rule2':
-        if self._is_skip or self._is_placeholder:
-            raise ValueError(f"{self} can't be merged with next interval additionally")
-        self._is_merge_next = True
+        """
+        Marks rule to merge underlying interval with the next interval to add to it's rule.
+        Useful for 'new browser tab' like activities when it is impossible to reveal activity from related event
+        because too few data and more details will be in the following event.
+        """
+        if self.__is_skip or self.__is_placeholder or self.__subrules:
+            raise ValueError(f"{self} can't be merged with next interval - conflicts with other behaviors")
+        self.__is_merge_next = True
         return self
 
     def placeholder(self) -> 'Rule2':
-        if self._is_skip or self._is_merge_next:
-            raise ValueError(f"{self} can't be a placeholder additionally")
-        self._is_merge_next = True
+        """
+        Marks "service" rules. They are useless for report and usually 0 priority.
+        Causes hints about necessity of new rule to cover related acitivity.
+        """
+        if self.__is_skip or self.__is_merge_next or self.__subrules:
+            raise ValueError(f"{self} can't be a placeholder - conflicts with other behaviors")
+        self.__is_merge_next = True
         return self
 
     def with_subrules(self, key: str, subrules: List['Rule2']):
-        self._data_key = key
-        self._subrules = subrules
+        """
+        Builds tree from rules to handle different aspects of events.
+        :param key: Key in `Event.data` dictionary to apply subrules on.
+        :param subrules: List of rules to match value by key and configure theirs behavior.
+        It is useful to end list of subrules with rule having '.*' pattern - it will catch all
+        unmatched events and handle them at least somehow.
+        """
+        if self.__is_skip or self.__is_merge_next or self.__is_placeholder:
+            raise ValueError(f"{self} can't add subrules - conflicts with other behaviors")
+        self.__data_key = key
+        self.__subrules = subrules
         for rule in subrules:
-            rule._parent = self
+            rule.__parent = self
         return self
 
     @property
     def is_skip(self) -> bool:
-        return self._is_skip
+        return self.__is_skip
 
     @property
     def is_merge_next(self) -> bool:
-        return self._is_merge_next
+        return self.__is_merge_next
 
     @property
     def is_placeholder(self) -> bool:
-        return self._is_placeholder
+        return self.__is_placeholder
 
     def __repr__(self) -> str:
         desc = ""
-        if self._subrules:
-            desc += f", with {len(self._subrules)} subrules by '{self._data_key}' key"
-        if self._is_skip:
+        if self.__subrules:
+            desc += f", with {len(self.__subrules)} subrules by '{self.__data_key}' key"
+        if self.__is_skip:
             desc += ", to skip"
-        if self._is_merge_next:
+        if self.__is_merge_next:
             desc += ", to merge with next interval"
-        if self._is_placeholder:
+        if self.__is_placeholder:
             desc += ", placeholder"
-        return f"Rule '{self._pattern}', priority={self.priority}{desc}"
+        return f"Rule '{self.__pattern}', priority={self.priority}{desc}"
 
-    def find_rule_for_event(self, event: Event) -> 'Rule2':
+    def find_rule_for_event(self, event: Event) -> Tuple['Rule2', str]:
         """
         Find rule for the even in a recursive way passing down to subrules.
         :param event: Event to find "leaf" rule for.
-        :return: Rule which more precisely matches event or `None` if there are no rule matching event.
+        :return: Tuple with rule which more precisely matches event in the graph
+        and description of matched part if rule was found.
         """
-        # If it is "top" level rule then try match bucket ID.
-        if self._parent is None:
-            if not self.is_match(event.bucket_id):
-                return None
+        # If it is "top" level rule then additionally to other checks try match itself with event's bucket ID.
+        description = None
+        if self.__parent is None:
+            matched, description = self.is_match(event.bucket_id)
+            if not matched:
+                return None, None
         # Next (or instead) check if there are subrules to redirect matching to.
-        if self._subrules:
-            data_value = event.data.get(self._data_key)
-            # Check that event has data to check by subrules.
-            if data_value:
-                for rule in self._subrules:
-                    # If subrule matches value then pass next evaluation to it.
-                    if rule.is_match(data_value):
-                        return rule.find_rule_for_event(event)
-        # If rule doesn't have subrules or event doesn't have data under required key then it is exact rule to handle this event.
-        return self
+        # Assume that this rule match input event already because someone called it.
+        if not self.__subrules:
+            return self, description  # It is leaf node.
+        # Check if subrules won't be able handle this event.
+        data_value = event.data.get(self.__data_key)
+        if not data_value:
+            return None, None  # Subrules won't be able match specified event - stop to search.
+        for rule in self.__subrules:
+            matched, subrule_description = self.is_match(data_value)
+            # If subrule matches value then pass next evaluation to it.
+            if matched:
+                subrule, subrule_description = rule.find_rule_for_event(event)
+                # Determine result rule.
+                rule = subrule if subrule else self
+                # Determine result description. Any part may be None.
+                if description is not None:
+                    if subrule_description is not None:
+                        description += " " + subrule_description
+                else:
+                    description = subrule_description
+                return rule, description
+        # If subrules weren't able match event then current rule is a "leaf" rule to handle this event.
+        return self, description
 
-    def is_match(self, value: str) -> bool:
-        match = self._regexp.match(value)
+    def is_match(self, value: str) -> Tuple[bool, str]:
+        """
+        Checks if rule matches given value.
+        :param value: Value to check.
+        :return: Tuple with flag if value is matched
+        and if yes then string with description of the part which was matched.
+        """
+        match = self.__regexp.match(value)
         if not match:
-            return False
+            return False, None
+        description = None
         # If matched then need to update inner description.
-        if self._parent is None:
+        if self.__parent is None:
             # If rule doesn't have parent then this rule is checked for bucket name.
-            self._desc = match.group(0) + " bucket,"
+            description = match.group(0) + " bucket,"
         elif self.to_string:
             # If `to_string` is specified then use it.
             if isinstance(self.to_string, str):
-                self._desc = self.to_string
+                description = self.to_string
             else:
-                self._desc = self.to_string(match)
+                description = self.to_string(match)
         else:
             # Otherwise just put the whole value matched by regexp.
-            self._desc = match.group(0)
-        return True
+            description = match.group(0)
+        return True, description
 
-    def get_activity_description(self) -> str:
+    def get_number_of_rules_in_tree(self) -> int:
         """
-        Builds description of an activity which this rule is created for.
-        Uses `desc` value obtained via `to_string` methods from itself and up on tree of rules it is placed in.
-        For example if rule is created as
-        `Rule('bucket_x') -> Rule('app', to_string=lambda x: f'app {x.group(1),'}) -> Rule('Zoom.*', to_string='Zoom')`
-        then it returns something like "x bucket, app y, Zoom".
-        :return: Description of activity represented by rule.
+        :return: Number of `Rule`-s in a tree started with this rule.
+        Returns at least 1 - for this rule.
         """
-        if self._parent:
-            return self._parent.get_activity_description() + " " + self._desc
-        return self._desc
+        result = 1
+        if self.__subrules:
+            for subrule in self.__subrules:
+                if subrule:
+                    result += subrule.get_number_of_rules_in_tree()
+        return result
 
 
 class EventKeyHandler:
@@ -193,7 +201,7 @@ class EventKeyHandler:
     Structure which binds multiple `Rule`-s to one `Event`'s field value by regexp.
     """
 
-    def __init__(self, key: str, rules: List[Rule], to_str_keys: Optional[List[str]] = None) -> None:
+    def __init__(self, key: str, rules: List[Rule2], to_str_keys: Optional[List[str]] = None) -> None:
         """
         Default constructor.
         :param key: Key from ActivityWatch event to choose rules basing on.
@@ -202,13 +210,13 @@ class EventKeyHandler:
         event key value is used.
         """
         self.key = key
-        self.rules: Dict[re.Pattern, Rule] = dict((re.compile(rule.key_pattern), rule) for rule in rules)
+        self.rules: Dict[re.Pattern, Rule2] = dict((re.compile(rule.key_pattern), rule) for rule in rules)
         self.to_str_keys = to_str_keys
 
     def __repr__(self) -> str:
         return f"EventKeyHandler(key={self.key}, rules_len={len(self.rules)})"
 
-    def get_rule(self, event: Event) -> Optional[Tuple[Rule, List[str]]]:
+    def get_rule(self, event: Event) -> Optional[Tuple[Rule2, List[str]]]:
         """
         Searches rule for specified event.
         :param event: Event to find rule for.

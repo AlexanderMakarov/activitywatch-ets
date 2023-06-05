@@ -120,6 +120,9 @@ class Interval:
         return interval
 
     def get_count(self):
+        """
+        :return: Number of intervals in linked list this interval belongs to.
+        """
         interval = self.iterate_prev()
         cnt = 1
         while interval := interval.next:

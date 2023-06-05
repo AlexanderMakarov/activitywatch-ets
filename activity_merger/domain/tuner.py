@@ -1,7 +1,6 @@
 from typing import List, Dict, Tuple, Set, Union
-from activity_merger.domain.input_entities import EventKeyHandler, Rule
+from activity_merger.domain.input_entities import Rule2
 from activity_merger.domain.interval import Interval
-from activity_merger.domain.analyzer import find_rule_for_event
 from activity_merger.domain.metrics import Metrics
 from ..config.config import LOG
 
@@ -23,7 +22,7 @@ class IntervalWithDecision(Interval):
         # - user decided (any, True)
         # - interval looks the same as decided by user so apply the same decision TODO do we need?
         self.decision: Set = None  # What user chose: SKIP, MERGE_NEXT, any number of Event-s.
-        self.rules: List[Rule] = []  # Sorted rules which on this stage describes Event-s inside.
+        self.rules: List[Rule2] = []  # Sorted rules which on this stage describes Event-s inside.
         self.is_user_decision = False  # Flag that decision was made by user TODO is it right?
         self.problem = None
 
@@ -43,26 +42,9 @@ class IntervalWithDecision(Interval):
             tmp.set_prev(prev)
         return tmp
 
-    def set_user_decision(self, decision: Set[Union[int, Rule]]):
+    def set_user_decision(self, decision: Set[Union[int, Rule2]]):
         self.decision = decision
         self.is_user_decision = True
-
-    def set_rules(self, eventkeyhandlers_per_bucket_prefix: Dict[str, List[EventKeyHandler]], metrics: Metrics):
-        # TODO merge with analyzer._find_out_rule_for_interval
-        rules = []
-        for event in self.events:
-            handler: EventKeyHandler = find_rule_for_event(event, eventkeyhandlers_per_bucket_prefix)
-            rule = None
-            if not handler:
-                metrics.increment('events without handlers', self)
-                continue
-            rule, _ = handler.get_rule(event)
-            if rule:
-                rules.append(rule)
-                metrics.increment(str(rule), self)
-            else:
-                metrics.increment('events with handler but without rule', self)
-        self.rules = sorted(rules)
 
     @staticmethod
     def decision_item_to_str(item) -> str:
@@ -101,7 +83,7 @@ def adjust_priorities(decisions: List[IntervalWithDecision]) -> Metrics:
         None
     )
     # Find contradictions and report them.
-    input_rules_to_decision: Set[Tuple[Rule], IntervalWithDecision] = {}  # This map is not used further.
+    input_rules_to_decision: Set[Tuple[Rule2], IntervalWithDecision] = {}  # This map is not used further.
     for decision in decisions:
         input_rules = set(decision.rules_per_event.values())
         input_rules_tuple = tuple(sorted(input_rules, key=lambda r: r.key_pattern))
@@ -127,13 +109,13 @@ def adjust_priorities(decisions: List[IntervalWithDecision]) -> Metrics:
         if IntervalWithDecision.SKIP in decision.decision:
             metrics.increment('total_decisions_to_skip', decision)
             for item in decision.decision:
-                if isinstance(item, Rule):
+                if isinstance(item, Rule2):
                     item.skip = True
                     metrics.increment('total_rules_to_skip')
         elif IntervalWithDecision.MERGE_NEXT in decision.decision:
             metrics.increment('total_decisions_to_merge_with_next', decision)
             for item in decision.decision:
-                if isinstance(item, Rule):
+                if isinstance(item, Rule2):
                     item.merge_next = True
                     metrics.increment('total_rules_to_merge_with_next')
 
@@ -141,7 +123,7 @@ def adjust_priorities(decisions: List[IntervalWithDecision]) -> Metrics:
         if non_selected_rules:
             max_non_selected_priority = max(rule.priority for rule in non_selected_rules)
             for item in decision.decision:
-                if isinstance(item, Rule):
+                if isinstance(item, Rule2):
                     rule = item
                     if rule.priority <= max_non_selected_priority:
                         # Update rule priority.

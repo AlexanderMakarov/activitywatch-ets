@@ -23,11 +23,10 @@ except ImportError:
 from pick import pick
 
 from activity_merger.config.config import LOG, MIN_DURATION_SEC, RULES, BUCKET_DEBUG_RAW_RULE_RESULTS
-from activity_merger.domain.input_entities import EventKeyHandler, Event, Rule
+from activity_merger.domain.input_entities import Event, Rule2
 from activity_merger.domain.interval import Interval, intervals_duration
 from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date, seconds_to_int_timedelta
-from activity_merger.domain.analyzer import get_eventkeyhandlers_per_bucket_prefix, find_rule_for_event,\
-                                            analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER
+from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, ANALYZE_MODE_TUNER, find_rule_for_event
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.tuner import IntervalWithDecision, SKIP_TEXT, MERGE_TEXT, TUNER_ABILITIES_TEXT,\
@@ -42,10 +41,10 @@ class Context:  # TODO move to 'tuner.py'.
 
     SAVE_FILE_PATH = os.path.abspath("tune_rules-context.dill")
 
-    def __init__(self, intervals: List[IntervalWithDecision], rules: Dict[str, List[EventKeyHandler]])\
+    def __init__(self, intervals: List[IntervalWithDecision], rules: List[Rule2])\
             -> None:
         self.intervals: List[IntervalWithDecision] = intervals
-        self.rules: Dict[str, List[EventKeyHandler]] = rules
+        self.rules: List[Rule2] = rules
 
     def save(self):
         """
@@ -93,35 +92,30 @@ class Context:  # TODO move to 'tuner.py'.
 
     def get_number_of_rules(self) -> int:
         """
-        :return: Number of `Rule`-s inside. Includes rules in subhandlers.
+        :return: Number of `Rule`-s inside.
         """
         result = 0
-        for bucket_handlers in self.rules.values():
-            for handler in bucket_handlers:
-                result += Context._get_number_of_rules_in_handler(handler)
-        return result
-
-    @staticmethod
-    def _get_number_of_rules_in_handler(eventkeyhandler: EventKeyHandler) -> int:
-        result = 0
-        rule: Rule
-        for rule in eventkeyhandler.rules.values():
-            result += 1
-            if rule.subhandler:
-                result += Context._get_number_of_rules_in_handler(rule.subhandler)
+        for rule in self.rules:
+            result += rule.get_number_of_rules_in_tree()
         return result
 
     def set_rules_to_intervals(self) -> Metrics:
         """
-        Sets rules for all intervals inside.
+        Sets rules for all events inside all intervals inside.
         :return: `Metrics` with information about used rules. It has "suppressed" metric "used rules".
         """
-        eventkeyhandlers_per_bucket_prefix = get_eventkeyhandlers_per_bucket_prefix(self.rules)
         metrics = Metrics({}, {'used rules'})
         used_rules = set()
         for interval in self.intervals:
-            interval.set_rules(eventkeyhandlers_per_bucket_prefix, metrics)
-            used_rules.update(str(x) for x in interval.rules)
+            rules = []
+            descriptions = []
+            for event in interval.events:
+                rule, description = find_rule_for_event(event, self.rules)
+                if rule:
+                    rules.append(rule)
+                    descriptions.append(description)
+            interval.rules = sorted(rules)
+            used_rules.update(descriptions)
         metrics.override('used rules', len(used_rules), 0)
         return metrics
 
@@ -129,7 +123,7 @@ class Context:  # TODO move to 'tuner.py'.
 class ItemToDecide():
     __slots__ = ('rules', 'intervals', 'sum_duration', 'decision')
     
-    def __init__(self, rules: List[Rule], intervals: List[IntervalWithDecision], sum_duration):
+    def __init__(self, rules: List[Rule2], intervals: List[IntervalWithDecision], sum_duration):
         self.rules = rules
         self.intervals = intervals
         self.sum_duration = sum_duration
@@ -152,7 +146,7 @@ class ItemToDecide():
 
 def _find_items_to_decide(decisions: List[IntervalWithDecision]) -> List[ItemToDecide]:
     metrics = Metrics({}, None)
-    input_rules_to_intervals: Dict[Tuple[Rule], List[IntervalWithDecision]] = {}
+    input_rules_to_intervals: Dict[Tuple[Rule2], List[IntervalWithDecision]] = {}
     for decision in decisions:
         input_rules = set(decision.rules)
         input_rules_tuple = tuple(sorted(input_rules, key=lambda r: r.key_pattern))
@@ -230,7 +224,7 @@ class TerminalLeader:
             for key in selected:
                 value = options.get(key, None)
                 result.append(value)
-                if isinstance(value, Rule):
+                if isinstance(value, Rule2):
                     result_desc_items.append(str(value))
                 elif value == IntervalWithDecision.SKIP:
                     result_desc_items.append('skip')
@@ -494,8 +488,10 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     LOG.info("---- Tuning started.")
     while True:
         # Analyze interval with hiding all problems logs. Upload debug buckets.
-        analyzer_result = analyze_intervals(context.intervals[0], MIN_DURATION_SEC, context.rules,
-                                            ProblemReporter.SUPPORTED_PROBLEMS, ANALYZE_MODE_TUNER)
+        analyzer_result = analyze_intervals(
+            context.intervals[0], MIN_DURATION_SEC, context.rules, ProblemReporter.SUPPORTED_ITEMS.keys(),
+            ANALYZE_MODE_TUNER
+        )
         reload_debug_buckets(analyzer_result, client)
         # Interact with user.
         is_exit = ask_decision_and_correct_rules(context)

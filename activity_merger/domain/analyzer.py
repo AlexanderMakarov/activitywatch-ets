@@ -1,11 +1,12 @@
 import dataclasses
 import collections
+from operator import attrgetter
 from typing import List, Dict, Tuple, Any
 
 from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,\
                             BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
 from .interval import Interval, intervals_duration
-from .input_entities import EventKeyHandler, Event, Rule2
+from .input_entities import Event, Rule2
 from .metrics import Metrics
 from .output_entities import RuleResult, Activity, AnalyzerResult
 from ..helpers.helpers import seconds_to_int_timedelta, event_data_to_str
@@ -144,35 +145,38 @@ class ProblemReporter:
     }
 
 
-def find_rule_for_event(event: Event, rules: List[Rule2]) -> Rule2:
+def find_rule_for_event(event: Event, rules: List[Rule2]) -> Tuple[Rule2, str]:
     """
     Finds rule for the given event.
     :param event: Event to find handler for.
     :param rules: List of rules to search in.
-    :return: Rule (leaf) for the given event.
+    :return: Tuple with rule which more precisely matches event in the graph
+    and description of matched part if rule was found.
     """
     for rule in rules:
-        result = rule.find_rule_for_event(event)
-        if result:
-            return result
-    return None
+        matched_rule, description = rule.find_rule_for_event(event)
+        if matched_rule:
+            return matched_rule, description
+    return None, None
 
 
-def _find_out_rule_for_interval(interval: Interval, metrics: Metrics, rules: List[Rule2]) -> RuleResult:
-    rule_result: RuleResult = None
+def find_rule_for_interval(interval: Interval, metrics: Metrics, rules: List[Rule2]) -> List[RuleResult]:
+    """
+    Searches rules describing all events in given interval.
+    :param interval: `Interval` search rules for events of.
+    :param metrics: `Metrics` instance to track metrics.
+    :param rules: Graph of rules to search in.
+    :return: List of `RuleResult`-s describing events in given interval.
+    """
+    rule_results = []
     # Iterate all events to find out one with higher priority.
     for event in interval.events:
-        # Search `EventKeyHandler` by 2 criteria:
-        # 1) event bucket ID starts with handler 'bucket_id',
-        # 2) handler key exists in event data.
-        rule: Rule2 = find_rule_for_event(event, rules)
+        rule, description = find_rule_for_event(event, rules)
         if not rule:
             metrics.increment_and_call_handler('unknown events occurencies', interval, rule, event)
             continue  # It is OK, some events (inside interval) may don't have handlers intentionally.
-        # Keep only rule with the highest priority.
-        if rule_result is None or rule.priority > rule_result.rule.priority:
-            rule_result = RuleResult(rule, event, rule.get_activity_description(), [interval])
-    return rule_result
+        rule_results.append(RuleResult(rule, event, description, [interval]))
+    return rule_results
 
 
 def _window_to_activity(window: RuleResultsWindow, rule_result: RuleResult, activities: List[Activity],
@@ -233,7 +237,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
     window: RuleResultsWindow = None
     while cur_interval.next:
         cur_interval = cur_interval.next
-        rule_result: RuleResult = _find_out_rule_for_interval(cur_interval, metrics, rules)
+        rule_results: List[RuleResult] = find_rule_for_interval(cur_interval, metrics, rules)
         # Gather some important metrics at start.
         is_not_afk = any(x for x in cur_interval.events \
                          if x.bucket_id.startswith(BUCKET_AFK_PREFIX) and x.data['status'] != 'afk')
@@ -241,9 +245,11 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
             metrics.increment('not afk intervals', cur_interval)
         # NOTE: order is very important below.
         # Decide whether to count this interval or not and update metrics.
-        if rule_result is None:
+        if not rule_results:
             metrics.increment_and_call_handler('intervals without rules', cur_interval, cur_interval)
             continue
+        # Find the only rule representing interval - by priority
+        rule_result = max((x for x in rule_results), key=attrgetter('rule.priority'))
         # Update per-rule-name metric. It should include all rules (i.e. "skip", "placeholder", etc.).
         metrics.increment(str(rule_result.rule), cur_interval)
         # Fill up BUCKET_DEBUG_RULE_RESULTS before handling deferred intervals
