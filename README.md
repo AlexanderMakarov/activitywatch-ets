@@ -147,10 +147,12 @@ Note that for `RULES` configuration it would be great to have:
   or creating more precise rules (subhandlers).
   Better to remember answers or provide ability to reiterate only some of events, for example
   those where were issues previous iteration. It means database...
+  [ ] Improve "windows to activities" (`analyzer._window_to_activity`) with parallel sliding windows.
   [x] Ask user for decision about each interval cut by rules.
     Appeared it is too tedious - 2k intervals per working day with few seconds duration.
 - [ ] Enhance above - ask user only about unique combination of events.
     Thus we omit inconsistent decisions as well. But need a way to suggest better rules.
+- [ ] "tune_rules.py" - support `WindowsTerminalLeader`.
 - [ ] Complete get_activities.py
 - [x] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust `RULES` and code if need.
