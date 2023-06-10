@@ -12,6 +12,9 @@ Lightweight representation of ActivityWatcher event without "id" field but with 
 class Rule2:
     """
     Structure to match ActivityWatch events, tie them with specific behavior, name activities with them.
+    Note that `str(rule)` produces rule name, while `find_rule_for_event` and `is_match` produce name of the
+    activity based on value (event) given as a parameter.
+
     :param pattern: Regexp pattern to handle some value. Value is determined in parent rule.
     If there is no parent (i.e. this rule is top level) then pattern should match name of the ActivityWatch bucket.
     :param priority: Priority of the rule, greater value => more chance to describe activity from underlying interval.
@@ -63,6 +66,8 @@ class Rule2:
         Marks rule to merge underlying interval with the next interval to add to it's rule.
         Useful for 'new browser tab' like activities when it is impossible to reveal activity from related event
         because too few data and more details will be in the following event.
+        Note that event under this rule amy be converted into decicated activity if it is the last interval in
+        the analyzed period.
         """
         if self.__is_skip or self.__is_placeholder or self.__subrules:
             raise ValueError(f"{self} can't be merged with next interval - conflicts with other behaviors")
@@ -76,7 +81,7 @@ class Rule2:
         """
         if self.__is_skip or self.__is_merge_next or self.__subrules:
             raise ValueError(f"{self} can't be a placeholder - conflicts with other behaviors")
-        self.__is_merge_next = True
+        self.__is_placeholder = True
         return self
 
     def with_subrules(self, key: str, subrules: List['Rule2']):
@@ -117,6 +122,8 @@ class Rule2:
             desc += ", to merge with next interval"
         if self.__is_placeholder:
             desc += ", placeholder"
+        if self.__parent:
+            desc += f", parent={self.__parent}"
         return f"Rule '{self.__pattern}', priority={self.priority}{desc}"
 
     def find_rule_for_event(self, event: Event) -> Tuple['Rule2', str]:
@@ -141,7 +148,7 @@ class Rule2:
         if not data_value:
             return None, None  # Subrules won't be able match specified event - stop to search.
         for rule in self.__subrules:
-            matched, subrule_description = self.is_match(data_value)
+            matched, subrule_description = rule.is_match(data_value)
             # If subrule matches value then pass next evaluation to it.
             if matched:
                 subrule, subrule_description = rule.find_rule_for_event(event)

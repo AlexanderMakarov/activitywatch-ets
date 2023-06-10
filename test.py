@@ -4,7 +4,8 @@ import unittest
 from activity_merger.test.test_interval import TestInterval
 from activity_merger.test.test_merger import TestMerger
 from get_outlook_events import TestGetOutlookEvents
-from activity_merger.test.test_tuner import TestTuner
+from activity_merger.test.test_analyzer import TestAnalyzer
+# from activity_merger.test.test_tuner import TestTuner
 
 
 if __name__ == '__main__':

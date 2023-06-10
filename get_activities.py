@@ -3,17 +3,15 @@ import datetime
 import os
 import argparse
 import aw_client
-from typing import List
+from typing import List, Set
 
 from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES,\
                                           DEBUG_BUCKETS_IMPORTER_NAME, BUCKET_DEBUG_RAW_RULE_RESULTS,\
                                           BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
 from activity_merger.domain.interval import Interval
-from activity_merger.helpers.helpers import setup_logging, seconds_to_int_timedelta, valid_date, upload_events,\
-                                            delete_buckets
+from activity_merger.helpers.helpers import setup_logging, valid_date, upload_events, delete_buckets
 from activity_merger.domain.merger import report_from_buckets
-from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, ANALYZE_MODE_ACTIVITIES,\
-                                            ANALYZE_MODE_DEBUG
+from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter
 from activity_merger.domain.output_entities import AnalyzerResult
 
 
@@ -59,36 +57,17 @@ def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.Acti
                                BUCKET_DEBUG_ACTIVITES, True, client=client))
 
 
-def print_analyzer_result(analyzer_result: AnalyzerResult):
-    """
-    Prints 'AnalyzerResult' content as INFO logs.
-    :param analyzer_result: Object to describe data in.
-    """
-    sorted_metrics_strings = list(analyzer_result.metrics.to_strings())
-    LOG.info("Metrics from intervals analysis (total %s):\n  %s",
-             len(sorted_metrics_strings), "\n  ".join(sorted_metrics_strings))
-    # Print "less than MIN_DURATION_SEC" values from 'activity_counter'.
-    dumb_activities = [f"{seconds_to_int_timedelta(v)} {k}"
-                       for k, v in analyzer_result.rule_results_counter.most_common() if v >= MIN_DURATION_SEC]
-    LOG.info("There were %d 'equal' activities with %d longer than %d seconds:\n  %s",
-             len(analyzer_result.rule_results_counter), len(dumb_activities), MIN_DURATION_SEC,
-             "\n  ".join(dumb_activities))
-    # Print resulting activities as is. Order is important here.
-    LOG.info("Assembled %d activities:\n  %s", len(analyzer_result.activities),
-             "\n  ".join(str(x) for x in analyzer_result.activities))
-
-
-def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: List[str],
+def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: Set[str],
                                     is_import_debug_buckets: bool) -> AnalyzerResult:
     """
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
     analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
     prints them into output.
     :param events_date: Date to get events on.
-    :param ignore_hints: List of problems to disable in logs.
+    :param ignore_hints: Set of problems to disable in logs.
     :param is_import_debug_buckets: Flag to assemble and import into ActivityWatch debugging information as events for
     "debugging" buckets.
-    :return: 'AnalyzerResult' object or 'None' if no intervals to analyze were found.
+    :return: `AnalyzerResult` object or `None` if no intervals to analyze were found.
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
     # Build time-ordered linked list of intervals by provided events.
@@ -97,11 +76,9 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
         LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
         return None
     # Convert (analyze) intervals list into activities.
-    analyzer_result: AnalyzerResult = analyze_intervals(
-        interval, MIN_DURATION_SEC, RULES, ignore_hints,
-        ANALYZE_MODE_DEBUG if is_import_debug_buckets else ANALYZE_MODE_ACTIVITIES
-    )
-    print_analyzer_result(analyzer_result)
+    analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, is_import_debug_buckets,
+                                                        ignore_hints)
+    LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
     if is_import_debug_buckets:
         reload_debug_buckets(analyzer_result, client)
     return analyzer_result
@@ -139,7 +116,7 @@ def main():
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
         events_date = (events_date - datetime.timedelta(days=args.back_days))
-    convert_aw_events_to_activities(events_date, args.ignore_hints, args.is_import_debug_buckets)
+    convert_aw_events_to_activities(events_date, set(args.ignore_hints), args.is_import_debug_buckets)
 
 
 if __name__ == '__main__':

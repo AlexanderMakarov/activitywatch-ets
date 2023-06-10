@@ -1,6 +1,8 @@
 """Tests for the repository."""
 import datetime
 from typing import List, Tuple
+
+from ..domain.input_entities import Event
 from ..domain.interval import Interval
 
 
@@ -22,3 +24,28 @@ def build_timedelta(seed: int, in_hours=False) -> datetime.timedelta:
     :return: Timedelta with specified difference.
     """
     return build_datetime(seed + 1, 1 if in_hours else None) - build_datetime(1, 1 if in_hours else None)
+
+
+def build_intervals_linked_list(data: List[Tuple[int, bool, int, List[Event]]]) -> Interval:
+    """
+    Builds intervals linked list from the list of tuples. Doesn't check parameters.
+    :param data: Intervals representations to bulld linked list of them. Each tuple is expected to contain:
+    day of start, flag to return `Interval` from the function, duration, list of events.
+    :param in_hours: Flag to build intervals in hours. By-default in days.
+    :return: Chosen interval in the linked list.
+    """
+    result = None
+    previous = None
+    for (seed, is_target, duration, events) in data:
+        if not previous:
+            previous = Interval(build_datetime(seed), build_datetime(seed + duration))
+            previous.events = events
+        else:
+            tmp = Interval(build_datetime(seed), build_datetime(seed + duration), previous)
+            tmp.events = events
+            previous.next = tmp
+            previous = tmp
+        if is_target:
+            assert result is None, f"Wrong parameters - '{seed}' interval is marked as result but is not first."
+            result = previous
+    return result

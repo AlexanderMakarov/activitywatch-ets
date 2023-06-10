@@ -1,35 +1,10 @@
 import unittest
 import datetime
-from typing import List, Tuple
 from parameterized import parameterized
 from aw_core.models import Event
 
-from . import build_datetime, build_timedelta
+from . import build_datetime, build_timedelta, build_intervals_linked_list
 from ..domain.interval import Interval
-
-
-def build_intervals_linked_list(data: List[Tuple[int, bool, int, List[Event]]]) -> Interval:
-    """
-    Builds intervals linked list from the list of tuples. Doesn't check parameters.
-    :param data: List of tuples (day of start, flag to return `Interval` from the function, duration, list of events).
-    :param in_hours: Flag to build intervals in hours. By-default in days.
-    :return: Chosen interval.
-    """
-    result = None
-    previous = None
-    for (seed, is_target, duration, events) in data:
-        if not previous:
-            previous = Interval(build_datetime(seed), build_datetime(seed + duration))
-            previous.events = events
-        else:
-            tmp = Interval(build_datetime(seed), build_datetime(seed + duration), previous)
-            tmp.events = events
-            previous.next = tmp
-            previous = tmp
-        if is_target:
-            assert result is None, f"Wrong parameters - '{seed}' interval is marked as result but is not first."
-            result = previous
-    return result
 
 
 event_3l5 = Event(1, build_datetime(2), build_timedelta(5), "event_3l5")

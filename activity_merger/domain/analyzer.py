@@ -1,7 +1,7 @@
 import dataclasses
 import collections
 from operator import attrgetter
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Set, Tuple, Any
 
 from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,\
                             BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
@@ -14,17 +14,6 @@ from ..helpers.helpers import seconds_to_int_timedelta, event_data_to_str
 
 BUCKET_AFK_PREFIX = "aw-watcher-afk"
 BUCKET_STOPWATCH_PREFIX = "aw-stopwatch"
-# DEFAULT_AFK_RULES = [EventKeyHandler('status', [
-#     Rule("afk", AFK_RULE_PRIORITY, skip=True),
-#     Rule("not-afk", 1, is_placeholder=True)
-# ])]
-# DEFAULT_STOPWATCH_RULES = [EventKeyHandler('label', [
-#     Rule(".*", 0, subhandler=EventKeyHandler('running', [
-#         Rule("true", WATCHDOG_RULE_PRIORITY),
-#         # Even if it is the only event in interval it carries no activity.
-#         Rule("false", 0, skip=True)
-#     ]))
-# ])]
 DEFAULT_RULES = [
     Rule2(BUCKET_AFK_PREFIX + ".*", 1, to_string="afk").with_subrules(key='status', subrules=[
         Rule2("afk", AFK_RULE_PRIORITY).skip(),
@@ -38,10 +27,6 @@ DEFAULT_RULES = [
         ])
     ]),
 ]
-ANALYZE_MODE_ACTIVITIES = "FOR_ACTIVITIES"
-ANALYZE_MODE_DEBUG = "FOR_DEBUG"
-ANALYZE_MODE_TUNER = "FOR_TUNER"
-ANALYZE_MODES = [ANALYZE_MODE_ACTIVITIES, ANALYZE_MODE_DEBUG, ANALYZE_MODE_TUNER]
 
 
 @dataclasses.dataclass
@@ -191,22 +176,23 @@ def _window_to_activity(window: RuleResultsWindow, rule_result: RuleResult, acti
     activity = window.to_activity()
     activities.append(activity)
     if is_build_debug_buckets:
-        debug_event = Event(BUCKET_DEBUG_ACTIVITES, activity.start_time, activity.duration, {
-                'description': rule_result.description,
-                'rule_results_count': len(activity.rule_results),
-            })
+        debug_event = Event(BUCKET_DEBUG_ACTIVITES, activity.start_time, activity.duration,
+                            {
+                                'description': rule_result.description,
+                                'rule_results_count': len(activity.rule_results),
+                            })
         activity_debug_events.append(debug_event)
 
 def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Rule2],
-        ignore_hints: List[str], analyze_mode: str = ANALYZE_MODE_ACTIVITIES) -> AnalyzerResult:
+                      is_build_debug_buckets: bool = False, ignore_hints: Set[str]= None) -> AnalyzerResult:
     """
     Analyzes linked list of 'Interval'-s to convert them into list of 'Activity'-es and provide explanation about
     how well it was done.
     :param interval: Linked list of 'Interval'-s to analyze.
     :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
     :param custom_rules: User-specific/crafted map of `Rule2`-s.
+    :param is_build_debug_buckets: Flag to build debug buckets.
     :param ignore_hints: List of problems to disable in logs.
-    :param analyze_mode: Mode to analyze intervals linked list. See constants starting with `ANALYZE_MODE`.
     :return: Tuple of:
     1 - List of assembled `Activity`-es.
     2 - `Counter` of intervals-by-rule description-s to sum of their durations.
@@ -214,10 +200,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
     3 - Map of metrics to estimate report quality/coverage and improve rules.
         Key is name of metric, value is tuple [number_of_intervals, sum_of_durations].
     """
-    if analyze_mode not in ANALYZE_MODES:
-        raise ValueError(f"Analyze mode '{analyze_mode}' is not supported. Are supported only {ANALYZE_MODES}.")
-    is_build_debug_buckets = analyze_mode in (ANALYZE_MODE_DEBUG, ANALYZE_MODE_TUNER)
-    # Assemble full set of EventKeyHandler-s from predifined ones and custom.
+    # Assemble full set of rules from predifined ones and custom.
     rules = custom_rules + DEFAULT_RULES
     # Prepare to loop through intervals with searching rules, building report and metrics.
     # Go to the first interval.
@@ -255,11 +238,12 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
         # Fill up BUCKET_DEBUG_RULE_RESULTS before handling deferred intervals
         # to represent logic of choosing rule by events in interval.
         if is_build_debug_buckets:
-            debug_event = Event(BUCKET_DEBUG_RAW_RULE_RESULTS, cur_interval.start_time, cur_interval.get_duration(), {
-                    'description': rule_result.description,
-                    'rule': str(rule_result.rule),
-                    'events_cnt': len(cur_interval.events),
-                })
+            debug_event = Event(BUCKET_DEBUG_RAW_RULE_RESULTS, cur_interval.start_time, cur_interval.get_duration(),
+                                {
+                                    'description': rule_result.description,
+                                    'rule': str(rule_result.rule),
+                                    'events_cnt': len(cur_interval.events),
+                                })
             raw_rule_result_debug_events.append(debug_event)
         duration = intervals_duration(rule_result.intervals)
         # Append deferred intervals if there are such.
@@ -275,7 +259,8 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
             continue
         # Check if rule is a placeholder and provide all information about interval to write appropriate rule for it.
         if rule_result.rule.is_placeholder:
-            metrics.increment_and_call_handler('intervals need to reveal rule for', cur_interval, cur_interval)
+            metrics.increment_and_call_handler('intervals need to reveal rule for', cur_interval,
+                                               rule_result.rule, cur_interval)
         # Update 'intervals to build activities from' metric.
         metrics.increment('intervals to build activities from', cur_interval)
         # Defer interval if need. Note that `activity_counter` shouldn't be touched by this rule.
@@ -286,11 +271,11 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
         rules_counter[rule_result.description] += duration
         if is_build_debug_buckets:
             debug_event = Event(BUCKET_DEBUG_FINAL_RULE_RESULTS, rule_result.intervals[0].start_time,
-                    rules_counter[rule_result.description], {
-                'description': rule_result.description,
-                'rule': str(rule_result.rule),
-                'intervals_count': len(rule_result.intervals),
-            })
+                                rules_counter[rule_result.description], {
+                                    'description': rule_result.description,
+                                    'rule': str(rule_result.rule),
+                                    'intervals_count': len(rule_result.intervals),
+                                })
             final_rule_result_debug_events.append(debug_event)
         # Decide if current window is completed, may be converted to `Activity` and next window started.
         is_start_new_window = True  # By default start new window.
@@ -309,9 +294,21 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
                 is_start_new_window = False
         if is_start_new_window:
             window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
+    # Handle case when last interval in "merge next".
+    if deferred_intervals:
+        if window is not None:
+            window.append(rule_result)
+        else:
+            window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
     # Handle last window.
     if window is not None:
         _window_to_activity(window, rule_result, activities, is_build_debug_buckets, activity_debug_events,
                             round_to, metrics)
-    return AnalyzerResult(activities, rules_counter, metrics,
-                          raw_rule_result_debug_events, final_rule_result_debug_events, activity_debug_events)
+    return AnalyzerResult(
+        activities,
+        rules_counter,
+        metrics,
+        raw_rule_result_debug_events,
+        final_rule_result_debug_events,
+        activity_debug_events
+    )

@@ -33,19 +33,25 @@ rule3p2 = Rule2("3", 2)
 rule3p3 = Rule2("3", 3)
 
 
-def _build_decisions(decisions_and_input_rules: List[Tuple[List[Any], List[Rule2]]])\
-        -> List[IntervalWithDecision]:
+def _build_decisions(items: List[Tuple[List[Any], List[Rule2]]]) -> List[IntervalWithDecision]:
+    """
+    Builds list of `IntervalWithDecision`-s
+    :param items: List of templates per `IntervalWithDecision` which are tuples:
+        1st item is a decision (skip, merge or list of events),
+        2nd item is list of rules.
+    :return: List of `IntervalWithDecision`-s assembled in a way sufficient for tuner.
+    """
     # First get all rules and make copy of them to don't modify input rules.
-    rules = set(itertools.chain(*(x[1] for x in decisions_and_input_rules)))
+    rules = set(itertools.chain(*(x[1] for x in items)))
     rules = copy.deepcopy(dict((x, x) for x in rules))
     result = []
-    for entry in decisions_and_input_rules:
-        decision = IntervalWithDecision(INTERVAL)
-        decision.decision = [rules[d] if isinstance(d, Rule2) else d
+    for entry in items:
+        interval = IntervalWithDecision(INTERVAL)
+        interval.decision = [rules[d] if isinstance(d, Rule2) else d
                              for d in entry[0]]
         # TODO it puts index as a key, should be Event.
-        decision.rules_per_event = dict((i, x) for i, x in enumerate(rules[r] for r in entry[1]))
-        result.append(decision)
+        interval.rules_per_event = dict((i, x) for i, x in enumerate(rules[r] for r in entry[1]))
+        result.append(interval)
     return result
 
 

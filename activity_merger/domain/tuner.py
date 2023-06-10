@@ -10,7 +10,7 @@ TUNER_ABILITIES_TEXT = "adjust Rule.priority values"
 
 class IntervalWithDecision(Interval):
     """
-    Wrapper around 'Interval' with extra information like user decision for this interval and problems with them.
+    Wrapper around 'Interval' with extra information like user decision for this interval and problems with it.
     """
     SKIP = 1
     MERGE_NEXT = 2
@@ -18,9 +18,6 @@ class IntervalWithDecision(Interval):
     def __init__(self, interval: Interval) -> None:
         super().__init__(interval.start_time, interval.end_time, interval.prev, interval.next)
         self.events = interval.events
-        # Cases:
-        # - user decided (any, True)
-        # - interval looks the same as decided by user so apply the same decision TODO do we need?
         self.decision: Set = None  # What user chose: SKIP, MERGE_NEXT, any number of Event-s.
         self.rules: List[Rule2] = []  # Sorted rules which on this stage describes Event-s inside.
         self.is_user_decision = False  # Flag that decision was made by user TODO is it right?
@@ -79,8 +76,7 @@ def adjust_priorities(decisions: List[IntervalWithDecision]) -> Metrics:
     metrics = Metrics(
         {
             'inconsistent_decision': _incosistent_decision_log,
-        },
-        None
+        }
     )
     # Find contradictions and report them.
     input_rules_to_decision: Set[Tuple[Rule2], IntervalWithDecision] = {}  # This map is not used further.
