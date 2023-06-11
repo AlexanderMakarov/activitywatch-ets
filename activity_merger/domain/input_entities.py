@@ -133,36 +133,41 @@ class Rule2:
         :return: Tuple with rule which more precisely matches event in the graph
         and description of matched part if rule was found.
         """
-        # If it is "top" level rule then additionally to other checks try match itself with event's bucket ID.
         description = None
+        result = None
+        # If it is "top" level rule then additionally to other checks try match itself with event's bucket ID.
         if self.__parent is None:
-            matched, description = self.is_match(event.bucket_id)
-            if not matched:
+            matches, description = self.is_match(event.bucket_id)
+            if not matches:
                 return None, None
+            else:
+                result = self
         # Next (or instead) check if there are subrules to redirect matching to.
-        # Assume that this rule match input event already because someone called it.
         if not self.__subrules:
-            return self, description  # It is leaf node.
+            return result, description  # Nothing to check further.
         # Check if subrules won't be able handle this event.
         data_value = event.data.get(self.__data_key)
         if not data_value:
-            return None, None  # Subrules won't be able match specified event - stop to search.
-        for rule in self.__subrules:
-            matched, subrule_description = rule.is_match(data_value)
+            return result, description  # Subrules won't be able match specified event - stop to search.
+        # Check with subrules.
+        for subrule in self.__subrules:
+            matches, subrule_description = subrule.is_match(data_value)
             # If subrule matches value then pass next evaluation to it.
-            if matched:
-                subrule, subrule_description = rule.find_rule_for_event(event)
-                # Determine result rule.
-                rule = subrule if subrule else self
-                # Determine result description. Any part may be None.
+            if matches:
+                # First update resutls.
+                result = subrule
                 if description is not None:
-                    if subrule_description is not None:
-                        description += " " + subrule_description
+                    description += ", " + subrule_description
                 else:
                     description = subrule_description
-                return rule, description
-        # If subrules weren't able match event then current rule is a "leaf" rule to handle this event.
-        return self, description
+                # Try to search recursively.
+                recursive_result, recursive_description = subrule.find_rule_for_event(event)
+                # If recursive search found something else then update results with it.
+                if recursive_result:
+                    result = recursive_result
+                    description += " " + recursive_description
+                break
+        return result, description
 
     def is_match(self, value: str) -> Tuple[bool, str]:
         """
@@ -176,18 +181,15 @@ class Rule2:
             return False, None
         description = None
         # If matched then need to update inner description.
-        if self.__parent is None:
-            # If rule doesn't have parent then this rule is checked for bucket name.
-            description = match.group(0) + " bucket,"
-        elif self.to_string:
+        if self.to_string:
             # If `to_string` is specified then use it.
             if isinstance(self.to_string, str):
                 description = self.to_string
             else:
                 description = self.to_string(match)
         else:
-            # Otherwise just put the whole value matched by regexp.
-            description = match.group(0)
+            # Otherwise just put the whole value matched by regexp or it's last group.
+            description = match.groups()[-1] if match.groups() else match.string
         return True, description
 
     def get_number_of_rules_in_tree(self) -> int:

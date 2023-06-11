@@ -27,17 +27,19 @@ event2A = Event(BUCKET2, DAY1, DELTA1, {"name": "a"})
 event2B = Event(BUCKET2, DAY2, DELTA1, {"name": "b"})
 event2C = Event(BUCKET2, DAY3, DELTA1, {"name": "c"})
 
-rule1A = Rule2("a", 611).skip()
-rule1B = Rule2("b", 612)
-rule1C = Rule2("c", 613).placeholder()
-rule1END = Rule2(".*", 601)
-rule2A = Rule2("a", 711)
-rule2B = Rule2("b", 712).merge_next()
-rule2END = Rule2(".*", 701)
+rule1A = Rule2(r"a", 611).skip()
+rule1B = Rule2(r"b", 612)
+rule1C = Rule2(r"c", 613).placeholder()
+rule1END = Rule2(r".*", 601)
+rule2A = Rule2(r"a", 711)
+rule2B = Rule2(r"b", 712).merge_next()
+rule2END = Rule2(r".*", 701)
 RULES_SET1 = [
     Rule2(BUCKET1, 600).with_subrules("name", [rule1A, rule1B, rule1C, rule1END]),
     Rule2(BUCKET2, 700).with_subrules("name", [rule2A, rule2B, rule2END]),
 ]
+METRIC1_1 = Metric(1, DELTA1S)
+METRIC2_2 = Metric(2, DELTA2S)
 
 
 class TestAnalyzer(unittest.TestCase):
@@ -46,36 +48,37 @@ class TestAnalyzer(unittest.TestCase):
         (
             "highest_priority_rule",
             build_intervals_linked_list([
-                (1, True, 1, [event1A, event1B, event1C]),
+                (1, True, 1, [event1A, event1B, event1C, event1D]),
                 (1, False, 1, [event2A, event2B, event2C]),
             ]),
             RULES_SET1,
-            AnalyzerResult(
-                [
-                    Activity(DAY1, DAY2, [
-                        RuleResult(rule1C, event1C, "buck2 bucket, c", None)
-                    ], "ac1", DELTA1S),
-                    Activity(DAY2, DAY3, [
-                        RuleResult(rule2B, event2B, "buck1 bucket, b", None)
-                    ], "ac2", DELTA1S),
-                ],
-                None,
-                Metrics.from_dict({
-                    "intervals to build activities from": Metric(2, DELTA2S),
-                    str(rule1C): Metric(1, DELTA1S),
-                    str(rule2B): Metric(1, DELTA1S),
-                    "intervals merged to next rule": Metric(1, DELTA1S),
-                }),
-                None, None, None
-            ),
+            {
+                "intervals to build activities from": METRIC2_2,
+                str(rule1C): METRIC1_1,
+                str(rule2B): METRIC1_1,
+                "intervals merged to next rule": METRIC1_1,
+                "intervals need to reveal rule for": METRIC1_1,
+            },
+            [
+                Activity(DAY1, DAY2, [
+                    RuleResult(rule1C, None, None, None)
+                ], "buck2 bucket, c", DELTA1S),
+                Activity(DAY2, DAY3, [
+                    RuleResult(rule2B, None, None, None)
+                ], "buck1 bucket, b", DELTA1S),
+            ],
         ),
     ])
     def test_analyze_intervals(self, test_name: str, interval: Interval, rules: List[Rule2],
-                               expected_result: AnalyzerResult):
+                               expected_metrics: Metrics, expected_activities: List[Activity]):
         self.maxDiff = None
         # Act
         analyzer_result: AnalyzerResult = analyze_intervals(interval, 0.25, rules)
         # Assert
-        err_msg = "\n'%s' case failed with result:\n%s" % (test_name, analyzer_result)
-        # TODO compare metrics
-        self.assertEqual(str(analyzer_result), str(expected_result), err_msg)
+        err_msg = f"'{test_name}' case wrong "
+        self.assertDictEqual(
+            {k: v for (k, v) in analyzer_result.metrics.metrics.items() if v.cnt > 0},
+            {k: v for (k, v) in expected_metrics.items() if v.cnt > 0},
+            err_msg + "metrics"
+        )
+        self.assertListEqual(analyzer_result.activities, expected_activities, err_msg + "activities")

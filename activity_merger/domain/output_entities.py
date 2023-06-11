@@ -1,7 +1,7 @@
 import dataclasses
 import datetime
 import collections
-from typing import List, Set
+from typing import List
 
 from .metrics import Metrics
 from .input_entities import Event, Rule2

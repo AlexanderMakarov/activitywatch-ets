@@ -296,6 +296,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
             window = RuleResultsWindow([rule_result], rule_result.rule.priority, rule_result.description, duration)
     # Handle case when last interval in "merge next".
     if deferred_intervals:
+        metrics.increment('intervals merged to next rule', cur_interval)
         if window is not None:
             window.append(rule_result)
         else:
