@@ -20,12 +20,12 @@ DELTA2 = build_timedelta(2)
 DELTA1S = DELTA1.total_seconds()
 DELTA2S = DELTA2.total_seconds()
 event1A = Event(BUCKET1, DAY1, DELTA1, {"name": "a"})
-event1B = Event(BUCKET1, DAY2, DELTA1, {"name": "b"})
-event1C = Event(BUCKET1, DAY3, DELTA1, {"name": "c"})
-event1D = Event(BUCKET1, DAY4, DELTA1, {"name": "d"})
-event2A = Event(BUCKET2, DAY1, DELTA1, {"name": "a"})
+event1B = Event(BUCKET1, DAY1, DELTA1, {"name": "b"})
+event1C = Event(BUCKET1, DAY1, DELTA1, {"name": "c"})
+event1D = Event(BUCKET1, DAY1, DELTA1, {"name": "d"})
+event2A = Event(BUCKET2, DAY2, DELTA1, {"name": "a"})
 event2B = Event(BUCKET2, DAY2, DELTA1, {"name": "b"})
-event2C = Event(BUCKET2, DAY3, DELTA1, {"name": "c"})
+event2C = Event(BUCKET2, DAY2, DELTA1, {"name": "c"})
 
 rule1A = Rule2(r"a", 611).skip()
 rule1B = Rule2(r"b", 612)
@@ -42,11 +42,49 @@ METRIC1_1 = Metric(1, DELTA1S)
 METRIC2_2 = Metric(2, DELTA2S)
 
 
+class ActivityMatcher:
+    expected: Activity
+
+    def __init__(self, expected):
+        self.expected = expected
+
+    @staticmethod
+    def __rule_results_to_str(act: Activity) -> str:
+        return "\n  ".join(str(x) for x in act.rule_results)
+
+    def __repr__(self):
+        return repr(self.expected) + "\n" + ActivityMatcher.__rule_results_to_str(self.expected)
+
+    def __eq__(self, other):
+        return self.expected.start_time == other.expected.start_time and \
+               self.expected.end_time == other.expected.end_time and \
+               self.expected.duration == other.expected.duration and \
+               self.expected.description == other.expected.description and \
+               ActivityMatcher.__rule_results_to_str(self.expected) == \
+                   ActivityMatcher.__rule_results_to_str(other.expected)
+
+
 class TestAnalyzer(unittest.TestCase):
 
     @parameterized.expand([
         (
-            "highest_priority_rule",
+            "highest_priority_rule_one_event",
+            build_intervals_linked_list([
+                (1, True, 1, [event1B]),
+            ]),
+            RULES_SET1,
+            {
+                "intervals to build activities from": METRIC1_1,
+                str(rule1B): METRIC1_1,
+            },
+            [
+                Activity(DAY1, DAY2, [
+                    RuleResult(rule1B, None, "buck1, b", None),
+                ], "buck1, b", DELTA1S),
+            ],
+        ),
+        (
+            "highest_priority_rule_merge_next_at_end",
             build_intervals_linked_list([
                 (1, True, 1, [event1A, event1B, event1C, event1D]),
                 (1, False, 1, [event2A, event2B, event2C]),
@@ -61,11 +99,9 @@ class TestAnalyzer(unittest.TestCase):
             },
             [
                 Activity(DAY1, DAY2, [
-                    RuleResult(rule1C, None, None, None)
-                ], "buck2 bucket, c", DELTA1S),
-                Activity(DAY2, DAY3, [
-                    RuleResult(rule2B, None, None, None)
-                ], "buck1 bucket, b", DELTA1S),
+                    RuleResult(rule1C, None, "buck1, c", None),
+                    RuleResult(rule2B, None, "buck2, b", None),
+                ], "buck1, c, buck2, b", DELTA2S),
             ],
         ),
     ])
@@ -81,4 +117,8 @@ class TestAnalyzer(unittest.TestCase):
             {k: v for (k, v) in expected_metrics.items() if v.cnt > 0},
             err_msg + "metrics"
         )
-        self.assertListEqual(analyzer_result.activities, expected_activities, err_msg + "activities")
+        self.assertListEqual(
+            [ActivityMatcher(x) for x in analyzer_result.activities],
+            [ActivityMatcher(x) for x in expected_activities],
+            err_msg + "activities"
+        )
