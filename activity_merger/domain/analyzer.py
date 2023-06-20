@@ -2,6 +2,9 @@ import dataclasses
 import collections
 from operator import attrgetter
 from typing import List, Dict, Set, Tuple, Any
+import intervaltree
+
+from .strategies import ActivitiesByStrategy
 
 from ..config.config import LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY, TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,\
                             BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
@@ -200,6 +203,20 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
     3 - Map of metrics to estimate report quality/coverage and improve rules.
         Key is name of metric, value is tuple [number_of_intervals, sum_of_durations].
     """
+
+    # Options to loop through events:
+    # 1. Try to search activities in each bucket separately. Next merge.
+    #    - If edges don't match then need somehow adjust to cover gaps or cut activities.
+    #     => Use priorities between buckets/rules to cut.
+    #    - How to solve "few activities from bucketA during activity from bucketB"?
+    #     => Make biggest activity if it fits in frame, otherwise use priorities between buckets/rules.
+    #    - Need to specify order of buckets handling and specify priority of merging.
+    #     => Order of handling in the STRATEGIES, priorities may be found by 'out*' parameters - depending on way of merging.
+    # 2. Analyze all at once:
+    #    - It is similar to option with Intervals list -> analyze with rules.
+    #    - Hard to specify priorities. Quite high by priority events from different bucket may interrupt each other for the same activity.
+    #    - Hard to find name for activity.
+
     # Assemble full set of rules from predifined ones and custom.
     rules = custom_rules + DEFAULT_RULES
     # Prepare to loop through intervals with searching rules, building report and metrics.
@@ -313,3 +330,52 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
         final_rule_result_debug_events,
         activity_debug_events
     )
+
+
+def merge_activities(activities_by_strategy: List[ActivitiesByStrategy]) -> AnalyzerResult:
+    # TODO don't decide activity for each interval - it means loosing information.
+    # TODO need to analyze neighbors.
+    # 1) If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
+    #   If it matches Outlook event then it is a name for the meeting. "Window" should show Zoom or Slack.
+    #   AFK is probably "afk" here due to idle.
+    # 2) If a lot of IDEA activity during some interval then it is an active coding.
+    #   It may be named by JIRA ticket aroung it. "Window" should show Zoom or Slack.
+    #   AFK should be "not-afk" here due to active movements.
+    # 3) If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
+    #   If it is the same tab in browser then it is probably some web app.
+    # TODO need to make links between rules of different buckets.
+    # Extra ideas:
+    # - We may make clusters with fields of 'data'. Like the same "jira_id" for JIRA or 'project' for IDEA.
+    # Strategies:
+    # 1. Find "long" events and make "windows" basing on them. Even intersecting.
+    # 2. Find many nearby events of the "same application". Make "windows" basing on them. Even intersecting.
+    # 3. Separate buckets on "strategies":
+    #   - Trustworthy, event=activity, sequential - like watchdog.
+    #   - Reliable whole event, event=activity, sequential, need approve - like Outlook. Need approve from window (slack, zoom).
+    #   - Reliable whole event, few events=activity, may mix activities, need name of activity - like VS code, window
+    #   - Reliable only event start, may mix activities - like IDEA. Need approve from other buckets.
+    #   - Reliable only event end, may mix activities - like JIRA. Need approve from window or browser.
+    #   - Dependant, sequential - like AFK. Very bad source of activities.
+    # Looks like ML problem....
+    
+    # Make activities in "sure that activity" order.
+    # In this way "remained gaps" will shape activities for which data is unclear.
+    tree = intervaltree.IntervalTree()
+    metrics = Metrics({}, None)
+
+    # 1. Check and add into result activities from `out_self_sufficient=True` strategies.
+    for strategy_result in activities_by_strategy:
+        if not strategy_result.strategy.out_self_sufficient:
+            continue
+        metrics.incr('self sufficient strategies')
+        for activity in strategy_result.activities:
+            overlap: List[intervaltree.Interval] = tree.overlap(activity.start_time, activity.end_time)
+            if overlap:
+                raise ValueError(f"Overlapping activities from {strategy_result.strategy}: "
+                                 f"{activity} is overlapping with " + ", ".join(x.data for x in overlap))
+            tree.addi(activity.start_time, activity.end_time, activity)
+            LOG.info("Found 'self-sufficient' activity: %s", activity)
+            metrics.incr('self sufficient activities', activity.duration)
+
+    # 2. 
+    pass

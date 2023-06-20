@@ -1,3 +1,4 @@
+import dataclasses
 import re
 import collections
 from typing import Optional, Tuple, Callable, List, Dict, Union
@@ -203,6 +204,32 @@ class Rule2:
                 if subrule:
                     result += subrule.get_number_of_rules_in_tree()
         return result
+
+
+@dataclasses.dataclass
+class Strategy:
+    bucket_prefix: str
+
+    in_each_event_is_activity: bool
+    in_events_density_matters: bool
+    in_activities_may_overlap: bool
+
+    out_self_sufficient: bool
+    """
+    True means activity from this bucket may overlaps others. Any conflicts leads to errors.
+    """
+    out_only_not_afk: bool
+    """
+    True means that activities will be cut by AFK data on corresponding host.
+    """
+    out_activity_boundaries: str
+    """
+    [whole, start, end] - means which part of activity is trustable.
+    """
+    out_activity_name: str
+    """
+    [alone, auxiliary] - means whether activity name is trustable.
+    """
 
 
 class EventKeyHandler:

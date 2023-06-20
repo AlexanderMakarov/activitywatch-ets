@@ -1,7 +1,8 @@
 import collections
 import datetime
 from typing import Dict, List, Optional, Set, Callable
-from activity_merger.domain.interval import Interval
+
+from .interval import Interval
 
 
 Metric = collections.namedtuple('Metric', ['cnt', 'duration'])
@@ -55,6 +56,22 @@ class Metrics:
         self.metrics[metric_name] = metric
         return metric
 
+    def incr(self, metric_name: str, duration: float=0.0) -> Metric:
+        """
+        Increment metric on one event with given duration. May add new metrics and skip None intervals.
+        :param metric_name: Name of metric to increment.
+        :param duration: Duration in seconds to add. May be 0.
+        """
+        if self.skip_metrics and metric_name in self.skip_metrics:
+            return
+        metric = self.metrics.get(metric_name, Metric(0, 0.0))
+        metric = Metric(
+            metric.cnt + 1,
+            metric.duration + duration
+        )
+        self.metrics[metric_name] = metric
+        return metric
+
     def increment_and_call_handler(self, metric_name: str, interval: Interval, *args):
         """
         Increment metric on one event with given `Interval` duration and reports it with specified handler.
@@ -86,12 +103,21 @@ class Metrics:
         """
         return self.metrics.get(metric_name)
 
-    def to_strings(self, is_exclude_empty: bool = True) -> List[str]:
+    def to_strings(self, is_exclude_empty: bool = True, is_exclude_duration=False) -> List[str]:
         """
-        Returns generator of sorted by duration metric descriptions except `suppressed_problems`.
-        :param is_exclude_zero: Flag to return only not empty metrics.
+        Returns generator of sorted (first by duration, next by count) metric descriptions.
+        :param is_exclude_zero: Flag to return only metrics with only positive count.
+        :param is_exclude_duration: Flag to don't print duration at all (useful for cases when we now that all
+            metrics inside doesn't provide duration).
         :return: Ready to use generator of metrics converted to strings and sorted by duration.
         """
-        sorted_metric_entries = sorted(self.metrics.items(), key=lambda x: x[1].duration, reverse=True)
-        return (f"{x[1].cnt:4} on {datetime.timedelta(seconds=int(x[1].duration))} - {x[0]}"
-                for x in sorted_metric_entries if not is_exclude_empty or x[1].cnt > 0)
+        sorted_metric_entries = sorted(self.metrics.items(), key=lambda x: (x[1].duration, x[1].cnt), reverse=True)
+        if is_exclude_duration:
+            return (f"{x[1].cnt:4} - {x[0]}"
+                    for x in sorted_metric_entries if not is_exclude_empty or x[1].cnt > 0)
+        else:
+            return (f"{x[1].cnt:4} on {str(datetime.timedelta(seconds=int(x[1].duration))).rjust(8, '0')} - {x[0]}"
+                    for x in sorted_metric_entries if not is_exclude_empty or x[1].cnt > 0)
+
+    def __repr__(self) -> str:
+        return "\n  " + "\n  ".join(self.to_strings())

@@ -4,3 +4,4 @@ selenium  # For get_outlook_events.py only.
 jira  # For get_jira_events.py only.
 dill  # For tune_rules.py only. Pickle wrapper working with lambdas.
 pick
+intervaltree

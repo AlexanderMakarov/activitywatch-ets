@@ -3,14 +3,17 @@ import datetime
 import os
 import argparse
 import aw_client
-from typing import List, Set
+from typing import List, Set, Tuple
 
 from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES,\
                                           DEBUG_BUCKETS_IMPORTER_NAME, BUCKET_DEBUG_RAW_RULE_RESULTS,\
-                                          BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES
+                                          BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES, \
+                                          STRATEGIES
 from activity_merger.domain.interval import Interval
+from activity_merger.domain.metrics import Metrics
+from activity_merger.domain.strategies import ActivitiesByStrategy
 from activity_merger.helpers.helpers import setup_logging, valid_date, upload_events, delete_buckets
-from activity_merger.domain.merger import report_from_buckets
+from activity_merger.domain.merger import report_from_buckets, analyze_buckets
 from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter
 from activity_merger.domain.output_entities import AnalyzerResult
 
@@ -36,6 +39,31 @@ def get_interval(events_date: datetime.datetime, client: aw_client.ActivityWatch
     # Build time-ordered linked list of intervals by provided events.
     return report_from_buckets(client, events_date.date(), events_date.date() + datetime.timedelta(days=1),
                                buckets, EVENTS_COMPARE_TOLERANCE_TIMEDELTA)
+
+
+def get_activities_by_strategy(events_date: datetime.datetime, client: aw_client.ActivityWatchClient)\
+        -> Tuple[List[ActivitiesByStrategy], Metrics]:
+    """
+    Connects to ActivityWatch, gets list of buckets and applies all strategies on all events in them.
+    :param events_date: Date to get events for.
+    :param client: ActivityWatch client to use.
+    :return: Linked list of `Interval`-s.
+    """
+    try:
+        # Remove debug buckets because they may become sources of events.
+        delete_buckets([BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES],
+                       client)
+        # Get existing buckets.
+        buckets = client.get_buckets()
+    except Exception as ex:
+        LOG.exception("Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", ex,
+                      exc_info=True)
+        exit(1)
+    LOG.info("Buckets to analyze: [%s]", ", ".join(buckets.keys()))
+    return analyze_buckets(
+        client, events_date.date(), events_date.date() + datetime.timedelta(days=1), client.get_buckets(), STRATEGIES,
+        EVENTS_COMPARE_TOLERANCE_TIMEDELTA
+    )
 
 
 def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.ActivityWatchClient):
@@ -70,18 +98,23 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     :return: `AnalyzerResult` object or `None` if no intervals to analyze were found.
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
-    # Build time-ordered linked list of intervals by provided events.
-    interval = get_interval(events_date, client)
-    if interval is None:
-        LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
-        return None
-    # Convert (analyze) intervals list into activities.
-    analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, is_import_debug_buckets,
-                                                        ignore_hints)
-    LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
-    if is_import_debug_buckets:
-        reload_debug_buckets(analyzer_result, client)
-    return analyzer_result
+    # # Build time-ordered linked list of intervals by provided events.
+    # interval = get_interval(events_date, client)
+    # if interval is None:
+    #     LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
+    #     return None
+    # # Convert (analyze) intervals list into activities.
+    # analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, is_import_debug_buckets,
+    #                                                     ignore_hints)
+    activities_by_strategy, metrics = get_activities_by_strategy(events_date, client)
+    LOG.info("-----------------------------------")
+    LOG.info("Analyzed all buckets separately:%s", metrics)
+    LOG.info("Got following activities-per-strategy:\n- %s", "\n- ".join(str(x) for x in activities_by_strategy))
+    
+    # LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
+    # if is_import_debug_buckets:
+    #     reload_debug_buckets(analyzer_result, client)
+    # return analyzer_result
 
 
 def main():
