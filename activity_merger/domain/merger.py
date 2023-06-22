@@ -378,7 +378,7 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
 def _add_raw_event(raw_event: AWEvent, list_to_add: List[Event], bucket_id: str, metrics: Metrics):
     resulting_event = Event(bucket_id, raw_event.timestamp, raw_event.duration, raw_event.data)
     list_to_add.append(resulting_event)
-    metrics.incr(f'{bucket_id} normilized events', resulting_event.duration.seconds)
+    metrics.incr('events to handle', resulting_event.duration.seconds)
 
 
 def _sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tolerance: float, metrics: Metrics)\
@@ -392,25 +392,33 @@ def _sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, to
     # - Merge events with the same data.
     prev_event: AWEvent = None
     for event in raw_events:
+        metrics.incr('raw events', event.duration.seconds)
         # Filter out too short events.
         if event.duration < tolerance:
             metrics.incr(f'{bucket_id} too short events', event.duration.seconds)
             continue
-        # Change previous basing on the current. Maybe merge.
+        # Change previous event basing on the current. Maybe merge.
         if prev_event:
             prev_event_end = prev_event.timestamp + prev_event.duration
-            # If previous event longer than start of the current then cut it.
+            # If previous event longer than start of the current then cut previous.
+            # But IDEA events sometimes are equal by timestamp and duration. However it is usually case
+            # when events are not valid, like on "wake up from hibernation". So remove first event at all.
             if prev_event_end > event.timestamp:
-                prev_duration = prev_event.duration
-                prev_event.duration = prev_event.timestamp - event.timestamp
+                prev_event_duration_to_cut = prev_event.duration
+                prev_event.duration = event.timestamp - prev_event.timestamp
                 metrics.incr(f'{bucket_id} cut overlapping event durations',
-                             (prev_duration - prev_event.duration).seconds)
-            # If previous event is adjucent and have the same data then merge them.
+                             (prev_event_duration_to_cut - prev_event.duration).seconds)
+                # Handle case when previous event was cut so strong than need to disappear.
+                if prev_event.duration < tolerance:
+                    metrics.incr(f'{bucket_id} too short events', event.duration.seconds)
+                    prev_event = event
+                    continue
+            # If previous event is adjucent (or overlaped) and have the same data then merge them.
             if event.timestamp <= prev_event_end and str(event.data) == str(prev_event.data):
-                prev_event.duration = event.duration
+                prev_event.duration += event.duration  # Note that prev_event duration was cut few lines before.
                 metrics.incr(f'{bucket_id} merged same data events', event.duration.seconds)
             else:
-                # Otherwise store to result previous event and set postpone current event.
+                # Otherwise store to result previous event and postpone current event.
                 _add_raw_event(prev_event, result, bucket_id, metrics)
                 prev_event = event
         else:
@@ -427,7 +435,7 @@ def _sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, to
 def analyze_buckets(activity_watch_client, start_time: datetime.datetime, end_time: datetime.datetime,
                     buckets: List[str], strategies: List[Strategy], tolerance: datetime.timedelta)\
                     -> Tuple[List[ActivitiesByStrategy], Metrics]:
-    metrics = Metrics({}, None)
+    metrics = Metrics({})
     bucket_ids_to_handle = list(buckets.keys())
     metrics.override('total buckets', len(buckets), 0)
     result: List[ActivitiesByStrategy] = []
@@ -440,29 +448,31 @@ def analyze_buckets(activity_watch_client, start_time: datetime.datetime, end_ti
             LOG.info("%s* strategy: there are no buckets.", strategy.bucket_prefix)
             continue
         # Create containers for the strategy result.
-        events: List = []
-        strat_metrics = Metrics({}, None)  # These Metrics are per strategy, not per bucket!
+        events: List[Event] = []
+        strat_metrics = Metrics({})  # These Metrics are per strategy, not per bucket!
         total_raw_events = 0
         # Normilize events.
         for bucket_id in strategy_buckets:
             metrics.incr('handled buckets')
-            strat_metrics.incr('buckets')
+            strat_metrics.incr('total buckets')
             bucket_events: List[AWEvent] = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
             total_raw_events += len(bucket_events)
             if bucket_events:
                 normilized_events = _sort_merge_convert_raw_events(bucket_events, bucket_id, tolerance, strat_metrics)
-                metrics.incr('handled not-empty buckets')
+                metrics.incr('not-empty buckets handled')
                 strat_metrics.incr('not-empty buckets')
                 events.extend(normilized_events)
             bucket_ids_to_handle.remove(bucket_id)
-        strat_metrics.override('raw events', total_raw_events, 0)
-        strat_metrics.override('events to handle', len(events), 0)
+        # Handle case when there are no events for the strategy.
         if not events:
             metrics.incr('strategies without events')
-            # Log strategy handling metrics here because it won't pass it further.
-            strat_metrics_str = "\n  ".join(x for x in strat_metrics.to_strings(is_exclude_empty=False))
-            LOG.warning("%s* strategy: After normilizing no events left!\n  %s", strategy.bucket_prefix,
-                        strat_metrics_str)
+            if total_raw_events:
+                # Log strategy handling metrics here because it won't pass it further.
+                strat_metrics_str = "\n  ".join(x for x in strat_metrics.to_strings(is_exclude_empty=False))
+                LOG.warning("%s* strategy: After normilizing %d events nothing left:\n  %s", strategy.bucket_prefix,
+                            total_raw_events, strat_metrics_str)
+            else:
+                LOG.info("%s* strategy: No events found.", strategy.bucket_prefix)
             continue  # Stop handling this strategy.
         # Handle events with strategy.
         strategy_activities = StrategyHandler.handle_events(strategy, events, strat_metrics)

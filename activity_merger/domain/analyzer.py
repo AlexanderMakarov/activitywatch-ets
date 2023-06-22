@@ -361,7 +361,7 @@ def merge_activities(activities_by_strategy: List[ActivitiesByStrategy]) -> Anal
     # Make activities in "sure that activity" order.
     # In this way "remained gaps" will shape activities for which data is unclear.
     tree = intervaltree.IntervalTree()
-    metrics = Metrics({}, None)
+    metrics = Metrics({})
 
     # 1. Check and add into result activities from `out_self_sufficient=True` strategies.
     for strategy_result in activities_by_strategy:

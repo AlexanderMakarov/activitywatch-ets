@@ -28,7 +28,7 @@ class Metrics:
         """
         self.handler_per_metric = handler_per_metric
         self.metrics: Dict[str, Metric] = dict((k, Metric(0, 0.0)) for k, _ in handler_per_metric.items())
-        self.skip_metrics = skip_metrics
+        self.skip_metrics = skip_metrics if isinstance(skip_metrics, set) else set()
 
     @staticmethod
     def from_dict(metrics: Dict[str, Metric]) -> 'Metrics':
@@ -46,7 +46,7 @@ class Metrics:
         :param metric_name: Name of metric to increment.
         :param interval: Interval to increment metric with. If `None` then metric loses duration part forever.
         """
-        if self.skip_metrics and metric_name in self.skip_metrics:
+        if metric_name in self.skip_metrics:
             return
         metric = self.metrics.get(metric_name, Metric(0, 0.0))
         metric = Metric(
@@ -62,7 +62,7 @@ class Metrics:
         :param metric_name: Name of metric to increment.
         :param duration: Duration in seconds to add. May be 0.
         """
-        if self.skip_metrics and metric_name in self.skip_metrics:
+        if metric_name in self.skip_metrics:
             return
         metric = self.metrics.get(metric_name, Metric(0, 0.0))
         metric = Metric(

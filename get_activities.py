@@ -107,10 +107,10 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     # analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, is_import_debug_buckets,
     #                                                     ignore_hints)
     activities_by_strategy, metrics = get_activities_by_strategy(events_date, client)
-    LOG.info("-----------------------------------")
-    LOG.info("Analyzed all buckets separately:%s", metrics)
-    LOG.info("Got following activities-per-strategy:\n- %s", "\n- ".join(str(x) for x in activities_by_strategy))
-    
+    LOG.info("Analyzed all buckets separately. Results:%s", metrics)
+    # TODO add ability to skip metrics starting with 'events with data '.
+    LOG.info("Got following activities-per-strategy:\n>>> %s", "\n>>> ".join(str(x) for x in activities_by_strategy))
+
     # LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
     # if is_import_debug_buckets:
     #     reload_debug_buckets(analyzer_result, client)

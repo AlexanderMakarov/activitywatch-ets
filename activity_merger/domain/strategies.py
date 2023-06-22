@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 import dataclasses
 
 from ..config.config import MIN_DURATION_SEC
@@ -123,7 +123,6 @@ class StrategyHandler:
                 return StrategyHandler._handle_events_few_sliding_windows(strategy, events, metrics)
             else:  # AFK
                 # TODO support rules for this case.
-                # Now Outlook and AKF in this category and "activity per event" is right for them.
                 return StrategyHandler._handle_events_one_sliding_window(strategy, events, metrics)
 
     @staticmethod
@@ -138,20 +137,19 @@ class StrategyHandler:
         return ActivitiesByStrategy(strategy, activities, metrics)
 
     @staticmethod
-    def _make_activity_between_events(first_event: Event, last_event: Event, activities: List[Activity],\
-                                      metrics: Metrics):
+    def _make_activity_between_events(first_event: Event, last_event: Event, description: str,\
+                                      activities: List[Activity], metrics: Metrics):
         """
         Makes activity starting on start of first event and ending at the end of last event.
         Next adds it to provided list and updates `Metrics` with it.
         Simplifications:
         - Doesn't add `RuleResults`.
-        - As "description" uses "first event data to string".
         - Measures duration as difference between start and end time points.
         """
         start_time = first_event.timestamp
         end_time = last_event.timestamp + last_event.duration
-        duration =  end_time - start_time  # TODO calculate by "each event duration".
-        activity = Activity(start_time, end_time, None, str(first_event.data), duration.seconds)
+        duration =  end_time - start_time  # Maybe calculate by "sum of all event durations"?
+        activity = Activity(start_time, end_time, None, description, duration.seconds)
         activities.append(activity)
         metrics.incr('activities', duration.seconds)
 
@@ -161,64 +159,87 @@ class StrategyHandler:
         # Produces Activity for all consequint events with the same data.
         activities: List[Activity] = []
         window: List[Event] = []
-        current_data = None
+        window_keys: Set = None
         for event in events:
+            keys = set()
+            if strategy.in_group_by_keys:
+                for key_tuple in strategy.in_group_by_keys:
+                    keys.add(tuple((key, event.data.get(key)) for key in key_tuple))
+            else:
+                keys.add(str(event.data))
             # If event equal to previous then just add event to window.
-            if current_data == str(event.data):
+            keys_intersection = None if (window_keys is None) else window_keys.intersection(keys)
+            if keys_intersection:
                 window.append(event)
+                window_keys = keys_intersection  # Leave only part where first 2 events intersect.
                 metrics.incr('consequient events with same data', event.duration.seconds)
                 continue
-            # Create Activity from window.
+            # Otherwise if window exists then create Activity from it.
             if window:
-                StrategyHandler._make_activity_between_events(window[0], window[-1], activities, metrics)
+                StrategyHandler._make_activity_between_events(window[0], window[-1], str(window_keys), activities,
+                                                              metrics)
                 window = []
-            # Prepare next window.
-            current_data = str(event.data)
+            # In any case prepare next window.
+            window_keys = keys
             window.append(event)
         # Handle last window.
-        StrategyHandler._make_activity_between_events(window[0], window[-1], activities, metrics)
+        StrategyHandler._make_activity_between_events(window[0], window[-1], str(window_keys), activities, metrics)
         return ActivitiesByStrategy(strategy, activities, metrics)
 
     @staticmethod
-    def _separate_events_per_windows(events: List[Event], metrics: Metrics) -> ActivitiesByStrategy:
-        windows: Dict[str, List[Event]] = {}
+    def _separate_events_per_windows(events: List[Event], group_by_keys: Set[Tuple[str]], metrics: Metrics)\
+            -> Dict[Tuple, List[Event]]:
+        windows: Dict[Tuple, List[Event]] = {}  # TODO change Tuple to custom object with `get_description` method.
         for event in events:
-            key = str(event.data)
-            window = windows.get(key, [])
-            metrics.incr(f'data {key}', event.duration.seconds)
-            window.append(event)
+            if group_by_keys:
+                for key_tuple in group_by_keys:
+                    window_key = tuple((key, event.data.get(key)) for key in key_tuple)
+                    window = windows.setdefault(window_key, [])
+                    metrics.incr(f'events with data {window_key}', event.duration.seconds)
+                    window.append(event)
+            else:
+                window_key = str(event.data)
+                window = windows.setdefault(window_key, [])
+                metrics.incr(f'events with data {window_key}', event.duration.seconds)
+                window.append(event)
         return windows
 
     @staticmethod
-    def _handle_events_few_sliding_windows(strategy: Strategy, events: List[Event], metrics: Metrics) -> ActivitiesByStrategy:
+    def _handle_events_few_sliding_windows(strategy: Strategy, events: List[Event], metrics: Metrics)\
+            -> ActivitiesByStrategy:
         # Produces Activities covering all "same data" events.
-        windows: Dict[str, List[Event]] = StrategyHandler._separate_events_per_windows(events, metrics)
+        windows: Dict[Tuple, List[Event]] = StrategyHandler._separate_events_per_windows(
+            events, strategy.in_group_by_keys, metrics
+        )
         # Make activities from the each window.
         activities = []
-        for _, events in windows.items():
-            StrategyHandler._make_activity_between_events(events[0], events[-1], activities, metrics)
+        for key, events in windows.items():
+            StrategyHandler._make_activity_between_events(events[0], events[-1], str(key), activities, metrics)
         return ActivitiesByStrategy(strategy, activities, metrics)
 
     @staticmethod
-    def _handle_events_few_sliding_windows_by_density(strategy: Strategy, events: List[Event], metrics: Metrics) -> ActivitiesByStrategy:
+    def _handle_events_few_sliding_windows_by_density(strategy: Strategy, events: List[Event], metrics: Metrics)\
+            -> ActivitiesByStrategy:
         # Produces not overlapping Activities basing on theirs density or data.
-        windows: Dict[str, List[Event]] = StrategyHandler._separate_events_per_windows(events, metrics)
+        windows: Dict[Tuple, List[Event]] = StrategyHandler._separate_events_per_windows(
+            events, strategy.in_group_by_keys, metrics
+        )
         # Analyse gaps in each window.
         gaps = []
         activities = []
-        for _, events in windows.items():
+        for key, events in windows.items():
             # Measure all gaps.
             gaps: List[Tuple[int, float]] = []
             prev_event = None
             for i, event in enumerate(events):
-                if not prev_event:
-                    continue
-                gap = event.timestamp - prev_event.timestamp + prev_event.duration
-                if gap > 0:
-                    gaps.append((i, gap))
+                if prev_event:
+                    gap = (event.timestamp - (prev_event.timestamp + prev_event.duration)).seconds
+                    if gap > 0:
+                        gaps.append((i, gap))
+                prev_event = event
             if len(gaps) <= 0:
                 # If there are no gaps then just create one activity from all events.
-                StrategyHandler._make_activity_between_events(events[0], events[-1], activities, metrics)
+                StrategyHandler._make_activity_between_events(events[0], events[-1], str(key), activities, metrics)
                 continue
             # Otherwise iterate gaps to find out those which are bigger than minimal activity duration.
             # Make activities between them.
@@ -227,10 +248,11 @@ class StrategyHandler:
                 # If gap bigger than minimal activity duration then decicide that it is separate activity.
                 if gap[1] >= MIN_DURATION_SEC:
                     first_event = events[last_activity_event_index]
-                    StrategyHandler._make_activity_between_events(first_event, events[gap[0]], activities, metrics)
+                    StrategyHandler._make_activity_between_events(first_event, events[gap[0]], str(key), activities,
+                                                                  metrics)
                     last_activity_event_index = gap[0]
             # Here we have activities made up to the last big gap. Make activity from remained events.
             if last_activity_event_index < len(events) - 1:
                 first_event = events[last_activity_event_index]
-                StrategyHandler._make_activity_between_events(first_event, events[-1], activities, metrics)
+                StrategyHandler._make_activity_between_events(first_event, events[-1], str(key), activities, metrics)
         return ActivitiesByStrategy(strategy, activities, metrics)

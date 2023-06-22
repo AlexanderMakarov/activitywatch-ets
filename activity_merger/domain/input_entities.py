@@ -1,7 +1,7 @@
 import dataclasses
 import re
 import collections
-from typing import Optional, Tuple, Callable, List, Dict, Union
+from typing import Optional, Tuple, Callable, List, Dict, Union, Set
 
 
 Event = collections.namedtuple('Event', ['bucket_id', 'timestamp', 'duration', 'data'])
@@ -211,8 +211,28 @@ class Strategy:
     bucket_prefix: str
 
     in_each_event_is_activity: bool
+    """
+    Flag that each event is the separate activity. Overrides all other "in_*" flags.
+    """
     in_events_density_matters: bool
+    """
+    Flag that need to separate events by density.
+    Like if there is big time gap between equal (by data) events then they represent different activities,
+    but if such events are close to each other then it is the same activity.
+    """
     in_activities_may_overlap: bool
+    """
+    Flag that events from different activities may alternate with each other but still represent few
+    overlapping activities. Note that "out_*" parameters and logic around them will make activities
+    not overlapping later on, but on the "in_*" stage better to have as much as possible guesses about
+    probable activities.
+    """
+    in_group_by_keys: Set[Tuple[str]]
+    """
+    Some events may represent one activity if the have the same value in one or few `data` keys.
+    For example for JIRA bucket events with the same value in "ticket" key may represent the same actvity.
+    Here need to add all combination of keys in `data` field which would contribute to one activity per value(s).
+    """
 
     out_self_sufficient: bool
     """
