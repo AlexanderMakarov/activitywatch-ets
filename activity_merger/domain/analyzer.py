@@ -182,7 +182,7 @@ def _window_to_activity(window: RuleResultsWindow, rule_result: RuleResult, acti
         debug_event = Event(BUCKET_DEBUG_ACTIVITES, activity.start_time, activity.duration,
                             {
                                 'description': rule_result.description,
-                                'rule_results_count': len(activity.rule_results),
+                                'events_count': len(activity.events),
                             })
         activity_debug_events.append(debug_event)
 

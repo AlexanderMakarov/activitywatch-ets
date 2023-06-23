@@ -49,8 +49,8 @@ class ActivityMatcher:
         self.expected = expected
 
     @staticmethod
-    def __rule_results_to_str(act: Activity) -> str:
-        return "\n  ".join(str(x) for x in act.rule_results)
+    def __rule_results_to_str(activity: Activity) -> str:
+        return "\n  ".join(str(x) for x in activity.events)
 
     def __repr__(self):
         return repr(self.expected) + "\n" + ActivityMatcher.__rule_results_to_str(self.expected)

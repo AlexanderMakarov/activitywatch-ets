@@ -39,7 +39,7 @@ class Activity:
     """Start time of the activity."""
     end_time: datetime.datetime
     """End time of the activity."""
-    rule_results: List[RuleResult]
+    events: List[Event]
     """List of (dominant) events the activity consists of."""
     description: str
     """Human-friendly description of the activity."""
