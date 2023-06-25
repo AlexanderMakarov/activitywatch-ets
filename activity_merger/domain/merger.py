@@ -428,7 +428,7 @@ def _sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, to
         _add_raw_event(prev_event, result, bucket_id, metrics)
     # If in result got different number of events then note about it.
     if len(result) != len(raw_events):
-        LOG.info("%s: normalized and cleansed %d events into %d.", bucket_id, len(raw_events), len(result))
+        LOG.info("%s: %d raw events normalized and cleansed into %d.", bucket_id, len(raw_events), len(result))
     return result
 
 

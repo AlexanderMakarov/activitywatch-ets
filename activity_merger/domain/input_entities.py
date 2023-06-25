@@ -251,6 +251,7 @@ class Strategy:
     """
     [alone, auxiliary] - means whether activity name is trustable.
     """
+    # TODO add in_key_value_skip, (like window=unknown) 
 
 
 class EventKeyHandler:

@@ -1,7 +1,7 @@
 import dataclasses
 import datetime
 import collections
-from typing import List
+from typing import Dict, List
 
 from .metrics import Metrics
 from .input_entities import Event, Rule2
@@ -53,6 +53,10 @@ class Activity:
         return f"{seconds_to_int_timedelta((self.duration))} "\
                f"({from_start_to_end_to_str(self)}) {self.description}"
 
+    def duration_seconds(self) -> int:
+        """Return duratio in seconds."""
+        return (self.end_time - self.start_time).total_seconds()
+
 
 @dataclasses.dataclass
 class AnalyzerResult:
@@ -62,16 +66,12 @@ class AnalyzerResult:
 
     activities: List[Activity]
     """List of activities."""
-    rule_results_counter: collections.Counter
-    """Duration of intervals per rule."""
+    events_counter: collections.Counter
+    """Counter of seconds per event."""
     metrics: Metrics
     """Dictionary of metrics, where each metric is represented by number of intervals and duration."""
-    raw_rule_result_debug_events: List[Event]
-    """List of 'Event'-s which represents 'RuleResult' chosen for each interval."""
-    final_rule_result_debug_events: List[Event]
-    """List of 'Event'-s which represents 'RuleResult' after applying 'skip', 'merge_next', etc. features."""
-    activity_debug_events: List[Event]
-    """List of 'Event'-s which represent resulting 'Activity'-es."""
+    debug_dict: Dict[str, List[Event]]
+    """Map of debug bucket name to list of events to report into."""
 
     def to_str(self, append_equal_intervals_longer_that: float = -1.0) -> str:
         """
@@ -87,10 +87,10 @@ class AnalyzerResult:
                 (len(sorted_metrics_strings), "\n  ".join(sorted_metrics_strings))
         # Print "less than MIN_DURATION_SEC" values from 'activity_counter'.
         if append_equal_intervals_longer_that > 0.0:
-            dumb_activities = [f"{seconds_to_int_timedelta(v)} {k}" for k, v in self.rule_results_counter.most_common()
+            dumb_activities = [f"{seconds_to_int_timedelta(v)} {k}" for k, v in self.events_counter.most_common()
                                if v >= append_equal_intervals_longer_that]
-            desc += "There were %d 'equal' activities with %d longer than %d seconds:\n  %s\n" %\
-                    (len(self.rule_results_counter), len(dumb_activities), append_equal_intervals_longer_that,
+            desc += "There were %d 'equal' events with %d longer than %d seconds:\n  %s\n" %\
+                    (len(self.events_counter), len(dumb_activities), append_equal_intervals_longer_that,
                      "\n  ".join(dumb_activities))
         # Print resulting activities as is. Order is important here.
         desc += "Assembled %d activities:\n  %s" % (len(self.activities),

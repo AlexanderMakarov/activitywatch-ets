@@ -5,17 +5,30 @@ import argparse
 import aw_client
 from typing import List, Set, Tuple
 
-from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC, RULES,\
-                                          DEBUG_BUCKETS_IMPORTER_NAME, BUCKET_DEBUG_RAW_RULE_RESULTS,\
-                                          BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES, \
-                                          STRATEGIES
+from activity_merger.config.config import LOG, EVENTS_COMPARE_TOLERANCE_TIMEDELTA, MIN_DURATION_SEC,\
+                                          DEBUG_BUCKETS_IMPORTER_NAME, DEBUG_BUCKET_PREFIX, STRATEGIES
 from activity_merger.domain.interval import Interval
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.strategies import ActivitiesByStrategy
 from activity_merger.helpers.helpers import setup_logging, valid_date, upload_events, delete_buckets
 from activity_merger.domain.merger import report_from_buckets, analyze_buckets
-from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, merge_activities
+from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, analyze_activities_per_strategy
 from activity_merger.domain.output_entities import AnalyzerResult
+
+
+def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
+    result = []
+    try:
+        buckets = client.get_buckets()
+        for bucket_id in buckets:
+            if bucket_id.startswith(DEBUG_BUCKET_PREFIX):
+                client.delete_bucket(bucket_id, True)
+                result.append(bucket_id)
+    except Exception as ex:
+        LOG.exception("Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", ex,
+                      exc_info=True)
+        exit(1)
+    return result
 
 
 def get_interval(events_date: datetime.datetime, client: aw_client.ActivityWatchClient) -> Interval:
@@ -27,8 +40,7 @@ def get_interval(events_date: datetime.datetime, client: aw_client.ActivityWatch
     """
     try:
         # Remove debug buckets because they may become sources of events.
-        delete_buckets([BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES],
-                       client)
+        LOG.info("Deleted [%s] debug buckets.", ", ".join(delete_debug_buckets(client)))
         # Get existing buckets.
         buckets = client.get_buckets()
     except Exception as ex:
@@ -51,8 +63,7 @@ def get_activities_by_strategy(events_date: datetime.datetime, client: aw_client
     """
     try:
         # Remove debug buckets because they may become sources of events.
-        delete_buckets([BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES],
-                       client)
+        LOG.info("Deleted [%s] debug buckets.", ", ".join(delete_debug_buckets(client)))
         # Get existing buckets.
         buckets = client.get_buckets()
     except Exception as ex:
@@ -73,16 +84,9 @@ def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.Acti
     :param analyzer_result: Result to get data from.
     :param client: ActivityWatch client to use.
     """
-    delete_buckets([BUCKET_DEBUG_RAW_RULE_RESULTS, BUCKET_DEBUG_FINAL_RULE_RESULTS, BUCKET_DEBUG_ACTIVITES], client)
-    if analyzer_result.raw_rule_result_debug_events:
-        LOG.info(upload_events(analyzer_result.raw_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
-                               BUCKET_DEBUG_RAW_RULE_RESULTS, True, client=client))
-    if analyzer_result.final_rule_result_debug_events:
-        LOG.info(upload_events(analyzer_result.final_rule_result_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
-                               BUCKET_DEBUG_FINAL_RULE_RESULTS, True, client=client))
-    if analyzer_result.activity_debug_events:
-        LOG.info(upload_events(analyzer_result.activity_debug_events, DEBUG_BUCKETS_IMPORTER_NAME,
-                               BUCKET_DEBUG_ACTIVITES, True, client=client))
+    delete_debug_buckets(client)
+    for bucket_id, events in analyzer_result.debug_dict.items():
+        LOG.info(upload_events(events, DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
 
 
 def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: Set[str],
@@ -113,12 +117,12 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     # TODO add ability to skip metrics starting with 'events with data '.
     LOG.info("Got following activities-per-strategy:\n>>> %s", "\n>>> ".join(str(x) for x in activities_by_strategy))
 
-    analyzer_result = merge_activities(activities_by_strategy)
+    analyzer_result = analyze_activities_per_strategy(activities_by_strategy)
     LOG.info(analyzer_result.to_str())
     # LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
-    # if is_import_debug_buckets:
-    #     reload_debug_buckets(analyzer_result, client)
-    # return analyzer_result
+    if is_import_debug_buckets:
+        reload_debug_buckets(analyzer_result, client)
+    return analyzer_result
 
 
 def main():
@@ -133,22 +137,17 @@ def main():
     parser.add_argument('-b', '--back-days', type=int,
                         help="How many days back search events on. I.e. '1' value means 'search for yesterday.")
     parser.add_argument('-i', '--ignore-hints', nargs='*', default=[],
-                        help="Hints to ignore in report. Helps filter log messages about rule mistakes. "
-                             f"Supported values in importance order: {ProblemReporter.SUPPORTED_ITEMS.keys()}. "
-                             "For example, to understand what need to setup for yourself with default config, use "
-                             "'./get_activities.py 2022-12-31 -i TOO_SPECIFIC_RULE TOO_WIDE_RULE' and after it stop "
-                             "to report issues remove '-i' part.")
+                        help="Hints to ignore in report. Helps filter log messages about rule mistakes."
+                             f" Supported values in importance order: {ProblemReporter.SUPPORTED_ITEMS.keys()}."
+                             " Expected to be the last item in arguments list. Example of usage:"
+                             ' `./get_activities.py 2022-12-31 -i "prefix a" "prefix b"`')
     parser.add_argument('-d', '--debug-buckets', dest='is_import_debug_buckets', action='store_true',
-                        help="Flag to import debugging buckets into ActivityWatch which allows represent rules "
-                             "behavior. They are very handy on http://localhost:5600/#/timeline page "
-                             "(in ActivityWatch v0.12.1 need to refresh browser page to get them). "
-                             " Note that these debugging buckets are pre-removed (for the whole time) "
-                             "and aren't machine-specific. Also they are quite heavy for UI."
-                             f"'{BUCKET_DEBUG_RAW_RULE_RESULTS}' bucket contains list of raw 'RuleResult'-s. "
-                             "I.e. rule found for each interval, before applying 'skip' or 'placeholder' features."
-                             f"'{BUCKET_DEBUG_FINAL_RULE_RESULTS}' bucket contains list of final 'RuleResult'-s."
-                             "I.e. rule for intervals which will contribute into final report."
-                             f"'{BUCKET_DEBUG_ACTIVITES}' bucket contains list of resulting activities.")
+                        help="Flag to import debugging buckets into ActivityWatch which allows to debug analyzing"
+                             f" behavior. All such bucket ID's starts with' {DEBUG_BUCKET_PREFIX}' string."
+                             " They are very handy on http://localhost:5600/#/timeline page "
+                             " (in ActivityWatch v0.12.1 need to refresh browser page to see them)."
+                             " Note that these debugging buckets are pre-removed (for the whole time)"
+                             " and aren't machine-specific. Also they may be quite heavy for UI to render.")
     args = parser.parse_args()
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
