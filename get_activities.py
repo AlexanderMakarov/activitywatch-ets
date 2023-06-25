@@ -14,7 +14,7 @@ from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.strategies import ActivitiesByStrategy
 from activity_merger.helpers.helpers import setup_logging, valid_date, upload_events, delete_buckets
 from activity_merger.domain.merger import report_from_buckets, analyze_buckets
-from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter
+from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, merge_activities
 from activity_merger.domain.output_entities import AnalyzerResult
 
 
@@ -106,11 +106,15 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     # # Convert (analyze) intervals list into activities.
     # analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, is_import_debug_buckets,
     #                                                     ignore_hints)
+    LOG.info("Starting to build activities per strategy...")
     activities_by_strategy, metrics = get_activities_by_strategy(events_date, client)
     LOG.info("Analyzed all buckets separately. Results:%s", metrics)
+    LOG.info("Starting to assemble resulting activities from all strategies...")
     # TODO add ability to skip metrics starting with 'events with data '.
     LOG.info("Got following activities-per-strategy:\n>>> %s", "\n>>> ".join(str(x) for x in activities_by_strategy))
 
+    analyzer_result = merge_activities(activities_by_strategy)
+    LOG.info(analyzer_result.to_str())
     # LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
     # if is_import_debug_buckets:
     #     reload_debug_buckets(analyzer_result, client)

@@ -209,6 +209,7 @@ class Rule2:
 @dataclasses.dataclass
 class Strategy:
     bucket_prefix: str
+    """Prefix for buckets to analyze with this activity."""
 
     in_each_event_is_activity: bool
     """
