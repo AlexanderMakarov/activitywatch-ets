@@ -1,10 +1,12 @@
 import unittest
+import datetime
 from typing import List, Dict, Tuple
 from parameterized import parameterized
+import intervaltree
 
 from . import build_datetime, build_timedelta, build_intervals_linked_list
 from ..domain.metrics import Metric, Metrics
-from ..domain.analyzer import analyze_intervals
+from ..domain.analyzer import analyze_intervals, _exclude_tree_intervals, analyze_activities_per_strategy
 from ..domain.input_entities import Rule2, Event
 from ..domain.interval import Interval
 from ..domain.output_entities import Activity, AnalyzerResult, RuleResult
@@ -40,6 +42,79 @@ RULES_SET1 = [
 ]
 METRIC1_1 = Metric(1, DELTA1S)
 METRIC2_2 = Metric(2, DELTA2S)
+
+HOUR7_00 = datetime.datetime(2023, 1, 1, 7)
+HOUR7_30 = datetime.datetime(2023, 1, 1, 7, 30)
+HOUR8_00 = datetime.datetime(2023, 1, 1, 8)
+HOUR9_00 = datetime.datetime(2023, 1, 1, 9)
+HOUR10_00 = datetime.datetime(2023, 1, 1, 10)
+HOUR10_30 = datetime.datetime(2023, 1, 1, 10, 30)
+HOUR11_00 = datetime.datetime(2023, 1, 1, 11)
+HOUR11_30 = datetime.datetime(2023, 1, 1, 11, 30)
+HOUR12_00 = datetime.datetime(2023, 1, 1, 12)
+HOUR13_00 = datetime.datetime(2023, 1, 1, 13)
+HOUR14_00 = datetime.datetime(2023, 1, 1, 14)
+HOUR15_00 = datetime.datetime(2023, 1, 1, 15)
+HOUR16_00 = datetime.datetime(2023, 1, 1, 16)
+HOUR17_00 = datetime.datetime(2023, 1, 1, 17)
+HOUR18_00 = datetime.datetime(2023, 1, 1, 18)
+HOUR19_00 = datetime.datetime(2023, 1, 1, 19)
+HOUR20_00 = datetime.datetime(2023, 1, 1, 20)
+HOUR21_00 = datetime.datetime(2023, 1, 1, 21)
+EVENT700_730 = Event("b1", HOUR7_00, datetime.timedelta(minutes=30), "7:00..7:30")
+EVENT730_800 = Event("b1", HOUR7_30, datetime.timedelta(minutes=30), "7:30..8:00")
+EVENT830_900 = Event("b1", HOUR8_00, datetime.timedelta(hours=1), "8:00..9:00")
+EVENT1000_1030 = Event("b1", HOUR10_00, datetime.timedelta(minutes=30), "10:00..10:30")
+EVENT1030_1130 = Event("b1", HOUR10_30, datetime.timedelta(hours=1), "10:30..11:30")
+EVENT1130_1300 = Event("b1", HOUR11_30, datetime.timedelta(hours=1, minutes=30), "11:30..13:00")
+EVENT1400_1600 = Event("b1", HOUR14_00, datetime.timedelta(hours=2), "14:00..16:00")
+EVENT1700_1800 = Event("b1", HOUR17_00, datetime.timedelta(hours=1), "17:00..17:00")
+EVENT1900_2000 = Event("b1", HOUR19_00, datetime.timedelta(hours=1), "19:00..20:00")
+# activities: 7..9  10.......13  14...16 17..18
+# intervals :   8...10 11.12 13....15
+ACTIVITIES = [
+    Activity(
+        start_time=HOUR7_00,
+        end_time=HOUR9_00,
+        events=[EVENT700_730, EVENT730_800, EVENT830_900],
+        description='a7-9',
+        duration=7200,
+    ),
+    Activity(
+        start_time=HOUR10_00,
+        end_time=HOUR13_00,
+        events=[EVENT1000_1030, EVENT1030_1130, EVENT1130_1300],
+        description='a10-13',
+        duration=10800,
+    ),
+    Activity(
+        start_time=HOUR14_00,
+        end_time=HOUR16_00,
+        events=[EVENT1400_1600],
+        description='a14-16',
+        duration=7200,
+    ),
+    Activity(
+        start_time=HOUR17_00,
+        end_time=HOUR18_00,
+        events=[EVENT1700_1800],
+        description='a17-18',
+        duration=3600,
+    ),
+    Activity(
+        start_time=HOUR19_00,
+        end_time=HOUR20_00,
+        events=[EVENT1900_2000],
+        description='a19-20',
+        duration=3600,
+    ),
+]
+TREE = intervaltree.IntervalTree([
+    intervaltree.Interval(HOUR8_00, HOUR10_00),
+    intervaltree.Interval(HOUR11_00, HOUR12_00),
+    intervaltree.Interval(HOUR13_00, HOUR15_00),
+    intervaltree.Interval(HOUR19_00, HOUR21_00),
+])
 
 
 class ActivityMatcher:
@@ -106,7 +181,7 @@ class TestAnalyzer(unittest.TestCase):
         ),
     ])
     def test_analyze_intervals(self, test_name: str, interval: Interval, rules: List[Rule2],
-                               expected_metrics: Metrics, expected_activities: List[Activity]):
+                               expected_metrics: Dict[str, Metric], expected_activities: List[Activity]):
         self.maxDiff = None
         # Act
         analyzer_result: AnalyzerResult = analyze_intervals(interval, 0.25, rules)
@@ -121,4 +196,80 @@ class TestAnalyzer(unittest.TestCase):
             [ActivityMatcher(x) for x in analyzer_result.activities],
             [ActivityMatcher(x) for x in expected_activities],
             err_msg + "activities"
+        )
+
+    @parameterized.expand([
+        # activities: 7..9  10.......13  14...16 17..18
+        # intervals :   8...10 11.12 13....15
+        # expected-------------------------------------
+        #   on start: 7.8   10.11                17..18
+        #     on end:             12.13    15.16 17..18
+        #   on whole: 7.8   10.11 12.13    15.16 17..18
+        # Note that activities duration is measured by events, not as "start - end".
+        (
+            'start_boundaries',
+            ACTIVITIES,
+            'start',
+            TREE,
+            [
+                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-9', 3600),
+                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a10-13', 5400),
+                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600),  # 'a14-16'.
+            ],
+            {
+                'activities cut on end by tt': Metric(2, float(3600 + 5400)),  # half of 'a7-9' + part of 'a10-13'.
+                'activities removed because impossible to cut on start by tt': Metric(1, 7200.0),
+                'activities removed by tt': Metric(1, 3600.0),  # 'a19-20'.
+            },
+        ),
+        (
+            'end_boundaries',
+            ACTIVITIES,
+            'end',
+            TREE,
+            [
+                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a10-13', 5400),
+                Activity(HOUR15_00, HOUR16_00, [EVENT1400_1600], 'a14-16', 7200),  # Duration from the only event.
+                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600),
+            ],
+            {
+                'activities cut on start by tt': Metric(2, float(5400 + 0)),  # Part of 'a10-13' and 'a14-16'.
+                'activities removed because impossible to cut on end by tt': Metric(1, 7200.0),  # 'a7-9'.
+                'activities removed by tt': Metric(1, 3600.0),  # 'a19-20'.
+            },
+        ),
+        (
+            'whole_boundaries',
+            ACTIVITIES,
+            'whole',
+            TREE,
+            [
+                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-9', 3600),
+                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a10-13', 5400),
+                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a10-13', 5400),
+                Activity(HOUR15_00, HOUR16_00, [EVENT1400_1600], 'a14-16', 7200),
+                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600),
+            ],
+            {
+                'activities cut on start by tt': Metric(1, 0.0),  # 'a14-16' and one event remained duration.
+                'activities cut on end by tt': Metric(1, 3600.0),  # 'a7-9'.
+                'activities split on 2 by tt': Metric(1, 0.0),  # 'a10-13' was split but all events remained.
+                'activities removed by tt': Metric(1, 3600.0),  # 'a19-20'.
+            },
+        ),
+    ])
+    def test_exclude_tree_intervals(self, test_name: str, activities: List[Activity], boundaries: str,
+                                    tree: intervaltree.IntervalTree, 
+                                    expected_activities: List[Activity], expected_metrics: Dict[str, Metric]):
+        self.maxDiff = None
+        metrics = Metrics({})
+        # Act
+        actual: List[Activity] = _exclude_tree_intervals(activities, boundaries, tree, metrics, "tt")
+        # Assert
+        err_msg = f"'{test_name}' case wrong "
+        self.assertListEqual(actual, expected_activities, err_msg + "activities")
+        self.assertDictEqual(
+            {k: v for (k, v) in metrics.metrics.items() if v.cnt > 0},
+            {k: v for (k, v) in expected_metrics.items()},
+            err_msg + "metrics"
         )

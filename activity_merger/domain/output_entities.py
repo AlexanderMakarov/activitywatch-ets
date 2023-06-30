@@ -53,10 +53,6 @@ class Activity:
         return f"{seconds_to_int_timedelta((self.duration))} "\
                f"({from_start_to_end_to_str(self)}) {self.description}"
 
-    def duration_seconds(self) -> int:
-        """Return duratio in seconds."""
-        return (self.end_time - self.start_time).total_seconds()
-
 
 @dataclasses.dataclass
 class AnalyzerResult:
