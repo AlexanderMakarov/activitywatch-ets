@@ -169,7 +169,7 @@ class StrategyHandler:
             if keys_intersection:
                 window.append(event)
                 window_keys = keys_intersection  # Leave only part where first 2 events intersect.
-                metrics.incr('consequient events with same data', event.duration.seconds)
+                metrics.incr('consecutive events with same data', event.duration.seconds)
                 continue
             # Otherwise if window exists then create Activity from it.
             if window:

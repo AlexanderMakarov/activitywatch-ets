@@ -664,12 +664,12 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             boundaries = activity.strategy.out_activity_boundaries
             # Check BA overlaps only start of activity.
             if ba_interval.contains_point(interval.begin):
-                if boundaries is "start":
+                if boundaries == "start":
                     # If activity is `out_activity_boundaries=start` then concatenate data from it into BA.
                     ra_events.extend(activity.events)
                     ra_description_parts.add(activity.description)
                     metrics.incr('basic activity covers start of intervals', interval.length().total_seconds())
-                elif boundaries is "whole":
+                elif boundaries == "whole":
                     # If activity is `out_activity_boundaries=whole` then split activity,
                     # and concatenate last part with BA. First part is not needed anyway.
                     split_activity = _cut_activity_end(activity, ba_interval.end)
@@ -682,12 +682,12 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
                 continue
             # Check BA overlaps only end of activity.
             if ba_interval.contains_point(interval.end):
-                if boundaries is "end":
+                if boundaries == "end":
                     # If activity is `out_activity_boundaries=end` then concatenate data from it into BA.
                     ra_events.extend(activity.events)
                     ra_description_parts.add(activity.description)
                     metrics.incr('basic activity covers end of intervals', interval.length().total_seconds())
-                elif boundaries is "whole":
+                elif boundaries == "whole":
                     # If activity is `out_activity_boundaries=whole` then split activity,
                     # and concatenate first part with BA.
                     split_activity = _cut_activity_start(activity, ba_interval.begin)
@@ -700,7 +700,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
                 continue
             # If BA itself is placed inside actvity then concatenate middle of it
             # and only if it is `out_activity_boundaries=whole`.
-            if boundaries is "whole":
+            if boundaries == "whole":
                 tmp = _cut_activity_start(activity, ba_interval.begin)
                 tmp = _cut_activity_end(tmp, ba_interval.end)
                 ra_events.extend(tmp.events)

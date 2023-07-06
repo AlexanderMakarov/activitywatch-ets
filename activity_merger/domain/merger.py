@@ -381,15 +381,22 @@ def _add_raw_event(raw_event: AWEvent, list_to_add: List[Event], bucket_id: str,
     metrics.incr('events to handle', resulting_event.duration.seconds)
 
 
-def _sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tolerance: float, metrics: Metrics)\
-        -> List[Event]:
-    # Sort events in time order.
-    raw_events.sort(key=lambda e: e.timestamp)
+def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tolerance: datetime.timedelta,
+                                  metrics: Metrics) -> List[Event]:
+    """
+    Sorts raw events in time order, merges events with the same data, cuts "overlapping by tail" events,
+    converts them into "domain, with bucket ID" events.
+    :param raw_events: Events from ActivityWatcher.
+    :param bucket_id: Event's source bucket ID.
+    :param tolerance: tolerance for comparing and merging events.
+    :returns: List of normalized `Event`-s.
+    """
+
+    # 1. Sort events in time order. Make sure that events started in the same time placed in "shorter first" order.
+    raw_events.sort(key=lambda e: (e.timestamp, e.duration))
     result = []
-    # Iterate raw events, check previous and convert into `Event` to:
-    # - Remove too short events.
-    # - Add bucket information to each event. Make it smaller.
-    # - Merge events with the same data.
+
+    # 2. Iterate events with postponing each previous event.
     prev_event: AWEvent = None
     for event in raw_events:
         metrics.incr('raw events', event.duration.seconds)
@@ -397,33 +404,63 @@ def _sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, to
         if event.duration < tolerance:
             metrics.incr(f'{bucket_id} too short events', event.duration.seconds)
             continue
-        # Change previous event basing on the current. Maybe merge.
-        if prev_event:
-            prev_event_end = prev_event.timestamp + prev_event.duration
-            # If previous event longer than start of the current then cut previous.
-            # But IDEA events sometimes are equal by timestamp and duration. However it is usually case
-            # when events are not valid, like on "wake up from hibernation". So remove first event at all.
-            if prev_event_end > event.timestamp:
-                prev_event_duration_to_cut = prev_event.duration
-                prev_event.duration = event.timestamp - prev_event.timestamp
-                metrics.incr(f'{bucket_id} cut overlapping event durations',
-                             (prev_event_duration_to_cut - prev_event.duration).seconds)
-                # Handle case when previous event was cut so strong than need to disappear.
-                if prev_event.duration < tolerance:
-                    metrics.incr(f'{bucket_id} too short events', event.duration.seconds)
-                    prev_event = event
-                    continue
-            # If previous event is adjucent (or overlaped) and have the same data then merge them.
-            if event.timestamp <= prev_event_end and str(event.data) == str(prev_event.data):
-                prev_event.duration += event.duration  # Note that prev_event duration was cut few lines before.
-                metrics.incr(f'{bucket_id} merged same data events', event.duration.seconds)
-            else:
-                # Otherwise store to result previous event and postpone current event.
-                _add_raw_event(prev_event, result, bucket_id, metrics)
-                prev_event = event
-        else:
-            # Postpone current event - it is first.
+        # If it is first event then just postpone.
+        if not prev_event:
             prev_event = event
+            continue
+        # There are a number of cases how current event intersects with previous:
+        # - same start, longer, same data => merge
+        # - same start, longer, other data => remove previous as overlapped
+        # - same start and end, same data => remove previous as the same
+        # - same start and end, other data => remove previous as overlapped
+        # - start before previous end, same data => merge
+        # - start before previous end, other data => cut and save previous, postpone current
+        # - start = previous end, same data => merge
+        # - start = previous end, other data => save previous, postpone current
+        # - start later than previous end, any data => save previous, postpone current
+        # They may be merged into:
+        # - same data, same start and end => remove previous as the same
+        # - same data, start not later than previous end => merge
+        # - other data, same start => remove previous as overlapped
+        # - start before previous end, other data => cut and save previous, postpone current
+        # - start later than previous end OR start = previous end, other data => save previous, postpone current
+        prev_end = prev_event.timestamp + prev_event.duration
+        current_end = event.timestamp + event.duration
+        same_start = abs(event.timestamp - prev_event.timestamp) < tolerance
+        same_end = abs(current_end - prev_end) < tolerance
+        same_data = str(event.data) == str(prev_event.data)
+        if same_data and same_start and same_end:
+            # same data, same start and end => remove previous as the same
+            metrics.incr(f'{bucket_id} skipped duplicated by interval events', prev_event.duration)
+            prev_event = event
+            continue
+        start_later_than_prev_end = event.timestamp - prev_end > tolerance
+        if same_data and not start_later_than_prev_end:
+            # same data, start not later than previous end => merge
+            prev_event_duration_before_merge = prev_event.duration.seconds
+            prev_event.duration = max(current_end, prev_end) - prev_event.timestamp
+            metrics.incr(f'{bucket_id} merged the same data events', prev_event_duration_before_merge)
+            continue
+        if same_start:
+            # other data, same start => remove previous as overlapped
+            metrics.incr(f'{bucket_id} skipped shorter and overlapped by interval events', prev_event.duration)
+            prev_event = event
+            continue
+        if not start_later_than_prev_end:
+            # start before previous end, other data => cut and save previous, postpone current
+            prev_event_duration_before_cut = prev_event.duration
+            prev_event.duration = event.timestamp - prev_event.timestamp
+            diff_prev_event_duration = prev_event_duration_before_cut - prev_event.duration
+            if diff_prev_event_duration > tolerance:
+                metrics.incr(f'{bucket_id} cut duration of different overlapping events', diff_prev_event_duration)
+            _add_raw_event(prev_event, result, bucket_id, metrics)
+            prev_event = event
+            continue
+        # Remains only cases when need to save previous event as is.
+        _add_raw_event(prev_event, result, bucket_id, metrics)
+        prev_event = event
+        continue
+    # Add last postponed event as is.
     if prev_event is not None:
         _add_raw_event(prev_event, result, bucket_id, metrics)
     # If in result got different number of events then note about it.
@@ -458,7 +495,7 @@ def analyze_buckets(activity_watch_client, start_time: datetime.datetime, end_ti
             bucket_events: List[AWEvent] = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
             total_raw_events += len(bucket_events)
             if bucket_events:
-                normilized_events = _sort_merge_convert_raw_events(bucket_events, bucket_id, tolerance, strat_metrics)
+                normilized_events = sort_merge_convert_raw_events(bucket_events, bucket_id, tolerance, strat_metrics)
                 metrics.incr('not-empty buckets handled')
                 strat_metrics.incr('not-empty buckets')
                 events.extend(normilized_events)

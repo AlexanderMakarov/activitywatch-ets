@@ -2,14 +2,16 @@ import unittest
 import datetime
 import logging
 from unittest.mock import MagicMock, patch, call
-from typing import List, Dict, Tuple
+from typing import Any, List, Dict, Tuple
 from parameterized import parameterized
+from aw_core import Event as AWEvent
 
 from . import build_datetime, build_timedelta
 
 from ..domain.input_entities import Event
 from ..domain.interval import Interval
-from ..domain import merger
+from ..domain.metrics import Metrics, Metric
+from ..domain.merger import apply_events, report_from_buckets, sort_merge_convert_raw_events
 from ..config.config import LOG
 
 
@@ -29,6 +31,16 @@ def build_intervals(data: List[Tuple[int, int, List[Event]]]) -> Interval:
             interval = tmp
         interval.events.extend(events)
     return interval
+
+
+def build_AWEvent(timestamp_hours: int, duration_hours: int, data: Any = None) -> AWEvent:
+    return AWEvent(timestamp=datetime.datetime(2023, 1, 1, timestamp_hours, tzinfo=datetime.timezone.utc),
+                   duration=datetime.timedelta(hours=duration_hours), data=data)
+
+
+def build_Event(timestamp_hours: int, duration_hours: int, data: Any = None) -> Event:
+    return Event("b1", datetime.datetime(2023, 1, 1, timestamp_hours, tzinfo=datetime.timezone.utc),
+                 datetime.timedelta(hours=duration_hours), data)
 
 
 LOG = logging.getLogger("activity_merger.config.config")
@@ -165,10 +177,10 @@ class TestMerger(unittest.TestCase):
         actual_metrics: Dict[str, int]
         if is_should_fail:
             with self.assertRaises(ValueError):
-                actual_interval, actual_metrics = merger.apply_events(events, interval, tolerance, True, True)
+                actual_interval, actual_metrics = apply_events(events, interval, tolerance, True, True)
             return
         else:
-            actual_interval, actual_metrics = merger.apply_events(events, interval, tolerance, True, True)
+            actual_interval, actual_metrics = apply_events(events, interval, tolerance, True, True)
         # Assert
         err_msg = f"'{test_name}' case failed."
         if expected_interval:
@@ -253,7 +265,7 @@ class TestMerger(unittest.TestCase):
         # Act
         actual_interval: Interval
         actual_metrics: Dict[str, int]
-        actual_interval, actual_metrics = merger.apply_events(events, interval, tolerance, True, False)
+        actual_interval, actual_metrics = apply_events(events, interval, tolerance, True, False)
         # Assert
         err_msg = f"'{test_name}' case failed."
         if expected_interval:
@@ -658,7 +670,7 @@ class TestMerger(unittest.TestCase):
         # ),
     ])
     @patch.object(LOG, "info", MagicMock())
-    @patch.object(merger, "check_and_print_intervals", MagicMock())
+    # @patch.object(merger, "check_and_print_intervals", MagicMock())
     def test_report_from_buckets(self, test_name: str, get_events_lists_results: List[Event],
             buckets: Dict[str, object], tolerance: datetime.timedelta, expected_error_message: str,
             expected_interval: Interval, expected_buckets_called: List[str], expected_logs: List[str]):
@@ -670,10 +682,10 @@ class TestMerger(unittest.TestCase):
         actual: Interval
         if expected_error_message:
             self.assertRaisesRegex(ValueError, expected_error_message,
-                                   merger.report_from_buckets, awc, start_time, end_time, buckets, tolerance)
+                                   report_from_buckets, awc, start_time, end_time, buckets, tolerance)
             return
         else:
-            actual = merger.report_from_buckets(awc, start_time, end_time, buckets, tolerance)
+            actual = report_from_buckets(awc, start_time, end_time, buckets, tolerance)
         # Assert
         err_msg = f"'{test_name}' case failed."
         if expected_interval:
@@ -687,6 +699,81 @@ class TestMerger(unittest.TestCase):
             LOG.info.assert_not_called()
 
 
-if __name__ == '__main__':
-    print("Run 'test.py' from root folder.")
-    exit(1)
+    @parameterized.expand([
+        (
+            "adjucent_events_same_data",
+            [build_AWEvent(1, 1, "foo"), build_AWEvent(2, 1, "foo")],
+            [build_Event(1, 2, "foo")],
+            {
+                'raw events': Metric(2, 7200),
+                'b1 merged the same data events': Metric(1, 3600.0),
+                'events to handle': Metric(1, 7200.0),
+            }
+        ),
+        (
+            "adjucent_events_different_data",
+            [build_AWEvent(1, 1, "foo"), build_AWEvent(2, 1, "bar")],
+            [build_Event(1, 1, "foo"), build_Event(2, 1, "bar")],
+            {
+                'raw events': Metric(2, 7200.0),
+                'events to handle': Metric(2, 7200.0),
+            }
+        ),
+        (
+            "events_far_away_same_data_and_mixed",
+            [build_AWEvent(8, 1, "foo"), build_AWEvent(1, 1, "foo"), build_AWEvent(4, 1, "foo")],
+            [build_Event(1, 1, "foo"), build_Event(4, 1, "foo"), build_Event(8, 1, "foo")],
+            {
+                'raw events': Metric(3, 10800.0),
+                'events to handle': Metric(3, 10800.0),
+            }
+        ),
+        (
+            "events_far_away_different_data_and_mixed",
+            [build_AWEvent(8, 1, "foo"), build_AWEvent(1, 1, "bar"), build_AWEvent(4, 1, "dom")],
+            [build_Event(1, 1, "bar"), build_Event(4, 1, "dom"), build_Event(8, 1, "foo")],
+            {
+                'raw events': Metric(3, 10800.0),
+                'events to handle': Metric(3, 10800.0),
+            }
+        ),
+        (
+            "same_timestamp_first_shorter_same_data",
+            [build_AWEvent(1, 1, "foo"), build_AWEvent(1, 2, "foo")],
+            [build_Event(1, 2, "foo")],
+            {
+                'b1 merged the same data events': Metric(cnt=1, duration=3600.0),
+                'raw events': Metric(2, 10800.0),
+                'events to handle': Metric(1, 7200.0),
+            }
+        ),
+        (
+            "same_timestamp_second_shorter_same_data",
+            [build_AWEvent(1, 2, "foo"), build_AWEvent(1, 1, "foo")],
+            [build_Event(1, 2, "foo")],
+            {
+                'b1 merged the same data events': Metric(cnt=1, duration=3600.0),
+                'raw events': Metric(2, 10800),
+                'events to handle': Metric(1, 7200),
+            }
+        ),
+        # overlapping_by_heads_different_data
+        # overlapping_by_tails_same_data
+        # overlapping_by_tails_different_data
+        # overlapping_completely_same_data
+        # overlapping_completely_different_data
+    ])
+    def test_sort_merge_convert_raw_events(self, test_name: str, raw_events: List[AWEvent],
+                                           expected_events: List[Event], expected_metrics: Dict[str, Metric]):
+        self.maxDiff = None
+        metrics = Metrics({})
+        # Act
+        result : List[Event] = sort_merge_convert_raw_events(raw_events, "b1", datetime.timedelta(0), metrics)
+        # Assert
+        err_msg = f"'{test_name}' case failed with wrong "
+        self.assertEqual(result, expected_events, err_msg + "events")
+        self.assertDictEqual(
+            {k: v for (k, v) in metrics.metrics.items() if v.cnt > 0},
+            {k: v for (k, v) in expected_metrics.items() if v.cnt > 0},
+            err_msg
+        )
