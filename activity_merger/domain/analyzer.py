@@ -378,6 +378,12 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
                             metrics: Metrics, name_of_tree: str) -> List[Activity]:
     """
     Cuts different parts of activities which overlap with intervals in the specified tree.
+    :param activities: List of activities to cut tree intervals from.
+    :param boundaries: `Strategy` boundaries.
+    :param tree: Tree with intervals to cut activities by.
+    :param metrics: Metrics instance.
+    :param name_of_tree: Name of the tree for metrics.
+    :return: List of chopped activities.
     """
     may_cut_start = boundaries != 'start'
     may_cut_end = boundaries != 'end'
@@ -386,38 +392,51 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
     for activity in activities:
         modified_activities = [activity]
         intervals = sorted(tree[activity.start_time:activity.end_time])
-        # Handle each interval separately, with probably changing list of activities to modify.
-        for interval in intervals:
+        # Iterate all intervals, and chop activities by them.
+        # Note that after each iteration activities change and may stop to be intersecting.
+        for i, interval in enumerate(intervals):
             activities_after_interval_handling = []
-            # Note that after 1st interval number of activities to handle may be 2.
-            # Therefore handle multiple activities overlaps for each interval.
+            # Note that after 1st interval handling number of activities to handle may be 2 and so on.
+            if i > 0 and may_cut_end:
+                # If it is not the first interval and we may cut end of activity
+                # then we've already chopped it tail and nothing to process anymore.
+                break
+            # Check how remained intervals overlaps with chopped activities and chop more, if needed.
             for current_activity in modified_activities:
                 if interval.begin <= current_activity.start_time:
-                    # Check intervals covers activity completely.
+                    # Interval starts before activity.
+                    # Check interval covers activity completely.
                     if interval.end >= current_activity.end_time:
                         metrics.incr('activities removed by ' + name_of_tree, current_activity.duration)
                         continue
-                    # Interval overlaps with the start of the activity.
+                    # Check activity may be chopped at start.
                     if not may_cut_start:
                         metrics.incr('activities removed because impossible to cut on start by ' + name_of_tree,
                                      current_activity.duration)
                         continue
-                    prev_duration = current_activity.duration
-                    tmp = _cut_activity_start(current_activity, interval.end)
-                    activities_after_interval_handling.append(tmp)
-                    metrics.incr('activities cut on start by ' + name_of_tree, prev_duration - tmp.duration)
+                    # Check interval overlaps activity.
+                    if interval.end < current_activity.start_time:
+                        prev_duration = current_activity.duration
+                        tmp = _cut_activity_start(current_activity, interval.end)
+                        activities_after_interval_handling.append(tmp)
+                        metrics.incr('activities cut on start by ' + name_of_tree, prev_duration - tmp.duration)
+                    continue
                 elif interval.end >= current_activity.end_time:
-                    # Interval overlaps with the end of the activity.
+                    # Interval ends after activity.
+                    # Check activity may be chopped at end.
                     if not may_cut_end:
                         metrics.incr('activities removed because impossible to cut on end by ' + name_of_tree,
                                      current_activity.duration)
                         continue
-                    prev_duration = current_activity.duration
-                    tmp = _cut_activity_end(current_activity, interval.begin)
-                    activities_after_interval_handling.append(tmp)
-                    metrics.incr('activities cut on end by ' + name_of_tree, prev_duration - tmp.duration)
+                    # Check interval overlaps activity.
+                    if interval.begin > current_activity.start_time:
+                        prev_duration = current_activity.duration
+                        tmp = _cut_activity_end(current_activity, interval.begin)
+                        activities_after_interval_handling.append(tmp)
+                        metrics.incr('activities cut on end by'+ name_of_tree, prev_duration - tmp.duration)
+                    continue
                 else:
-                    # Interval is placed in the middle of the activity.
+                    # Interval is placed in the middle of the current activity.
                     prev_duration = current_activity.duration
                     if may_cut_end and may_cut_start:
                         split_activities = _split_activity(current_activity, interval.begin, interval.end)
@@ -569,7 +588,9 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
                 activity.description,
                 len(activity.events),
             )
-    debug_buckets_cnt += 1
+    # Check that at least something was added to the result tree. Otherwise no debug events were added.
+    if len(result_tree) > 0:
+        debug_buckets_cnt += 1
 
     # Take all remained intervals and using `out_activity_boundaries` value make activites with logic:
     #   - Make tree of remained intervals by cutting out all activities overlapping `result_tree` intervals.
@@ -592,9 +613,9 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
 
     # TODO fix:
     # + aw-watcher-window below makes 2.5 days of activities. And it generates total mess.
-    # - IDEA activities aren't chopped by AFK.
+    # + IDEA and window activities aren't chopped by AFK.
     # - "activities split on 2 by AFK" is a negative duration.
-    # - resulting activities are overlapping (except 1st long)
+    # - resulting activities are overlapping on few seconds
     # TODO:
     # - update merger.py to populate "strict_start_time" and "strict_end_time" for `out_activity_boundaries` behavior.
     # - use `out_activity_name` to sanitize activity name.

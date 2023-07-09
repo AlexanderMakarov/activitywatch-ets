@@ -247,25 +247,26 @@ def _sort_and_merge_events(events: List[Event]) -> List[Event]:
     events.sort(key=lambda e: e.timestamp)
     TIMEDELTA_0 = datetime.timedelta()
     result = []
-    p = None
-    for e in events:
+    prev_event = None
+    for event in events:
         # Note that AFK sometimes contains "0 timedelta" events which breaks merging logic - omit them.
-        if e.duration == TIMEDELTA_0:
+        if event.duration == TIMEDELTA_0:
             continue
-        if p is not None:
+        if prev_event is not None:
             # Note that we want to merge events with the same data and overlapping time spans.
             # But differnt buckets are allowed. Because for AFK it is possible to work on few machines in parallel,
             # and for Stopwatch 'status' is expected to be different anyway.
-            if e.timestamp <= (p.timestamp + p.duration) and str(e.data) == str(p.data):
-                p = Event(e.bucket_id, p.timestamp,
-                          max(e.timestamp + e.duration, p.timestamp + p.duration) - p.timestamp, e.data)
+            prev_event_end = prev_event.timestamp + prev_event.duration
+            if event.timestamp <= prev_event_end and str(event.data) == str(prev_event.data):
+                prev_event = Event(event.bucket_id, prev_event.timestamp,
+                             max(event.timestamp + event.duration, prev_event_end) - prev_event.timestamp, event.data)
             else:
-                result.append(p)
-                p = e
+                result.append(prev_event)
+                prev_event = event
         else:
-            p = e
-    if p is not None:
-        result.append(p)
+            prev_event = event
+    if prev_event is not None:
+        result.append(prev_event)
     return result
 
 
@@ -431,19 +432,19 @@ def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tol
         same_data = str(event.data) == str(prev_event.data)
         if same_data and same_start and same_end:
             # same data, same start and end => remove previous as the same
-            metrics.incr(f'{bucket_id} skipped duplicated by interval events', prev_event.duration)
+            metrics.incr(f'{bucket_id} skipped duplicated by interval events', prev_event.duration.seconds)
             prev_event = event
             continue
         start_later_than_prev_end = event.timestamp - prev_end > tolerance
         if same_data and not start_later_than_prev_end:
             # same data, start not later than previous end => merge
-            prev_event_duration_before_merge = prev_event.duration.seconds
+            prev_event_duration_before_merge = prev_event.duration
             prev_event.duration = max(current_end, prev_end) - prev_event.timestamp
-            metrics.incr(f'{bucket_id} merged the same data events', prev_event_duration_before_merge)
+            metrics.incr(f'{bucket_id} merged the same data events', prev_event_duration_before_merge.seconds)
             continue
         if same_start:
             # other data, same start => remove previous as overlapped
-            metrics.incr(f'{bucket_id} skipped shorter and overlapped by interval events', prev_event.duration)
+            metrics.incr(f'{bucket_id} skipped shorter and overlapped by interval events', prev_event.duration.seconds)
             prev_event = event
             continue
         if not start_later_than_prev_end:
@@ -452,7 +453,8 @@ def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tol
             prev_event.duration = event.timestamp - prev_event.timestamp
             diff_prev_event_duration = prev_event_duration_before_cut - prev_event.duration
             if diff_prev_event_duration > tolerance:
-                metrics.incr(f'{bucket_id} cut duration of different overlapping events', diff_prev_event_duration)
+                metrics.incr(f'{bucket_id} cut duration of different overlapping events',
+                             diff_prev_event_duration.seconds)
             _add_raw_event(prev_event, result, bucket_id, metrics)
             prev_event = event
             continue
@@ -472,6 +474,18 @@ def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tol
 def analyze_buckets(activity_watch_client, start_time: datetime.datetime, end_time: datetime.datetime,
                     buckets: List[str], strategies: List[Strategy], tolerance: datetime.timedelta)\
                     -> Tuple[List[ActivitiesByStrategy], Metrics]:
+    """
+    Analyzes given list of buckets and for each of them which is covered by provided strategy makes
+    `ActivitiesByStrategy` objects. Also gets metrics for this process.
+    :param activity_watch_client: ActivityWatch client to use for fetching events.
+    :param start_time: Analyzing interval start.
+    :param end_time: Analyzing interval end.
+    :param buckets: List of buckets to analyze.
+    :param strategies: List of strategies to analyze with.
+    :param tolerance: Tolerance for comparing and merging events.
+    :returns: List of `ActivitiesByStrategy` objects per strategy.
+    Note that one strategy may span few buckets if data taken from few machines.
+    """
     metrics = Metrics({})
     bucket_ids_to_handle = list(buckets.keys())
     metrics.override('total buckets', len(buckets), 0)
