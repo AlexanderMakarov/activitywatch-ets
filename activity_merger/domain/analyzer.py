@@ -441,8 +441,8 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
                     if may_cut_end and may_cut_start:
                         split_activities = _split_activity(current_activity, interval.begin, interval.end)
                         activities_after_interval_handling.extend(split_activities)
-                        metrics.incr('activities split on 2 by ' + name_of_tree,
-                                    prev_duration - sum(x.duration for x in split_activities))
+                        # Note that duration is measured by events.
+                        metrics.incr('activities split on 2 by ' + name_of_tree, prev_duration)
                     elif may_cut_end:
                         tmp = _cut_activity_end(current_activity, interval.begin)
                         activities_after_interval_handling.append(tmp)
@@ -541,12 +541,13 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
     debug_buckets_cnt = 1
 
     # 1. Find AFK strategy. It is required for `out_only_not_afk` handling.
+    LOG.info('Searching AFK intervals.')
     afk_tree = intervaltree.IntervalTree()
     for strategy_result in activities_by_strategy:
         bucket_prefix = strategy_result.strategy.bucket_prefix
         if not bucket_prefix.startswith(BUCKET_AFK_PREFIX):
             continue
-        metrics.incr('afk strategies')
+        metrics.incr('AFK strategies')
         if strategy_result.strategy.in_activities_may_overlap:
             LOG.warning("Unsupported setup for %s* strategy - in_activities_may_overlap=True."
                         "Skipping any AFK-related logic populated by this strategy.", bucket_prefix)
@@ -558,6 +559,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
                 metrics.incr('afk intervals', activity.duration)
 
     # 2. Cut activities from `out_only_not_afk=True` strategies.
+    LOG.info('Chopping activities by AFK intervals.')
     for strategy_result in activities_by_strategy:
         if not strategy_result.strategy.out_only_not_afk:
             continue
@@ -567,6 +569,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
         )
 
     # 3. Add straight into result activities from `out_self_sufficient=True` strategies. Check for overlappings.
+    LOG.info('Adding "out_self_sufficient" strategies activities.')
     debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}{debug_buckets_cnt:03}_self_sufficient"
     for strategy_result in activities_by_strategy:
         if not strategy_result.strategy.out_self_sufficient:
@@ -614,13 +617,14 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
     # TODO fix:
     # + aw-watcher-window below makes 2.5 days of activities. And it generates total mess.
     # + IDEA and window activities aren't chopped by AFK.
-    # - "activities split on 2 by AFK" is a negative duration.
+    # + "activities split on 2 by AFK" is a negative duration.
     # - resulting activities are overlapping on few seconds
     # TODO:
     # - update merger.py to populate "strict_start_time" and "strict_end_time" for `out_activity_boundaries` behavior.
     # - use `out_activity_name` to sanitize activity name.
     # + multiple debug buckets for "window" strategy (for all with in_activities_may_overlap=true) to avoid overlaps.
 
+    LOG.info('Building "candidate" activities by chopping remaining activities by activities added so far.')
     candidates_tree = intervaltree.IntervalTree()
     for strategy_result in activities_by_strategy:
         # Skip already contributed strategies.
@@ -640,6 +644,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
                                                              debug_buckets_cnt, metrics)
 
     # 5. Iterate remained activities to fill `result` remained gaps.
+    LOG.info('Determine activities from remained and chopped activities.')
     min_duraiton_timedelta = datetime.timedelta(seconds=MIN_DURATION_SEC)
     current_start_point: datetime.datetime = candidates_tree.begin()  # Start from leftest/oldest activity.
     debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"
@@ -668,7 +673,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             ba_interval = max(candidates_for_ba, key=intervaltree.Interval.length)
             LOG.info("Can't find basic activity after %s and more than %s. Using as basic longest - %s",
                      current_start_point, min_duraiton_timedelta, ba_interval.data)
-            metrics.incr("basic activity not good but from remainings", ba_interval.length().total_seconds())
+            metrics.incr("basic activities assembled from remainings", ba_interval.length().total_seconds())
         # Find all overlapping activities and make new `result` activity (RA).
         overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)
         metrics.incr(f'basic activities overlapped by {len(overlapping_intervals)} intervals')

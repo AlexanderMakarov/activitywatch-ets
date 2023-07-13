@@ -251,7 +251,21 @@ class Strategy:
     """
     [alone, auxiliary] - means whether activity name is trustable.
     """
-    # TODO add in_key_value_skip, (like window=unknown) 
+    # TODO add in_key_value_skip, (like window=unknown)
+
+    def __repr__(self) -> str:
+        desc = 'Strategy(' + \
+            '\n  bucket_prefix = ' + self.bucket_prefix + \
+            '\n  in_each_event_is_activity = ' + self.in_each_event_is_activity + \
+            '\n  in_events_density_matters = ' + self.in_events_density_matters + \
+            '\n  in_activities_may_overlap = ' + self.in_activities_may_overlap + \
+            '\n  in_group_by_keys = ' + self.in_group_by_keys + \
+            '\n  out_self_sufficient = ' + self.out_self_sufficient + \
+            '\n  out_only_not_afk = ' + self.out_only_not_afk + \
+            '\n  out_activity_boundaries = ' + self.out_activity_boundaries + \
+            '\n  out_activity_name = ' + self.out_activity_name + \
+            '\n)'
+        return desc
 
 
 class EventKeyHandler:

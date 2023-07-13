@@ -7,7 +7,7 @@ from parameterized import parameterized
 
 from ..domain.interval import Interval
 from ..domain.tuner import IntervalWithDecision, adjust_priorities
-from ..domain.input_entities import Rule2, Event
+from ..domain.input_entities import Rule2
 from ..domain.metrics import Metric, Metrics
 from . import build_datetime
 
@@ -43,14 +43,13 @@ def _build_decisions(items: List[Tuple[List[Any], List[Rule2]]]) -> List[Interva
     """
     # First get all rules and make copy of them to don't modify input rules.
     rules = set(itertools.chain(*(x[1] for x in items)))
-    rules = copy.deepcopy(dict((x, x) for x in rules))
+    rules = copy.deepcopy(dict((hash(x), x) for x in rules))
     result = []
     for entry in items:
         interval = IntervalWithDecision(INTERVAL)
-        interval.decision = [rules[d] if isinstance(d, Rule2) else d
-                             for d in entry[0]]
+        interval.decision = set(entry[0])
         # TODO it puts index as a key, should be Event.
-        interval.rules_per_event = dict((i, x) for i, x in enumerate(rules[r] for r in entry[1]))
+        interval.rules_per_event = dict((i, x) for i, x in enumerate(rules[hash(r)] for r in entry[1]))
         result.append(interval)
     return result
 
