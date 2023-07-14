@@ -112,14 +112,29 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 
 ## Roadmap
 
+TODO:
+
 - [x] Dry run for importers.
 - [x] Why get_outlook_events.py default "today" don't implemented? It doesn't work with back_days=0.
 - [x] Fix get_outlook_events.py: removes plugins.
 - [x] Fix get_outlook_events.py: skips 'free' events.
 - [x] Debug: write a script to export all buckets data for a specific date.
 - [x] Add debugging buckets to produce insights about rules work into ActivityWatch UI "Timeline" page.
+- [x] Write tests for merger with Stopwatch events involvement.
+- [x] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Change licence.
 - [ ] Add "git exporter".
+- [ ] For `Strategy.in_group_by_keys` need an ability specify "if key doesn't exist then use this", not both. IDEA case.
+- [ ] Complete get_activities.py
+- [ ] Try it for myself. Adjust `STRATEGIES` and code if need.
+- [ ] Use for ETS for a few days. Adjust `STRATEGIES`.
+- [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
+- [ ] Prepare for distribution.
+- [ ] Importers - support parsing few days at once.
+- [ ] OWA importer - adopt Chrome as well.
+
+Questionable:
+- [ ] Add support for TODO cases in test_merger.
 - [ ] Separate `aw_export_one_day.py` into use standalone. The same is useful with exporters as well.
 - [ ] Wrap into the web server - send JSON with day data - get activities.
 - [ ] Made a tool to help build rules. See z1 and mark
@@ -130,20 +145,10 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
   or creating more precise rules (subhandlers).
   Better to remember answers or provide ability to reiterate only some of events, for example
   those where were issues previous iteration. It means database...
-  [ ] Improve "windows to activities" (`analyzer._window_to_activity`) with parallel sliding windows.
-  [x] Ask user for decision about each interval cut by rules.
+- [x] Ask user for decision about each interval cut by rules.
     Appeared it is too tedious - 2k intervals per working day with few seconds duration.
 - [ ] Enhance above - ask user only about unique combination of events.
     Thus we omit inconsistent decisions as well. But need a way to suggest better rules.
 - [ ] "tune_rules.py" - support `WindowsTerminalLeader`.
-- [ ] Complete get_activities.py
-- [x] Prepare script to run all event importers and get_activities.py for the specific date.
-- [ ] Try it for myself. Adjust `RULES` and code if need.
-- [ ] Use for ETS for a few days. Adjust `RULES`.
-- [x] Write tests for merger with Stopwatch events involvement.
-- [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
-- [ ] Add support for TODO cases in test_merger.
-- [ ] Prepare for distribution.
-- [ ] Importers - support parsing few days at once.
-- [ ] OWA importer - adopt Chrome as well.
+  [ ] Improve "windows to activities" (`analyzer._window_to_activity`) with parallel sliding windows.
 - [ ] Interactive way to merge activities.

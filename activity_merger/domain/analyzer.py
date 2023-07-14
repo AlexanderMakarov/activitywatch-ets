@@ -507,7 +507,8 @@ def _add_debug_events_to_not_overlap(candidates_tree: intervaltree.IntervalTree,
     return debug_buckets_cnt
 
 
-def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStrategy]) -> AnalyzerResult:
+def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStrategy],
+                                    is_add_debug_buckets: bool = True) -> AnalyzerResult:
     # TODO don't decide activity for each interval - it means loosing information about next inetervals.
     # TODO need to analyze neighbors.
     # 1) If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
@@ -583,14 +584,15 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             result_tree.addi(activity.start_time, activity.end_time, activity)
             LOG.info("Found 'self-sufficient' activity: %s", activity)
             metrics.incr('self sufficient activities', activity.duration)
-            _add_debug_event(
-                debug_dict,
-                debug_bucket_prefix,
-                activity.start_time,
-                activity.end_time - activity.start_time,
-                activity.description,
-                len(activity.events),
-            )
+            if is_add_debug_buckets:
+                _add_debug_event(
+                    debug_dict,
+                    debug_bucket_prefix,
+                    activity.start_time,
+                    activity.end_time - activity.start_time,
+                    activity.description,
+                    len(activity.events),
+                )
     # Check that at least something was added to the result tree. Otherwise no debug events were added.
     if len(result_tree) > 0:
         debug_buckets_cnt += 1
@@ -635,13 +637,20 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
         # Cut activities from strategy by result tree. Do it strictly, i.e. boundaries=whole.
         remained_activities = _exclude_tree_intervals(
             strategy_result.activities, 'whole', result_tree, metrics,
-            'self sufficient strategy activities'
+            'activities built from self sufficient strategies'
         )
-        # Iterate remained activities and put into separate `candidates_tree`.
+        # Iterate remained activities and put them into common candidates tree and into per-strategy tree if need.
+        strategy_remained_activities_tree = intervaltree.IntervalTree()
         for activity in remained_activities:
             candidates_tree.addi(activity.start_time, activity.end_time, activity)
-        debug_buckets_cnt = _add_debug_events_to_not_overlap(candidates_tree, debug_dict, strategy.bucket_prefix,
-                                                             debug_buckets_cnt, metrics)
+            if is_add_debug_buckets:
+                strategy_remained_activities_tree.addi(activity.start_time, activity.end_time, activity)
+        # Add debug events if need.
+        if is_add_debug_buckets: # TODO: rewrite `_add_debug_events_to_not_overlap` to get activities list.
+            debug_buckets_cnt = _add_debug_events_to_not_overlap(
+                strategy_remained_activities_tree, debug_dict, strategy.bucket_prefix, debug_buckets_cnt, metrics
+            )
+        # Add all events from this strategy
 
     # 5. Iterate remained activities to fill `result` remained gaps.
     LOG.info('Determine activities from remained and chopped activities.')
@@ -745,15 +754,17 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
         )
         result_tree_overlapped_with_ra_end = result_tree.at(ra.end_time)
         result_tree.addi(ra.start_time, ra.end_time, ra)
-        # Use the only debug bucket here because events should be consequtive.
-        _add_debug_event(
-            debug_dict,
-            debug_bucket_prefix,
-            ra.start_time,
-            ra.end_time - ra.start_time,
-            ra.description,
-            len(ra.events),
-        )
+        # Add to debug bucket if need.
+        if is_add_debug_buckets:
+            # Use the only debug bucket here because events should be consequtive.
+            _add_debug_event(
+                debug_dict,
+                debug_bucket_prefix,
+                ra.start_time,
+                ra.end_time - ra.start_time,
+                ra.description,
+                len(ra.events),
+            )
         # Configure next iteration.
         current_start_point = ra.end_time
         # Need to jump to the next gap. Note that current RA may end up on existing activity in the `result_tree`.
