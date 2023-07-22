@@ -185,7 +185,7 @@ class StrategyHandler:
     @staticmethod
     def _add_event_to_window(event: Event, window_key: Tuple, windows: Dict[Tuple, List[Event]], metrics: Metrics):
         window = windows.setdefault(window_key, [])
-        metrics.incr(f'events with data {window_key}', event.duration.seconds)
+        # TODO revert metrics.incr(f'events with data {window_key}', event.duration.seconds)
         window.append(event)
 
     @staticmethod
