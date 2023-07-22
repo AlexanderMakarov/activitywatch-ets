@@ -64,11 +64,14 @@ HOUR21_00 = datetime.datetime(2023, 1, 1, 21)
 EVENT700_730 = Event("b1", HOUR7_00, datetime.timedelta(minutes=30), "7:00..7:30")
 EVENT730_800 = Event("b1", HOUR7_30, datetime.timedelta(minutes=30), "7:30..8:00")
 EVENT830_900 = Event("b1", HOUR8_00, datetime.timedelta(hours=1), "8:00..9:00")
+EVENT900_1000 = Event("b1", HOUR9_00, datetime.timedelta(hours=1), "9:00..10:00")
 EVENT1000_1030 = Event("b1", HOUR10_00, datetime.timedelta(minutes=30), "10:00..10:30")
 EVENT1030_1130 = Event("b1", HOUR10_30, datetime.timedelta(hours=1), "10:30..11:30")
 EVENT1130_1300 = Event("b1", HOUR11_30, datetime.timedelta(hours=1, minutes=30), "11:30..13:00")
+EVENT1300_1400 = Event("b1", HOUR13_00, datetime.timedelta(hours=1), "13:00..14:00")
 EVENT1400_1600 = Event("b1", HOUR14_00, datetime.timedelta(hours=2), "14:00..16:00")
-EVENT1700_1800 = Event("b1", HOUR17_00, datetime.timedelta(hours=1), "17:00..17:00")
+EVENT1600_1700 = Event("b1", HOUR16_00, datetime.timedelta(hours=1), "16:00..17:00")
+EVENT1700_1800 = Event("b1", HOUR17_00, datetime.timedelta(hours=1), "17:00..18:00")
 EVENT1900_2000 = Event("b1", HOUR19_00, datetime.timedelta(hours=1), "19:00..20:00")
 # activities: 7..9  10.......13  14...16 17..18
 # intervals :   8...10 11.12 13....15
@@ -253,8 +256,32 @@ class TestAnalyzer(unittest.TestCase):
             {
                 'activities cut on start by tt': Metric(1, 0.0),  # 'a14-16' and one event remained duration.
                 'activities cut on end by tt': Metric(1, 3600.0),  # 'a7-9'.
-                'activities split on 2 by tt': Metric(1, 0.0),  # 'a10-13' was split but all events remained.
+                'activities with cut out middle by tt': Metric(1, 7200.0),  # 'a10-13' remained part.
                 'activities removed by tt': Metric(1, 3600.0),  # 'a19-20'.
+            },
+        ),
+        (
+            'whole_boundaries_big_activity',
+            [
+                Activity(
+                    start_time=HOUR7_00,
+                    end_time=HOUR18_00,
+                    events=[EVENT700_730, EVENT730_800, EVENT830_900, EVENT900_1000, EVENT1000_1030, EVENT1030_1130,
+                            EVENT1130_1300, EVENT1300_1400, EVENT1400_1600, EVENT1600_1700, EVENT1700_1800],
+                    description='a7-18',
+                    duration=39600,
+                ),
+            ],
+            'whole',
+            TREE,
+            [
+                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-18', 3600),
+                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a7-18', 5400),
+                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a7-18', 5400),
+                Activity(HOUR15_00, HOUR18_00, [EVENT1400_1600, EVENT1600_1700, EVENT1700_1800], 'a7-18', 14400),
+            ],
+            {
+                'activities with cut out middle by tt': Metric(3, 73800.0),  # We only cut our parts from one activity.
             },
         ),
     ])

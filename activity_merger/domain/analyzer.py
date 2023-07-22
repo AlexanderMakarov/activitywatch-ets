@@ -13,7 +13,7 @@ from .interval import Interval, intervals_duration
 from .input_entities import Event, Rule2, Strategy
 from .metrics import Metrics
 from .output_entities import RuleResult, Activity, AnalyzerResult
-from ..helpers.helpers import seconds_to_int_timedelta, event_data_to_str
+from ..helpers.helpers import seconds_to_int_timedelta, event_data_to_str, event_to_str
 
 
 BUCKET_AFK_PREFIX = "aw-watcher-afk"
@@ -369,7 +369,9 @@ def _cut_activity_end(activity: Activity, point: datetime.datetime) -> Activity:
 def _split_activity(activity: Activity, start_point: datetime.datetime, end_point: datetime.datetime)\
         -> List[Activity]:
     """
-    Cuts both start and end from activity and returns only part between specified points.
+    Cuts activity on 2 parts and returns 2 new activities:
+    - from the start of initial activity to start_point,
+    - from end_point to the end of initial activity.
     """
     return [_cut_activity_end(activity, start_point), _cut_activity_start(activity, end_point)]
 
@@ -391,16 +393,17 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
     # Iterate all activities to cut tree intervals from them.
     for activity in activities:
         modified_activities = [activity]
-        intervals = sorted(tree[activity.start_time:activity.end_time])
+        intervals: List[intervaltree.Interval] = sorted(tree[activity.start_time:activity.end_time])
         # Iterate all intervals, and chop activities by them.
         # Note that after each iteration activities change and may stop to be intersecting.
         for i, interval in enumerate(intervals):
             activities_after_interval_handling = []
             # Note that after 1st interval handling number of activities to handle may be 2 and so on.
-            if i > 0 and may_cut_end:
-                # If it is not the first interval and we may cut end of activity
-                # then we've already chopped it tail and nothing to process anymore.
-                break
+            # So even with not first interval and may_cut_end=True we can't stop because first interval
+            # may split activity on 2 and second activity is still may be handled.
+            # if i > 0 and may_cut_end and len(modified_activities) < 2:
+            #     # If we cut end of activity then nothing to process anymore.
+            #     break
             # Check how remained intervals overlaps with chopped activities and chop more, if needed.
             for current_activity in modified_activities:
                 if interval.begin <= current_activity.start_time:
@@ -415,7 +418,7 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
                                      current_activity.duration)
                         continue
                     # Check interval overlaps activity.
-                    if interval.end < current_activity.start_time:
+                    if interval.end < current_activity.end_time:
                         prev_duration = current_activity.duration
                         tmp = _cut_activity_start(current_activity, interval.end)
                         activities_after_interval_handling.append(tmp)
@@ -433,16 +436,19 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
                         prev_duration = current_activity.duration
                         tmp = _cut_activity_end(current_activity, interval.begin)
                         activities_after_interval_handling.append(tmp)
-                        metrics.incr('activities cut on end by'+ name_of_tree, prev_duration - tmp.duration)
+                        metrics.incr('activities cut on end by '+ name_of_tree, prev_duration - tmp.duration)
                     continue
                 else:
                     # Interval is placed in the middle of the current activity.
                     prev_duration = current_activity.duration
                     if may_cut_end and may_cut_start:
                         split_activities = _split_activity(current_activity, interval.begin, interval.end)
-                        activities_after_interval_handling.extend(split_activities)
+                        # Note that left part of the activity won't be touched anymore. Put stright into result.
+                        result.append(split_activities[0])
+                        activities_after_interval_handling.append(split_activities[1])
                         # Note that duration is measured by events.
-                        metrics.incr('activities split on 2 by ' + name_of_tree, prev_duration)
+                        metrics.incr('activities with cut out middle by ' + name_of_tree,
+                                     prev_duration - (interval.end - interval.begin).total_seconds())
                     elif may_cut_end:
                         tmp = _cut_activity_end(current_activity, interval.begin)
                         activities_after_interval_handling.append(tmp)
@@ -469,37 +475,49 @@ def _add_debug_event(debug_dict: Dict[str, List[Event]], bucket_id: str, timesta
     debug_dict.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
 
 
-def _add_debug_events_to_not_overlap(candidates_tree: intervaltree.IntervalTree, debug_dict: Dict,
-                                     bucket_prefix: str, debug_buckets_cnt: int, metrics: Metrics) -> int:
-    intervals = sorted(candidates_tree)
-    groups = []
-
-    for interval in intervals:
+def _add_debug_events_to_not_overlap(activites: List[Activity], debug_dict: Dict,
+                                     bucket_name: str, debug_buckets_cnt: int, metrics: Metrics) -> int:
+    """
+    Adds debug events to the given dictionary in few buckets where events are not overlapping.
+    :param activites: Activities to add debug events from.
+    :param debug_dict: Dictionary to add debug events to.
+    :param bucket_name: Part of name for debug buckets.
+    :param metrics: Metrics instance to report progress.
+    :param debug_buckets_cnt: Counter of debug buckets.
+    :return: Updated counter of debug buckets.
+    """
+    activites = sorted(activites, key=lambda x: x.start_time)
+    groups: List[List[Activity]] = []
+    # Seaparate activities by groups.
+    for activity in activites:
         found_group = False
         for group in groups:
             is_overlapping = False
-            for existing_interval in group:
-                if existing_interval.overlaps(interval):
+            # Iterate all groups each time to find place for the new activity.
+            # Need to pack events as dense as possible - activities may overlap.
+            for existing_activity in group:
+                # Check activities overlap.
+                if activity.end_time >= existing_activity.start_time \
+                        and activity.start_time <= existing_activity.end_time:
                     is_overlapping = True
                     break
             if not is_overlapping:
-                group.append(interval)
+                group.append(activity)
                 found_group = True
                 break
         if not found_group:
-            groups.append([interval])
-
+            groups.append([activity])
+            metrics.incr('debug event groups for ' + bucket_name)
+    # Fill buckets of events from groups.
     for group in groups:
-        debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}{debug_buckets_cnt:03}_{bucket_prefix}"
+        debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}{debug_buckets_cnt:03}_{bucket_name}"
         debug_buckets_cnt += 1
-        for interval in group:
-            activity = interval.data
+        for activity in group:
             _add_debug_event(
                 debug_dict,
-                # Here activities may overlap. But assume that it would be distinguishable in UI.
                 debug_bucket_prefix,
                 activity.start_time,
-                activity.end_time - activity.start_time,
+                activity.end_time - activity.start_time,  # Use end-start time, not duration by events.
                 activity.description,
                 len(activity.events),
             )
@@ -569,7 +587,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             strategy_result.activities, strategy_result.strategy.out_activity_boundaries, afk_tree, metrics, 'AFK'
         )
 
-    # 3. Add straight into result activities from `out_self_sufficient=True` strategies. Check for overlappings.
+    # 3. Add into result activities from `out_self_sufficient=True` strategies. Check for overlappings.
     LOG.info('Adding "out_self_sufficient" strategies activities.')
     debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}{debug_buckets_cnt:03}_self_sufficient"
     for strategy_result in activities_by_strategy:
@@ -589,7 +607,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
                     debug_dict,
                     debug_bucket_prefix,
                     activity.start_time,
-                    activity.end_time - activity.start_time,
+                    activity.end_time - activity.start_time,  # Use end-start time, not duration by events.
                     activity.description,
                     len(activity.events),
                 )
@@ -618,9 +636,10 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
 
     # TODO fix:
     # + aw-watcher-window below makes 2.5 days of activities. And it generates total mess.
-    # + IDEA and window activities aren't chopped by AFK.
+    # - IDEA activities aren't chopped by AFK.
     # + "activities split on 2 by AFK" is a negative duration.
     # - resulting activities are overlapping on few seconds
+    # - wrong activities in result - too much "Can't find basic activity".
     # TODO:
     # - update merger.py to populate "strict_start_time" and "strict_end_time" for `out_activity_boundaries` behavior.
     # - use `out_activity_name` to sanitize activity name.
@@ -640,17 +659,14 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             'activities built from self sufficient strategies'
         )
         # Iterate remained activities and put them into common candidates tree and into per-strategy tree if need.
-        strategy_remained_activities_tree = intervaltree.IntervalTree()
+        # Note that activities here are not in order!
         for activity in remained_activities:
             candidates_tree.addi(activity.start_time, activity.end_time, activity)
-            if is_add_debug_buckets:
-                strategy_remained_activities_tree.addi(activity.start_time, activity.end_time, activity)
-        # Add debug events if need.
-        if is_add_debug_buckets: # TODO: rewrite `_add_debug_events_to_not_overlap` to get activities list.
+        # Add debug events and buckets if need.
+        if is_add_debug_buckets:
             debug_buckets_cnt = _add_debug_events_to_not_overlap(
-                strategy_remained_activities_tree, debug_dict, strategy.bucket_prefix, debug_buckets_cnt, metrics
+                remained_activities, debug_dict, strategy.bucket_prefix, debug_buckets_cnt, metrics
             )
-        # Add all events from this strategy
 
     # 5. Iterate remained activities to fill `result` remained gaps.
     LOG.info('Determine activities from remained and chopped activities.')
@@ -669,7 +685,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
         # Try find BA as:
         # - started on `current_start_point`,
         # - with `out_activity_boundaries` "whole" or "start",
-        # - min length but more than `MIN_DURATION_SEC`.
+        # - length is equal or more than `MIN_DURATION_SEC` (choose minimal).
         candidates_for_ba = sorted(candidates_for_ba, key=lambda x: (x.begin, x.end - x.begin))
         ba_interval = next((x for x in candidates_for_ba
                             if x.begin == current_start_point
@@ -761,7 +777,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
                 debug_dict,
                 debug_bucket_prefix,
                 ra.start_time,
-                ra.end_time - ra.start_time,
+                ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
                 ra.description,
                 len(ra.events),
             )

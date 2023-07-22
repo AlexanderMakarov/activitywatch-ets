@@ -117,7 +117,7 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints
     # TODO add ability to skip metrics starting with 'events with data '.
     LOG.info("Got following activities-per-strategy:\n>>> %s", "\n>>> ".join(str(x) for x in activities_by_strategy))
 
-    analyzer_result = analyze_activities_per_strategy(activities_by_strategy)
+    analyzer_result = analyze_activities_per_strategy(activities_by_strategy, is_import_debug_buckets)
     LOG.info(analyzer_result.to_str())
     # LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
     if is_import_debug_buckets:

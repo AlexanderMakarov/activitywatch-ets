@@ -89,8 +89,9 @@ class AnalyzerResult:
                     (len(self.events_counter), len(dumb_activities), append_equal_intervals_longer_that,
                      "\n  ".join(dumb_activities))
         # Print resulting activities as is. Order is important here.
-        desc += "Assembled %d activities:\n  %s" % (len(self.activities),
-                "\n  ".join(str(x) for x in self.activities))
+        activities_string = "\n  ".join(str(x) for x in self.activities)
+        total_duration = datetime.timedelta(seconds=sum(x.duration for x in self.activities))
+        desc += "Assembled %d activities on %s:\n  %s" % (len(self.activities), total_duration, activities_string)
         return desc
 
     def __repr__(self):
