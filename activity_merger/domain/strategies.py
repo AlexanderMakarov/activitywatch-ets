@@ -79,7 +79,7 @@ class RuleResultsWindow:
         end_time = self.rule_results[-1].intervals[-1].end_time
         tmp = set(x.description for x in self.rule_results)
         description = ", ".join(sorted(tmp))
-        return Activity(start_time, end_time, list(self.rule_results), description, self.duration)
+        return Activity(start_time, end_time, list(self.rule_results), description, self.duration, None)
 
 
 @dataclasses.dataclass
@@ -131,14 +131,14 @@ class StrategyHandler:
         activities: List[Activity] = []
         for event in events:
             activity = Activity(event.timestamp, event.timestamp + event.duration, [event], str(event.data),
-                                event.duration.seconds)
+                                event.duration.seconds, strategy)
             metrics.incr('activities', event.duration.seconds)
             activities.append(activity)
         return ActivitiesByStrategy(strategy, activities, metrics)
 
     @staticmethod
     def _make_activity_between_events(events: List[Event], description: str,\
-                                      activities: List[Activity], metrics: Metrics):
+                                      activities: List[Activity], strategy: Strategy, metrics: Metrics):
         """
         Makes activity starting on start of first event and ending at the end of last event.
         Next adds it to provided list and updates `Metrics` with it.
@@ -146,7 +146,7 @@ class StrategyHandler:
         start_time = events[0].timestamp
         end_time = events[-1].timestamp + events[-1].duration
         duration = sum(x.duration.seconds for x in events)
-        activity = Activity(start_time, end_time, events, description, duration)
+        activity = Activity(start_time, end_time, events, description, duration, strategy)
         activities.append(activity)
         metrics.incr('activities', duration)
 
@@ -173,13 +173,13 @@ class StrategyHandler:
                 continue
             # Otherwise if window exists then create Activity from it.
             if window:
-                StrategyHandler._make_activity_between_events(window, str(window_keys), activities, metrics)
+                StrategyHandler._make_activity_between_events(window, str(window_keys), activities, strategy, metrics)
                 window = []
             # In any case prepare next window.
             window_keys = keys
             window.append(event)
         # Handle last window.
-        StrategyHandler._make_activity_between_events(window, str(window_keys), activities, metrics)
+        StrategyHandler._make_activity_between_events(window, str(window_keys), activities, strategy, metrics)
         return ActivitiesByStrategy(strategy, activities, metrics)
 
     @staticmethod
@@ -242,7 +242,7 @@ class StrategyHandler:
         # Make activities from the each window.
         activities = []
         for key, events in windows.items():
-            StrategyHandler._make_activity_between_events(events, str(key), activities, metrics)
+            StrategyHandler._make_activity_between_events(events, str(key), activities, strategy, metrics)
         return ActivitiesByStrategy(strategy, activities, metrics)
 
     @staticmethod
@@ -267,7 +267,7 @@ class StrategyHandler:
                 prev_event = event
             if len(gaps) <= 0:
                 # If there are no gaps then just create one activity from all events.
-                StrategyHandler._make_activity_between_events(events, str(key), activities, metrics)
+                StrategyHandler._make_activity_between_events(events, str(key), activities, strategy, metrics)
                 continue
             # Otherwise iterate gaps to find out those which are bigger than minimal activity duration.
             # Make activities between them.
@@ -276,10 +276,10 @@ class StrategyHandler:
                 # If gap bigger than minimal activity duration then decicide that it is separate activity.
                 if gap[1] >= MIN_DURATION_SEC:
                     StrategyHandler._make_activity_between_events(events[last_activity_event_index:gap[0]], str(key),
-                                                                  activities, metrics)
+                                                                  activities, strategy, metrics)
                     last_activity_event_index = gap[0]
             # Here we have activities made up to the last big gap. Make activity from remained events.
             if last_activity_event_index < len(events) - 1:
                 StrategyHandler._make_activity_between_events(events[last_activity_event_index:-1], str(key),
-                                                              activities, metrics)
+                                                              activities, strategy, metrics)
         return ActivitiesByStrategy(strategy, activities, metrics)

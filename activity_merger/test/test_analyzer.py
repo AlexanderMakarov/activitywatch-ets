@@ -82,6 +82,7 @@ ACTIVITIES = [
         events=[EVENT700_730, EVENT730_800, EVENT830_900],
         description='a7-9',
         duration=7200,
+        strategy=None,
     ),
     Activity(
         start_time=HOUR10_00,
@@ -89,6 +90,7 @@ ACTIVITIES = [
         events=[EVENT1000_1030, EVENT1030_1130, EVENT1130_1300],
         description='a10-13',
         duration=10800,
+        strategy=None,
     ),
     Activity(
         start_time=HOUR14_00,
@@ -96,6 +98,7 @@ ACTIVITIES = [
         events=[EVENT1400_1600],
         description='a14-16',
         duration=7200,
+        strategy=None,
     ),
     Activity(
         start_time=HOUR17_00,
@@ -103,6 +106,7 @@ ACTIVITIES = [
         events=[EVENT1700_1800],
         description='a17-18',
         duration=3600,
+        strategy=None,
     ),
     Activity(
         start_time=HOUR19_00,
@@ -110,6 +114,7 @@ ACTIVITIES = [
         events=[EVENT1900_2000],
         description='a19-20',
         duration=3600,
+        strategy=None,
     ),
 ]
 TREE = intervaltree.IntervalTree([
@@ -158,7 +163,7 @@ class TestAnalyzer(unittest.TestCase):
             [
                 Activity(DAY1, DAY2, [
                     RuleResult(rule1B, None, "buck1, b", None),
-                ], "buck1, b", DELTA1S),
+                ], "buck1, b", DELTA1S, None),
             ],
         ),
         (
@@ -179,7 +184,7 @@ class TestAnalyzer(unittest.TestCase):
                 Activity(DAY1, DAY2, [
                     RuleResult(rule1C, None, "buck1, c", None),
                     RuleResult(rule2B, None, "buck2, b", None),
-                ], "buck1, c, buck2, b", DELTA2S),
+                ], "buck1, c, buck2, b", DELTA2S, None),
             ],
         ),
     ])
@@ -215,9 +220,9 @@ class TestAnalyzer(unittest.TestCase):
             'start',
             TREE,
             [
-                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-9', 3600),
-                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a10-13', 5400),
-                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600),  # 'a14-16'.
+                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-9', 3600, None),
+                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a10-13', 5400, None),
+                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600, None),  # 'a14-16'.
             ],
             {
                 'activities cut on end by tt': Metric(2, float(3600 + 5400)),  # half of 'a7-9' + part of 'a10-13'.
@@ -231,9 +236,9 @@ class TestAnalyzer(unittest.TestCase):
             'end',
             TREE,
             [
-                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a10-13', 5400),
-                Activity(HOUR15_00, HOUR16_00, [EVENT1400_1600], 'a14-16', 7200),  # Duration from the only event.
-                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600),
+                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a10-13', 5400, None),
+                Activity(HOUR15_00, HOUR16_00, [EVENT1400_1600], 'a14-16', 7200, None),  # Duration from the only event.
+                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600, None),
             ],
             {
                 'activities cut on start by tt': Metric(2, float(5400 + 0)),  # Part of 'a10-13' and 'a14-16'.
@@ -247,11 +252,11 @@ class TestAnalyzer(unittest.TestCase):
             'whole',
             TREE,
             [
-                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-9', 3600),
-                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a10-13', 5400),
-                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a10-13', 5400),
-                Activity(HOUR15_00, HOUR16_00, [EVENT1400_1600], 'a14-16', 7200),
-                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600),
+                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-9', 3600, None),
+                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a10-13', 5400, None),
+                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a10-13', 5400, None),
+                Activity(HOUR15_00, HOUR16_00, [EVENT1400_1600], 'a14-16', 7200, None),
+                Activity(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600, None),
             ],
             {
                 'activities cut on start by tt': Metric(1, 0.0),  # 'a14-16' and one event remained duration.
@@ -270,15 +275,16 @@ class TestAnalyzer(unittest.TestCase):
                             EVENT1130_1300, EVENT1300_1400, EVENT1400_1600, EVENT1600_1700, EVENT1700_1800],
                     description='a7-18',
                     duration=39600,
+                    strategy=None,
                 ),
             ],
             'whole',
             TREE,
             [
-                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-18', 3600),
-                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a7-18', 5400),
-                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a7-18', 5400),
-                Activity(HOUR15_00, HOUR18_00, [EVENT1400_1600, EVENT1600_1700, EVENT1700_1800], 'a7-18', 14400),
+                Activity(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-18', 3600, None),
+                Activity(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a7-18', 5400, None),
+                Activity(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a7-18', 5400, None),
+                Activity(HOUR15_00, HOUR18_00, [EVENT1400_1600, EVENT1600_1700, EVENT1700_1800], 'a7-18', 14400, None),
             ],
             {
                 'activities with cut out middle by tt': Metric(3, 73800.0),  # We only cut our parts from one activity.

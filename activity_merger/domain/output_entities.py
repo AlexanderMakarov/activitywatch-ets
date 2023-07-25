@@ -4,7 +4,7 @@ import collections
 from typing import Dict, List
 
 from .metrics import Metrics
-from .input_entities import Event, Rule2
+from .input_entities import Event, Rule2, Strategy
 from .interval import Interval
 from ..helpers.helpers import seconds_to_int_timedelta, from_start_to_end_to_str
 
@@ -48,6 +48,8 @@ class Activity:
     Total duration of the activity in seconds.
     Note that 'end_time - start_time' doesn't work due to possible gaps between intervals.
     """
+    strategy: Strategy
+    """ Strategy used to create the activity."""
 
     def __repr__(self) -> str:
         return f"{seconds_to_int_timedelta((self.duration))} "\
