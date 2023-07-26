@@ -1,5 +1,6 @@
 from typing import Dict, List, Set, Tuple
 import dataclasses
+from collections import namedtuple
 
 from ..config.config import MIN_DURATION_SEC
 from .input_entities import Event, Rule2, Strategy
@@ -182,27 +183,47 @@ class StrategyHandler:
         StrategyHandler._make_activity_between_events(window, str(window_keys), activities, strategy, metrics)
         return ActivitiesByStrategy(strategy, activities, metrics)
 
+
+    WindowKey = namedtuple('WindowKey', ['keys', 'values'])
+
     @staticmethod
-    def _add_event_to_window(event: Event, window_key: Tuple, windows: Dict[Tuple, List[Event]], metrics: Metrics):
+    def _add_event_to_window(event: Event, window_key: 'StrategyHandler.WindowKey',
+                             windows: Dict['StrategyHandler.WindowKey', List[Event]], metrics: Metrics):
         window = windows.setdefault(window_key, [])
         # TODO revert metrics.incr(f'events with data {window_key}', event.duration.seconds)
         window.append(event)
 
     @staticmethod
-    def _separate_events_per_windows(events: List[Event], group_by_keys: Set[Tuple[str]], metrics: Metrics)\
-            -> Dict[Tuple, List[Event]]:
+    def _separate_events_per_windows(events: List[Event], group_by_keys: List[Tuple[str]], metrics: Metrics)\
+            -> Dict['StrategyHandler.WindowKey', List[Event]]:
+        """
+        Separates list of events into windows basing on the data inside.
+        :param events: List of events to separate.
+        :param group_by_keys: Set of keys in event's "data" field to use for making windows.
+        :param metrics: Metrics object to fill with actions inside.
+        :return: Resulting windows with keys equal to event's "data" field values chosen as window identifiers
+        and values as correspondings lists of event's.
+        """
         # First collect all possible windows.
-        windows: Dict[Tuple, List[Event]] = {}
-        for event in events:
-            if group_by_keys:
+        windows: Dict[StrategyHandler.WindowKey, List[Event]] = {}
+        if group_by_keys:
+            for event in events:
                 # If way to make windows is specified they make window per each group of keys.
+                is_added = False
                 for key_tuple in group_by_keys:
-                    window_key = tuple((key, event.data.get(key)) for key in key_tuple)
-                    StrategyHandler._add_event_to_window(event, window_key, windows, metrics)
-            else:
-                # If way to make windows is not specified then build window key as tuple of data key-value pairs.
-                window_key = [(k, v) for k, v in event.data.items()]
-                window_key = sum(window_key, ())
+                    if all(key in event.data for key in key_tuple):
+                        window_key = StrategyHandler.WindowKey(key_tuple, tuple(event.data[key] for key in key_tuple))
+                        StrategyHandler._add_event_to_window(event, window_key, windows, metrics)
+                        is_added = True
+                        break
+                # If wasn't added then it is either warning about misconfiguration or warning about bad event data.
+                if not is_added:
+                    metrics.incr('events without data containing any in_group_by_keys', event.duration.total_seconds())
+        else:
+            # If way to make windows is not specified then build window key as tuple of data key-value pairs.
+            for event in events:
+                # window_key = [(k, v) for k, v in event.data.items()]
+                window_key = StrategyHandler.WindowKey(None, event.data)
                 StrategyHandler._add_event_to_window(event, window_key, windows, metrics)
         # Next check windows for the "same events" entries which may appear if group_by_keys contains few entries
         # and some set of events have the same value for both keys.
@@ -235,7 +256,7 @@ class StrategyHandler:
     @staticmethod
     def _handle_events_few_sliding_windows(strategy: Strategy, events: List[Event], metrics: Metrics)\
             -> ActivitiesByStrategy:
-        # Produces Activities covering all "same data" events.
+        """ Produces Activities covering all "same data" events. """
         windows: Dict[Tuple, List[Event]] = StrategyHandler._separate_events_per_windows(
             events, strategy.in_group_by_keys, metrics
         )
@@ -248,7 +269,7 @@ class StrategyHandler:
     @staticmethod
     def _handle_events_few_sliding_windows_by_density(strategy: Strategy, events: List[Event], metrics: Metrics)\
             -> ActivitiesByStrategy:
-        # Produces overlapping Activities basing on theirs density on time scale.
+        """ Produces overlapping Activities basing on theirs density on time scale. """
         windows: Dict[Tuple, List[Event]] = StrategyHandler._separate_events_per_windows(
             events, strategy.in_group_by_keys, metrics
         )

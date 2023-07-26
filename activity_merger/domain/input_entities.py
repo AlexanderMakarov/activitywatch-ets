@@ -228,11 +228,15 @@ class Strategy:
     not overlapping later on, but on the "in_*" stage better to have as much as possible guesses about
     probable activities.
     """
-    in_group_by_keys: Set[Tuple[str]]
+    in_group_by_keys: List[Tuple[str]]
     """
-    Some events may represent one activity if the have the same value in one or few `data` keys.
-    For example for JIRA bucket events with the same value in "ticket" key may represent the same actvity.
-    Here need to add all combination of keys in `data` field which would contribute to one activity per value(s).
+    Keys to separte events into the windows/activities.
+    Some events may represent one activity if the have the same value in the only one or few `data` keys,
+    if take into the account all fields then events will be unique.
+    For example for JIRA bucket events with the same value in "ticket" key may represent the same actvity -
+    aka "worked on the ticket X".
+    Note that order of tuples in the list is important - event will be added to the activity/window with
+    values for the key(s) from the 2nd tuple if its "data" doesn't have keys from the 1st tuple and so on.
     """
 
     out_self_sufficient: bool

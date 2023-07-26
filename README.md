@@ -123,6 +123,7 @@ TODO:
 - [x] Write tests for merger with Stopwatch events involvement.
 - [x] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Change licence.
+- [ ] Separate "strategy activity" and "result activity".
 - [ ] Add "git exporter".
 - [ ] For `Strategy.in_group_by_keys` need an ability specify "if key doesn't exist then use this", not both. IDEA case.
 - [ ] Complete get_activities.py

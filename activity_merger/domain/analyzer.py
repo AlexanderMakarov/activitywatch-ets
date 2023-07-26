@@ -819,10 +819,9 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
                 remained_activities, debug_dict, strategy.bucket_prefix, debug_buckets_cnt, metrics
             )
 
-    # TODO fix:
-    # ? wrong activities in result - too much "Can't find basic activity".
     # TODO:
     # - update merger.py to populate "strict_start_time" and "strict_end_time" for `out_activity_boundaries` behavior.
+    # - Separate "strategy activity" and "result activity".
     # + use `out_activity_name` to sanitize activity name.
     # + multiple debug buckets for "window" strategy (for all with in_activities_may_overlap=true) to avoid overlaps.
 
