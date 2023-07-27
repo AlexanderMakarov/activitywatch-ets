@@ -665,10 +665,10 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
             dominant_names.append(activity.description)
         else:
             other_names.append(activity.description)
-    description = ", ".join(dominant_names)
+    description = "; ".join(dominant_names)
     if len(description) < 1:
         metrics.incr("result activities without distinct name", ra_duration)
-        description = ", ".join(other_names)
+        description = "; ".join(other_names)
     else:
         metrics.incr(f"result activities with {len(dominant_names)} distinct names", ra_duration)
 

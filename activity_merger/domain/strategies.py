@@ -126,13 +126,31 @@ class StrategyHandler:
                 # TODO support rules for this case.
                 return StrategyHandler._handle_events_one_sliding_window(strategy, events, metrics)
 
+    WindowKey = namedtuple('WindowKey', ['keys', 'values'])
+    """ Key for a window of events. """
+
+    @staticmethod
+    def _window_key_to_activity_description(window_key: 'StrategyHandler.WindowKey') -> str:
+        if window_key.keys:
+            return ", ".join(f'{k}={v}' for k, v in zip(window_key.keys, window_key.values))
+        elif isinstance(window_key.values, dict):
+            return ", ".join(f'{k}={v}' for k, v in window_key.values.items())
+        else:
+            return str(window_key.values)
+
     @staticmethod
     def _handle_events_event_is_activity(strategy: Strategy, events: List[Event], metrics: Metrics) -> ActivitiesByStrategy:
         # Produces Activity per each event.
         activities: List[Activity] = []
         for event in events:
-            activity = Activity(event.timestamp, event.timestamp + event.duration, [event], str(event.data),
-                                event.duration.seconds, strategy)
+            activity = Activity(
+                event.timestamp,
+                event.timestamp + event.duration,
+                [event],
+                StrategyHandler._window_key_to_activity_description(StrategyHandler.WindowKey(None, event.data)),
+                event.duration.seconds,
+                strategy
+            )
             metrics.incr('activities', event.duration.seconds)
             activities.append(activity)
         return ActivitiesByStrategy(strategy, activities, metrics)
@@ -157,34 +175,51 @@ class StrategyHandler:
         # Produces Activity for all consequint events with the same data.
         activities: List[Activity] = []
         window: List[Event] = []
-        window_keys: Set = None
+        # Prepare variable to store keys in event's 'data' by which search similar events.
+        window_kv_pairs: Set[Tuple[str, str]] = set()
+        # Start iterate over events with collecting windows.
         for event in events:
-            keys = set()
+            kv_pairs: Set[Tuple[str, str]] = set()
             if strategy.in_group_by_keys:
                 for key_tuple in strategy.in_group_by_keys:
-                    keys.add(tuple((key, event.data.get(key)) for key in key_tuple))
+                    if all(key in event.data for key in key_tuple):
+                        kv_pairs.update((k, v,) for k, v in event.data.items() if k in key_tuple)
+                        break
             else:
-                keys.add(str(event.data))
-            # If event equal to previous then just add event to window.
-            keys_intersection = None if (window_keys is None) else window_keys.intersection(keys)
-            if keys_intersection:
+                kv_pairs.update((k, v,) for k, v in event.data.items())
+            # If kv_pairs wasn't found then it is either warning about misconfiguration or warning about bad event data.
+            if not kv_pairs:
+                metrics.incr('events without data containing any in_group_by_keys', event.duration.total_seconds())
+                continue
+            # If event has keys and corresponding values equal to window's then add event to the window.
+            if kv_pairs == window_kv_pairs:
                 window.append(event)
-                window_keys = keys_intersection  # Leave only part where first 2 events intersect.
                 metrics.incr('consecutive events with same data', event.duration.seconds)
                 continue
             # Otherwise if window exists then create Activity from it.
             if window:
-                StrategyHandler._make_activity_between_events(window, str(window_keys), activities, strategy, metrics)
+                window_key = StrategyHandler.WindowKey(*zip(*window_kv_pairs))
+                StrategyHandler._make_activity_between_events(
+                    window,
+                    StrategyHandler._window_key_to_activity_description(window_key),
+                    activities,
+                    strategy,
+                    metrics,
+                )
                 window = []
             # In any case prepare next window.
-            window_keys = keys
+            window_kv_pairs = kv_pairs
             window.append(event)
         # Handle last window.
-        StrategyHandler._make_activity_between_events(window, str(window_keys), activities, strategy, metrics)
+        if window:
+            StrategyHandler._make_activity_between_events(
+                window,
+                StrategyHandler._window_key_to_activity_description(StrategyHandler.WindowKey(*zip(*window_kv_pairs))),
+                activities,
+                strategy,
+                metrics,
+            )
         return ActivitiesByStrategy(strategy, activities, metrics)
-
-
-    WindowKey = namedtuple('WindowKey', ['keys', 'values'])
 
     @staticmethod
     def _add_event_to_window(event: Event, window_key: 'StrategyHandler.WindowKey',
@@ -257,13 +292,19 @@ class StrategyHandler:
     def _handle_events_few_sliding_windows(strategy: Strategy, events: List[Event], metrics: Metrics)\
             -> ActivitiesByStrategy:
         """ Produces Activities covering all "same data" events. """
-        windows: Dict[Tuple, List[Event]] = StrategyHandler._separate_events_per_windows(
+        windows: Dict[StrategyHandler.WindowKey, List[Event]] = StrategyHandler._separate_events_per_windows(
             events, strategy.in_group_by_keys, metrics
         )
         # Make activities from the each window.
         activities = []
         for key, events in windows.items():
-            StrategyHandler._make_activity_between_events(events, str(key), activities, strategy, metrics)
+            StrategyHandler._make_activity_between_events(
+                events,
+                StrategyHandler._window_key_to_activity_description(key),
+                activities,
+                strategy,
+                metrics
+            )
         return ActivitiesByStrategy(strategy, activities, metrics)
 
     @staticmethod
@@ -288,19 +329,35 @@ class StrategyHandler:
                 prev_event = event
             if len(gaps) <= 0:
                 # If there are no gaps then just create one activity from all events.
-                StrategyHandler._make_activity_between_events(events, str(key), activities, strategy, metrics)
+                StrategyHandler._make_activity_between_events(
+                    events,
+                    StrategyHandler._window_key_to_activity_description(key),
+                    activities,
+                    strategy,
+                    metrics
+                )
                 continue
             # Otherwise iterate gaps to find out those which are bigger than minimal activity duration.
             # Make activities between them.
             last_activity_event_index = 0
             for gap in gaps:
-                # If gap bigger than minimal activity duration then decicide that it is separate activity.
+                # If gap bigger than minimal activity duration then it is a separate activity.
                 if gap[1] >= MIN_DURATION_SEC:
-                    StrategyHandler._make_activity_between_events(events[last_activity_event_index:gap[0]], str(key),
-                                                                  activities, strategy, metrics)
+                    StrategyHandler._make_activity_between_events(
+                        events[last_activity_event_index:gap[0]],
+                        StrategyHandler._window_key_to_activity_description(key),
+                        activities,
+                        strategy,
+                        metrics
+                    )
                     last_activity_event_index = gap[0]
             # Here we have activities made up to the last big gap. Make activity from remained events.
             if last_activity_event_index < len(events) - 1:
-                StrategyHandler._make_activity_between_events(events[last_activity_event_index:-1], str(key),
-                                                              activities, strategy, metrics)
+                StrategyHandler._make_activity_between_events(
+                    events[last_activity_event_index:-1],
+                    StrategyHandler._window_key_to_activity_description(key),
+                    activities,
+                    strategy,
+                    metrics
+                )
         return ActivitiesByStrategy(strategy, activities, metrics)
