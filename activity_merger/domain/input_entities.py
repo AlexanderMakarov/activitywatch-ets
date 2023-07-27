@@ -208,6 +208,9 @@ class Rule2:
 
 @dataclasses.dataclass
 class Strategy:
+    name: str
+    """Name of source to be provided into resulting activity description. Short."""
+
     bucket_prefix: str
     """Prefix for buckets to analyze with this activity."""
 
@@ -255,21 +258,25 @@ class Strategy:
     """
     [alone, auxiliary] - means whether activity name is trustable.
     """
-    # TODO add in_key_value_skip, (like window=unknown)
+
+    __properties = [
+        'bucket_prefix', 
+        'in_each_event_is_activity', 
+        'in_events_density_matters', 
+        'in_activities_may_overlap',
+        'in_group_by_keys',
+        'out_self_sufficient',
+        'out_only_not_afk',
+        'out_activity_boundaries',
+        'out_activity_name'
+    ]
 
     def __repr__(self) -> str:
-        desc = 'Strategy(' + \
-            '\n  bucket_prefix = ' + self.bucket_prefix + \
-            '\n  in_each_event_is_activity = ' + str(self.in_each_event_is_activity) + \
-            '\n  in_events_density_matters = ' + str(self.in_events_density_matters) + \
-            '\n  in_activities_may_overlap = ' + str(self.in_activities_may_overlap) + \
-            '\n  in_group_by_keys = ' + str(self.in_group_by_keys) + \
-            '\n  out_self_sufficient = ' + str(self.out_self_sufficient) + \
-            '\n  out_only_not_afk = ' + str(self.out_only_not_afk) + \
-            '\n  out_activity_boundaries = ' + str(self.out_activity_boundaries) + \
-            '\n  out_activity_name = ' + str(self.out_activity_name) + \
-            '\n)'
-        return desc
+        desc = [f"Strategy '{self.name}':"]
+        for prop in Strategy.__properties:
+            desc.append("  {0} = {1}".format(prop, getattr(self, prop)))
+        desc.append(")")
+        return '\n'.join(desc)
 
 
 class EventKeyHandler:

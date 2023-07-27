@@ -130,16 +130,19 @@ class StrategyHandler:
     """ Key for a window of events. """
 
     @staticmethod
-    def _window_key_to_activity_description(window_key: 'StrategyHandler.WindowKey') -> str:
+    def _window_key_to_activity_description(strategy_name: str, window_key: 'StrategyHandler.WindowKey') -> str:
+        desc = strategy_name + ": "
         if window_key.keys:
-            return ", ".join(f'{k}={v}' for k, v in zip(window_key.keys, window_key.values))
+            desc += ", ".join(f'{k}={v}' for k, v in zip(window_key.keys, window_key.values))
         elif isinstance(window_key.values, dict):
-            return ", ".join(f'{k}={v}' for k, v in window_key.values.items())
+            desc += ", ".join(f'{k}={v}' for k, v in window_key.values.items())
         else:
-            return str(window_key.values)
+            desc += str(window_key.values)
+        return desc
 
     @staticmethod
-    def _handle_events_event_is_activity(strategy: Strategy, events: List[Event], metrics: Metrics) -> ActivitiesByStrategy:
+    def _handle_events_event_is_activity(strategy: Strategy, events: List[Event], metrics: Metrics)\
+            -> ActivitiesByStrategy:
         # Produces Activity per each event.
         activities: List[Activity] = []
         for event in events:
@@ -147,7 +150,8 @@ class StrategyHandler:
                 event.timestamp,
                 event.timestamp + event.duration,
                 [event],
-                StrategyHandler._window_key_to_activity_description(StrategyHandler.WindowKey(None, event.data)),
+                StrategyHandler._window_key_to_activity_description(strategy.name,
+                                                                    StrategyHandler.WindowKey(None, event.data)),
                 event.duration.seconds,
                 strategy
             )
@@ -201,7 +205,7 @@ class StrategyHandler:
                 window_key = StrategyHandler.WindowKey(*zip(*window_kv_pairs))
                 StrategyHandler._make_activity_between_events(
                     window,
-                    StrategyHandler._window_key_to_activity_description(window_key),
+                    StrategyHandler._window_key_to_activity_description(strategy.name, window_key),
                     activities,
                     strategy,
                     metrics,
@@ -214,7 +218,8 @@ class StrategyHandler:
         if window:
             StrategyHandler._make_activity_between_events(
                 window,
-                StrategyHandler._window_key_to_activity_description(StrategyHandler.WindowKey(*zip(*window_kv_pairs))),
+                StrategyHandler._window_key_to_activity_description(strategy.name,
+                                                                    StrategyHandler.WindowKey(*zip(*window_kv_pairs))),
                 activities,
                 strategy,
                 metrics,
@@ -300,7 +305,7 @@ class StrategyHandler:
         for key, events in windows.items():
             StrategyHandler._make_activity_between_events(
                 events,
-                StrategyHandler._window_key_to_activity_description(key),
+                StrategyHandler._window_key_to_activity_description(strategy.name, key),
                 activities,
                 strategy,
                 metrics
@@ -331,7 +336,7 @@ class StrategyHandler:
                 # If there are no gaps then just create one activity from all events.
                 StrategyHandler._make_activity_between_events(
                     events,
-                    StrategyHandler._window_key_to_activity_description(key),
+                    StrategyHandler._window_key_to_activity_description(strategy.name, key),
                     activities,
                     strategy,
                     metrics
@@ -345,7 +350,7 @@ class StrategyHandler:
                 if gap[1] >= MIN_DURATION_SEC:
                     StrategyHandler._make_activity_between_events(
                         events[last_activity_event_index:gap[0]],
-                        StrategyHandler._window_key_to_activity_description(key),
+                        StrategyHandler._window_key_to_activity_description(strategy.name, key),
                         activities,
                         strategy,
                         metrics
@@ -355,7 +360,7 @@ class StrategyHandler:
             if last_activity_event_index < len(events) - 1:
                 StrategyHandler._make_activity_between_events(
                     events[last_activity_event_index:-1],
-                    StrategyHandler._window_key_to_activity_description(key),
+                    StrategyHandler._window_key_to_activity_description(strategy.name, key),
                     activities,
                     strategy,
                     metrics
