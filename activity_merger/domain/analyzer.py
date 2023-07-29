@@ -475,10 +475,8 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
 
 
 def _add_debug_event(debug_dict: Dict[str, List[Event]], bucket_id: str, timestamp: datetime.datetime,
-                     duration: datetime.timedelta, description: str, events_count: int, strategy_desc: str = None):
+                     duration: datetime.timedelta, description: str, events_count: int):
     data = {'desc': description, 'events_count': str(events_count)}  # Note that ActivityWatch UI shows only strings.
-    if strategy_desc:
-        data['strategy_desc'] = strategy_desc
     debug_dict.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
 
 
