@@ -1,20 +1,21 @@
-import dataclasses
 import collections
+import dataclasses
 import datetime
 from operator import attrgetter
-from typing import List, Dict, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
 import intervaltree
 
-from .strategies import ActivitiesByStrategy
-
-from ..config.config import CURRENT_TIMEZONE, LOG, AFK_RULE_PRIORITY, WATCHDOG_RULE_PRIORITY,\
-                            TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS, DEBUG_BUCKET_PREFIX, MIN_DURATION_SEC
+from ..config.config import (AFK_RULE_PRIORITY, CURRENT_TIMEZONE,
+                             DEBUG_BUCKET_PREFIX, LOG, MIN_DURATION_SEC,
+                             TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,
+                             WATCHDOG_RULE_PRIORITY)
+from ..helpers.helpers import (event_data_to_str, event_to_str, seconds_to_int_timedelta)
+from .input_entities import Event, Rule2, Strategy, ActivityBoundaries
 from .interval import Interval, intervals_duration
-from .input_entities import Event, Rule2, Strategy
 from .metrics import Metrics
-from .output_entities import RuleResult, Activity, AnalyzerResult
-from ..helpers.helpers import seconds_to_int_timedelta, event_data_to_str, event_to_str
-
+from .output_entities import (Activity, ActivityByStrategy, AnalyzerResult, RuleResult)
+from .strategies import ActivitiesByStrategy
 
 BUCKET_AFK_PREFIX = "aw-watcher-afk"
 BUCKET_STOPWATCH_PREFIX = "aw-stopwatch"
@@ -82,7 +83,7 @@ class RuleResultsWindow:
         end_time = self.rule_results[-1].intervals[-1].end_time
         tmp = set(x.description for x in self.rule_results)
         description = ", ".join(sorted(tmp))
-        return Activity(start_time, end_time, list(self.rule_results), description, self.duration, None)
+        return Activity(start_time, end_time, list(self.rule_results), description)
 
 
 def _is_new_activity(window: RuleResultsWindow, rule_result: RuleResult) -> bool:
@@ -337,51 +338,58 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
         }
     )
 
+# TODO remove above.
 
-def _cut_activity_start(activity: Activity, point: datetime.datetime) -> Activity:
+
+def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
     """
     Cuts start from activity and returns only tail after specified point.
     """
     events = [x for x in activity.events if (x.timestamp + x.duration) > point]  # Keep "border" event.
-    return Activity(
-        start_time=point,
-        end_time=activity.end_time,
-        events=events,
-        description=activity.description,
+    return ActivityByStrategy(
+        suggested_start_time=point,
+        suggested_end_time=activity.suggested_end_time,
+        max_start_time=max(point, activity.max_start_time),
+        min_end_time=activity.min_end_time,
         duration=sum(x.duration.seconds for x in events),
+        events=events,
+        grouping_data=activity.grouping_data,
         strategy=activity.strategy,
     )
 
 
-def _cut_activity_end(activity: Activity, point: datetime.datetime) -> Activity:
+def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
     """
     Cuts end from activity and returns only head before specified point.
     """
     events = [x for x in activity.events if x.timestamp < point]  # Keep "border" event.
-    return Activity(
-        start_time=activity.start_time,
-        end_time=point,
-        events=events,
-        description=activity.description,
+    return ActivityByStrategy(
+        suggested_start_time=activity.suggested_start_time,
+        suggested_end_time=point,
+        max_start_time=activity.max_start_time,
+        min_end_time=min(point, activity.min_end_time),
         duration=sum(x.duration.seconds for x in events),
+        events=events,
+        grouping_data=activity.grouping_data,
         strategy=activity.strategy,
     )
 
 
-def _split_activity(activity: Activity, start_point: datetime.datetime, end_point: datetime.datetime)\
-        -> List[Activity]:
+def _split_activity(activity: ActivityByStrategy, start_point: datetime.datetime, end_point: datetime.datetime)\
+        -> List[ActivityByStrategy]:
     """
-    Cuts activity on 2 parts and returns 2 new activities:
+    Cuts activity on 2 parts and returns 2 new 'ActivityByStrategy'-s:
     - from the start of initial activity to start_point,
     - from end_point to the end of initial activity.
     """
     return [_cut_activity_end(activity, start_point), _cut_activity_start(activity, end_point)]
 
 
-def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: intervaltree.IntervalTree,
-                            metrics: Metrics, name_of_tree: str) -> List[Activity]:
+def _exclude_tree_intervals(activities: List[ActivityByStrategy], boundaries: str, tree: intervaltree.IntervalTree,
+                            metrics: Metrics, name_of_tree: str) -> List[ActivityByStrategy]:
     """
     Cuts different parts of activities which overlap with intervals in the specified tree.
+    Note that max_start_time and min_end_time properties of `ActivityByStrategy` aren't edited here.
     :param activities: List of activities to cut tree intervals from.
     :param boundaries: `Strategy` boundaries.
     :param tree: Tree with intervals to cut activities by.
@@ -391,17 +399,18 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
     """
     may_cut_start = boundaries != 'start'
     may_cut_end = boundaries != 'end'
-    result: List[Activity] = []
+    result: List[ActivityByStrategy] = []
 
     # Iterate until there are "not checked" activities in the queue.
-    activities_queue: List[Activity] = list(activities)
+    activities_queue: List[ActivityByStrategy] = list(activities)
     while len(activities_queue) > 0:
         activity = activities_queue.pop()
         # Search all intervals, there is no "first_overlap" method. Completes in O(m + k*log n) time, where:
         # n = size of the tree
         # m = number of matches
         # k = size of the search range ?
-        intervals: List[intervaltree.Interval] = tree.overlap(activity.start_time, activity.end_time)
+        intervals: List[intervaltree.Interval] = tree.overlap(activity.suggested_start_time,
+                                                              activity.suggested_end_time)
         # If current activity doesn't overlap with tree then put it into the result and proceed with the queue.
         if len(intervals) == 0:
             result.append(activity)
@@ -409,19 +418,19 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
         # Handle only first (and random). Because in result activity would be either skipped or modified.
         # In "modified" case need to search overlaps again anyway.
         interval = intervals.pop()
-        if interval.begin <= activity.start_time:
+        if interval.begin <= activity.suggested_start_time:
             # Interval starts before activity.
             # Check activity is covered by interval completely.
-            if interval.end >= activity.end_time:
+            if interval.end >= activity.suggested_end_time:
                 metrics.incr('activities removed by ' + name_of_tree, activity.duration)
                 continue
             # Check activity can't be chopped at start.
             if not may_cut_start:
                 metrics.incr('activities removed because impossible to cut on start by ' + name_of_tree,
-                                activity.duration)
+                             activity.duration)
                 continue
             # Check (second time actually) interval overlaps activity.
-            if interval.end < activity.end_time:
+            if interval.end < activity.suggested_end_time:
                 prev_duration = activity.duration
                 tmp = _cut_activity_start(activity, interval.end)
                 activities_queue.append(tmp)
@@ -430,15 +439,15 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
             else:
                 raise NotImplementedError(f'Inner error with {interval} actually not overlapping with'
                                           f' {activity}.')
-        elif interval.end >= activity.end_time:
+        elif interval.end >= activity.suggested_end_time:
             # Interval ends after activity.
             # Check activity can't be chopped at end.
             if not may_cut_end:
                 metrics.incr('activities removed because impossible to cut on end by ' + name_of_tree,
-                                activity.duration)
+                             activity.duration)
                 continue
             # Check (second time actually) activity end is overlapped by interval.
-            if interval.begin > activity.start_time:
+            if interval.begin > activity.suggested_start_time:
                 prev_duration = activity.duration
                 tmp = _cut_activity_end(activity, interval.begin)
                 activities_queue.append(tmp)  # Due to interval was random, activity need to check one more time.
@@ -471,7 +480,7 @@ def _exclude_tree_intervals(activities: List[Activity], boundaries: str, tree: i
                 raise NotImplementedError('Inner error when impossible to cut both start and end of activity'
                                           f' {activity} by {interval}')
     # Sort result because parts of long activities may be placed into it randomly.
-    return sorted(result, key=lambda x: x.start_time)
+    return sorted(result, key=lambda x: x.suggested_start_time)
 
 
 def _add_debug_event(debug_dict: Dict[str, List[Event]], bucket_id: str, timestamp: datetime.datetime,
@@ -480,10 +489,11 @@ def _add_debug_event(debug_dict: Dict[str, List[Event]], bucket_id: str, timesta
     debug_dict.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
 
 
-def _add_debug_events_to_not_overlap(activites: List[Activity], debug_dict: Dict,
+def _add_debug_events_to_not_overlap(activites: List[ActivityByStrategy], debug_dict: Dict,
                                      bucket_name: str, debug_buckets_cnt: int, metrics: Metrics) -> int:
     """
     Adds debug events to the given dictionary in few buckets where events are not overlapping.
+    Uses "suggested" time boundaries, not "minimal" ones.
     :param activites: Activities to add debug events from.
     :param debug_dict: Dictionary to add debug events to.
     :param bucket_name: Part of name for debug buckets.
@@ -491,8 +501,8 @@ def _add_debug_events_to_not_overlap(activites: List[Activity], debug_dict: Dict
     :param debug_buckets_cnt: Counter of debug buckets.
     :return: Updated counter of debug buckets.
     """
-    activites = sorted(activites, key=lambda x: x.start_time)
-    groups: List[List[Activity]] = []
+    activites = sorted(activites, key=lambda x: x.suggested_start_time)
+    groups: List[List[ActivityByStrategy]] = []
     # Seaparate activities by groups.
     for activity in activites:
         found_group = False
@@ -502,8 +512,8 @@ def _add_debug_events_to_not_overlap(activites: List[Activity], debug_dict: Dict
             # Need to pack events as dense as possible - activities may overlap.
             for existing_activity in group:
                 # Check activities overlap.
-                if activity.end_time >= existing_activity.start_time \
-                        and activity.start_time <= existing_activity.end_time:
+                if activity.suggested_end_time >= existing_activity.suggested_start_time \
+                        and activity.suggested_start_time <= existing_activity.suggested_end_time:
                     is_overlapping = True
                     break
             if not is_overlapping:
@@ -521,9 +531,10 @@ def _add_debug_events_to_not_overlap(activites: List[Activity], debug_dict: Dict
             _add_debug_event(
                 debug_dict,
                 debug_bucket_prefix,
-                activity.start_time,
-                activity.end_time - activity.start_time,  # Use end-start time, not duration by events.
-                activity.description,
+                activity.suggested_start_time,
+                # For debug events need to use end-start time, not duration by events.
+                activity.suggested_end_time - activity.suggested_start_time,
+                str(activity.grouping_data),
                 len(activity.events),
             )
             metrics.incr('debug events in ' + debug_bucket_prefix, activity.duration)
@@ -549,6 +560,7 @@ def _find_basic_activity_interval(candidates_tree: intervaltree.IntervalTree, cu
     if not candidates_for_ba:
         # If nothing at right then stop iterating - no more actvities remained, we are done.
         return None
+    # TODO enhance with max_start_time and min_end_time properties of ActivityByStrategy.
     # Try find BA as:
     # - started on the `current_start_point`,
     # - with `out_activity_boundaries` "whole" or "start",
@@ -581,7 +593,7 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
     overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)  # Includes BA.
     LOG.info("Basic activity is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
     ra_events = ba_interval.data.events
-    overlapping_activities: List[Activity] = [ba_interval.data]
+    overlapping_activities: List[ActivityByStrategy] = [ba_interval.data]
     for interval in overlapping_intervals:
         if interval == ba_interval:
             continue
@@ -596,14 +608,14 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
         boundaries = activity.strategy.out_activity_boundaries
         # Check BA overlaps the start of the activity.
         if ba_interval.contains_point(interval.begin):
-            if boundaries == "start":
+            if boundaries == ActivityBoundaries.START:
                 # If activity is `out_activity_boundaries=start` then concatenate data from it into BA.
                 ra_events.extend(activity.events)
                 overlapping_activities.append(activity)
                 candidates_tree.remove(interval)
                 metrics.incr('activities absorbed by basic activity at the start',
                                 interval.length().total_seconds())
-            elif boundaries == "whole":
+            elif boundaries == ActivityBoundaries.WHOLE:
                 # If activity is `out_activity_boundaries=whole` then split activity,
                 # and concatenate last part with BA. First part is not needed anyway.
                 split_activity = _cut_activity_end(activity, ba_interval.end)
@@ -611,7 +623,7 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
                 overlapping_activities.append(split_activity)
                 candidates_tree.remove(interval)
                 # Note that tail of the activity may be used for the next basic/candidate activity.
-                candidates_tree.addi(ba_interval.end, split_activity.end_time, split_activity)
+                candidates_tree.addi(ba_interval.end, split_activity.suggested_end_time, split_activity)
                 metrics.incr('activities enhancing basic activity by the start', split_activity.duration)
             else:
                 # If activity is `out_activity_boundaries=end` then skip it.
@@ -620,13 +632,13 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
             continue
         # Check BA overlaps the end of activity.
         if ba_interval.contains_point(interval.end):
-            if boundaries == "end":
+            if boundaries == ActivityBoundaries.END:
                 # If activity is `out_activity_boundaries=end` then concatenate data from it into BA.
                 ra_events.extend(activity.events)
                 overlapping_activities.append(activity)
                 candidates_tree.remove(interval)
                 metrics.incr('activities absorbed by basic activity at the end', interval.length().total_seconds())
-            elif boundaries == "whole":
+            elif boundaries == ActivityBoundaries.WHOLE:
                 # If activity is `out_activity_boundaries=whole` then split activity,
                 # and concatenate first part with BA.
                 split_activity = _cut_activity_start(activity, ba_interval.begin)
@@ -641,14 +653,14 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
             continue
         # If BA itself is placed inside actvity then concatenate middle of it
         # and only if it is `out_activity_boundaries=whole`.
-        if boundaries == "whole":
+        if boundaries == ActivityBoundaries.WHOLE:
             tmp = _cut_activity_start(activity, ba_interval.begin)
             tmp = _cut_activity_end(tmp, ba_interval.end)
             ra_events.extend(tmp.events)
             overlapping_activities.append(tmp)
             candidates_tree.remove(interval)
             # Note that tail of the activity may be used for the next basic/candidate activity.
-            candidates_tree.addi(ba_interval.end, tmp.end_time, tmp)
+            candidates_tree.addi(ba_interval.end, tmp.suggested_end_time, tmp)
             metrics.incr('activities enhancing basic activity by the middle', ba_interval.length().total_seconds())
             continue
         # Skip all other cases.
@@ -658,11 +670,12 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
     # Find right description for the resulting activity.
     dominant_names = []
     other_names = []
+    # TODO set name properly.
     for activity in overlapping_activities:
         if activity.strategy.out_activity_name == "alone":
-            dominant_names.append(activity.description)
+            dominant_names.append(str(activity.grouping_data))
         else:
-            other_names.append(activity.description)
+            other_names.append(str(activity.grouping_data))
     description = "; ".join(dominant_names)
     if len(description) < 1:
         metrics.incr("result activities without distinct name", ra_duration)
@@ -677,8 +690,6 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
         ba_interval.end,
         ra_events,
         description,
-        ra_duration,
-        ba_interval.data.strategy,  # Set strategy from the base activity.
     )
 
 
@@ -730,9 +741,9 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             continue
         # Add to afk_tree only AFK activities. Expect that they are not intersect. TODO support.
         for activity in strategy_result.activities:
-            status = activity.events[0].data['status']
+            status = activity.events[0].data['status']  # TODO get it from ActivityByStrategy.grouping_data
             if status == 'afk':
-                afk_tree.addi(activity.start_time, activity.end_time, activity)
+                afk_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
                 metrics.incr('afk intervals', activity.duration)
             else:
                 metrics.incr('not afk intervals', activity.duration)
@@ -810,7 +821,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
         # Iterate remained activities and put them into common candidates tree and into per-strategy tree if need.
         # Note that activities here are not in order!
         for activity in remained_activities:
-            candidates_tree.addi(activity.start_time, activity.end_time, activity)
+            candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
         # Add debug events and buckets if need.
         if is_add_debug_buckets:
             debug_buckets_cnt = _add_debug_events_to_not_overlap(
@@ -819,7 +830,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
 
     # TODO:
     # - update merger.py to populate "strict_start_time" and "strict_end_time" for `out_activity_boundaries` behavior.
-    # - Separate "strategy activity" and "result activity".
+    # + Separate "strategy activity" and "result activity".
     # + use `out_activity_name` to sanitize activity name.
     # + multiple debug buckets for "window" strategy (for all with in_activities_may_overlap=true) to avoid overlaps.
 

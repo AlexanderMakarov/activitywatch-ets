@@ -30,9 +30,42 @@ class RuleResult:
 
 
 @dataclasses.dataclass
+class ActivityByStrategy:  # TODO move into other file.
+    """
+    Group of events aggregated for the specific strategy.
+    """
+
+    suggested_start_time: datetime.datetime
+    """Suggested start time of the activity."""
+    suggested_end_time: datetime.datetime
+    """Suggested end time of the activity."""
+    max_start_time: datetime.datetime
+    """Maximum start time of the activity possible. Later then 'start time'."""
+    min_end_time: datetime.datetime
+    """Minimum end time of the activity possible. Earlier then 'end time'."""
+    duration: float
+    """
+    Total duration of the activity in seconds measured by events.
+    Note that events may be placed with gaps between.
+    """
+    events: List[Event]
+    """List of (dominant) events the activity consists of."""
+    grouping_data: str
+    """Object describing why enclosed events are aggregated into activity."""
+    strategy: Strategy
+    """ Strategy used to create this activity."""
+
+    def __repr__(self) -> str:
+        return f"{seconds_to_int_timedelta(self.duration)},"\
+               f" {from_start_to_end_to_str(self.suggested_start_time, self.suggested_end_time)}"\
+               f" (min {from_start_to_end_to_str(self.max_start_time, self.min_end_time)}),"\
+               f" {len(self.events):>3} {self.strategy.name} events grouped by {self.grouping_data}."
+
+
+@dataclasses.dataclass
 class Activity:
     """
-    One or few `RuleResult`-s separated as independent activity. See description per field.
+    User activity assembled basing on ActivityWatch events.
     """
 
     start_time: datetime.datetime
@@ -43,17 +76,14 @@ class Activity:
     """List of (dominant) events the activity consists of."""
     description: str
     """Human-friendly description of the activity."""
-    duration: float
-    """
-    Total duration of the activity in seconds.
-    Note that 'end_time - start_time' doesn't work due to possible gaps between intervals.
-    """
-    strategy: Strategy
-    """ Strategy used to create the activity."""
+
+    @property
+    def duration(self) -> datetime.timedelta:
+        """Duration of the activity."""
+        return (self.end_time - self.start_time)
 
     def __repr__(self) -> str:
-        return f"{seconds_to_int_timedelta((self.duration))} "\
-               f"({from_start_to_end_to_str(self)}) {self.description}"
+        return f"{self.duration} ({from_start_to_end_to_str(self.start_time, self.end_time)}) {self.description}"
 
 
 @dataclasses.dataclass
@@ -92,7 +122,7 @@ class AnalyzerResult:
                      "\n  ".join(dumb_activities))
         # Print resulting activities as is. Order is important here.
         activities_string = "\n  ".join(str(x) for x in self.activities)
-        total_duration = datetime.timedelta(seconds=sum(x.duration for x in self.activities))
+        total_duration = sum((x.duration for x in self.activities), start=datetime.timedelta()).total_seconds()
         desc += "Assembled %d activities on %s:\n  %s" % (len(self.activities), total_duration, activities_string)
         return desc
 

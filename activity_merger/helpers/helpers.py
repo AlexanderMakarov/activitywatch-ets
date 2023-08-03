@@ -36,12 +36,11 @@ def event_to_str(event: Event) -> str:
            f"{event_data_to_str(event)})"
 
 
-def from_start_to_end_to_str(obj) -> str:
-    return f"{obj.start_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
-           f"..{obj.end_time.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"
+def from_start_to_end_to_str(start: datetime.datetime, end: datetime.datetime) -> str:
+    return f"{start.astimezone(CURRENT_TIMEZONE):%H:%M:%S}..{end.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"
 
 
-def seconds_to_int_timedelta(seconds: float) -> str:
+def seconds_to_int_timedelta(seconds: float) -> datetime.timedelta:
     return datetime.timedelta(seconds=int(seconds))
 
 

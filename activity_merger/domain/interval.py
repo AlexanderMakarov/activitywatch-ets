@@ -60,7 +60,7 @@ class Interval:
         :param debug: Flag to add all events information. If `False` then puts only the last one.
         :return: String representation of the interval.
         """
-        result = from_start_to_end_to_str(self)
+        result = from_start_to_end_to_str(self.start_time, self.end_time)
         if only_time:
             return f"{result} ({seconds_to_int_timedelta(self.get_duration())}):"
         if len(self.events) > 0:

@@ -1,15 +1,15 @@
 import datetime
 import logging
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
+
 from aw_core import Event as AWEvent
 
-from .metrics import Metrics
-
-from .strategies import ActivitiesByStrategy, Strategy, StrategyHandler
-from .interval import Interval
-from .input_entities import Event
-from ..helpers.helpers import event_to_str
 from ..config.config import LOG
+from ..helpers.helpers import event_to_str
+from .input_entities import Event, Strategy
+from .interval import Interval
+from .metrics import Metrics
+from .strategies import ActivitiesByStrategy, handle_events
 
 
 def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timedelta, is_make_intervals: bool)\
@@ -526,7 +526,7 @@ def analyze_buckets(activity_watch_client, start_time: datetime.datetime, end_ti
                 LOG.info("%s* strategy: No events found.", strategy.bucket_prefix)
             continue  # Stop handling this strategy.
         # Handle events with strategy.
-        strategy_activities = StrategyHandler.handle_events(strategy, events, strat_metrics)
+        strategy_activities = handle_events(strategy, events, strat_metrics)
         result.append(strategy_activities)
         # Calculate common sum of activities.
         for activity in strategy_activities.activities:

@@ -1,7 +1,8 @@
 import dataclasses
 import re
 import collections
-from typing import Optional, Tuple, Callable, List, Dict, Union, Set
+import enum
+from typing import Tuple, Callable, List, Union
 
 
 Event = collections.namedtuple('Event', ['bucket_id', 'timestamp', 'duration', 'data'])
@@ -206,14 +207,39 @@ class Rule2:
         return result
 
 
+class ActivityBoundaries(enum.Enum):
+    START = enum.auto()
+    END = enum.auto()
+    WHOLE = enum.auto()
+
+    @classmethod
+    def from_str(cls, name: Union[str, 'ActivityBoundaries']) -> 'ActivityBoundaries':
+        """Constructs instance from the name if string is given."""
+        if isinstance(name, ActivityBoundaries):
+            return name
+        elif isinstance(name, str):
+            return cls[name.upper()]
+        else:
+            raise ValueError(f"Invalid '{name}' value is provided as an ActivityBoundaries.")
+
+
 @dataclasses.dataclass
 class Strategy:
+    """
+    Structure representing how to aggregate events from the one source of events (i.e. watcher or exporter).
+    All properties with "in_" prefix affects only logic of grouping events into "activites" inside strategy.
+    While properties with "out_" prefix affects only logic of merging "activites" from different strategies,
+    i.e. represents "priority" of "features" of this events source comparing with other sources.
+    """
+
     name: str
-    """Name of source to be provided into resulting activity description. Short."""
-
+    """
+    Name of events source to be provided into resulting activity description. Expected to be short.
+    """
     bucket_prefix: str
-    """Prefix for buckets to analyze with this activity."""
-
+    """
+    Prefix for buckets to analyze with this activity.
+    """
     in_each_event_is_activity: bool
     """
     Flag that each event is the separate activity. Overrides all other "in_*" flags.
@@ -241,7 +267,6 @@ class Strategy:
     Note that order of tuples in the list is important - event will be added to the activity/window with
     values for the key(s) from the 2nd tuple if its "data" doesn't have keys from the 1st tuple and so on.
     """
-
     out_self_sufficient: bool
     """
     True means activity from this bucket may overlaps others. Any conflicts leads to errors.
@@ -250,7 +275,7 @@ class Strategy:
     """
     True means that activities will be cut by AFK data on corresponding host.
     """
-    out_activity_boundaries: str
+    out_activity_boundaries: ActivityBoundaries
     """
     [whole, start, end] - means which part of activity is trustable.
     """
@@ -258,6 +283,9 @@ class Strategy:
     """
     [alone, auxiliary] - means whether activity name is trustable.
     """
+
+    def __post_init__(self):
+        self.out_activity_boundaries = ActivityBoundaries.from_str(self.out_activity_boundaries)
 
     __properties = [
         'bucket_prefix', 
@@ -274,53 +302,5 @@ class Strategy:
     def __repr__(self) -> str:
         desc = [f"Strategy '{self.name}':"]
         for prop in Strategy.__properties:
-            desc.append("  {0} = {1}".format(prop, getattr(self, prop)))
-        desc.append(")")
+            desc.append(f"  {prop} = {getattr(self, prop)}")
         return '\n'.join(desc)
-
-
-class EventKeyHandler:
-    """
-    Structure which binds multiple `Rule`-s to one `Event`'s field value by regexp.
-    """
-
-    def __init__(self, key: str, rules: List[Rule2], to_str_keys: Optional[List[str]] = None) -> None:
-        """
-        Default constructor.
-        :param key: Key from ActivityWatch event to choose rules basing on.
-        :param rules: List of `Rule` objects to handle differrent "key" values.
-        :param to_str_keys: List of keys to make `to_str` implementation basing on. If not specified then base
-        event key value is used.
-        """
-        self.key = key
-        self.rules: Dict[re.Pattern, Rule2] = dict((re.compile(rule.key_pattern), rule) for rule in rules)
-        self.to_str_keys = to_str_keys
-
-    def __repr__(self) -> str:
-        return f"EventKeyHandler(key={self.key}, rules_len={len(self.rules)})"
-
-    def get_rule(self, event: Event) -> Optional[Tuple[Rule2, List[str]]]:
-        """
-        Searches rule for specified event.
-        :param event: Event to find rule for.
-        :return: `Rule` handling specified event and ordered list of matching key value description-s in order of rule
-        handlers which point to the rule. If there are no such rule then returns two None values.
-        """
-        value = event.data[self.key]
-        descriptions = []
-        matched_rule = None
-        for (regex, rule) in self.rules.items():
-            match = regex.match(value)
-            if match:
-                description = rule.get_description(match)
-                if description:
-                    descriptions.append(description)
-                matched_rule = rule
-                break
-        if matched_rule and matched_rule.subhandler:
-            matched_rule, subhandler_descriptions = matched_rule.subhandler.get_rule(event)
-            descriptions.extend(subhandler_descriptions)
-        return matched_rule, descriptions
-
-    def __hash__(self) -> int:
-        return hash((self.key) + (r.__hash__() for r in self.rules))

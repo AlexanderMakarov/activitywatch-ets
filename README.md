@@ -122,12 +122,15 @@ TODO:
 - [x] Add debugging buckets to produce insights about rules work into ActivityWatch UI "Timeline" page.
 - [x] Write tests for merger with Stopwatch events involvement.
 - [x] Prepare script to run all event importers and get_activities.py for the specific date.
-- [ ] Change licence.
-- [ ] Separate "strategy activity" and "result activity".
-- [ ] Add "git exporter".
-- [ ] For `Strategy.in_group_by_keys` need an ability specify "if key doesn't exist then use this", not both. IDEA case.
+- [x] For `Strategy.in_group_by_keys` need an ability specify "if key doesn't exist then use this", not both. IDEA case.
+- [x] Add "git exporter".
+- [ ] Add ability for activities within `out_activity_boundaries` not "whole" strategies keep track "max cut from left/right".
+- [ ] Add to Strategy 'in_skip_events_with_key_value' or 'in_key_value_skip' property to skip "app=unknown" events.
+- [ ] Restore 'ignore_hints' in 'get_activities.py'.
+- [ ] Keep exact events in result activities.
 - [ ] Complete get_activities.py
 - [ ] Try it for myself. Adjust `STRATEGIES` and code if need.
+- [ ] Change licence.
 - [ ] Use for ETS for a few days. Adjust `STRATEGIES`.
 - [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
 - [ ] Prepare for distribution.
@@ -135,6 +138,7 @@ TODO:
 - [ ] OWA importer - adopt Chrome as well.
 
 Questionable:
+- [ ] Separate "strategy activity" and "result activity".
 - [ ] Add support for TODO cases in test_merger.
 - [ ] Separate `aw_export_one_day.py` into use standalone. The same is useful with exporters as well.
 - [ ] Wrap into the web server - send JSON with day data - get activities.
