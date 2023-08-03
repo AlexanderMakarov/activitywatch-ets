@@ -94,7 +94,7 @@ def _parse_events_from_story_without_duration(story: jira.resources.PropertyHold
             'jira_id': jira_id,
             'title': summary,
             'field': field,
-            'symbols_count': symbols_count,  # Some gauge of "how many effort was added" TODO
+            'symbols_count': symbols_count,
             'change_desc': change_desc,
         }))
     return events, unsupported_fields

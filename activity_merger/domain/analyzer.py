@@ -10,12 +10,12 @@ from ..config.config import (AFK_RULE_PRIORITY, CURRENT_TIMEZONE,
                              DEBUG_BUCKET_PREFIX, LOG, MIN_DURATION_SEC,
                              TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,
                              WATCHDOG_RULE_PRIORITY)
-from ..helpers.helpers import (event_data_to_str, event_to_str, seconds_to_int_timedelta)
-from .input_entities import Event, Rule2, Strategy, ActivityBoundaries
+from ..helpers.helpers import event_data_to_str, seconds_to_int_timedelta
+from .input_entities import ActivityBoundaries, Event, Rule2
 from .interval import Interval, intervals_duration
 from .metrics import Metrics
-from .output_entities import (Activity, ActivityByStrategy, AnalyzerResult, RuleResult)
-from .strategies import ActivitiesByStrategy
+from .output_entities import Activity, AnalyzerResult, RuleResult
+from .strategies import ActivitiesByStrategy, ActivityByStrategy
 
 BUCKET_AFK_PREFIX = "aw-watcher-afk"
 BUCKET_STOPWATCH_PREFIX = "aw-stopwatch"

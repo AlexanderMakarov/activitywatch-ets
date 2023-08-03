@@ -347,7 +347,7 @@ def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool = Fa
         # Check that first need scroll to day and perform scrolls.
         if back_days or date_label:
             _scroll_to_day(back_days, date_label, driver)
-        # Parse events. TODO parse few days.
+        # Parse events.
         return scrape_events_from_page(driver, events_date)
 
 

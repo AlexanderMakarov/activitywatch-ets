@@ -1,12 +1,45 @@
-from typing import Dict, List, Set, Tuple
 import dataclasses
+import datetime
 from collections import namedtuple
+from typing import Dict, List, Set, Tuple
 
 from ..config.config import MIN_DURATION_SEC
-from .input_entities import Event, Strategy, ActivityBoundaries
+from ..helpers.helpers import (from_start_to_end_to_str, seconds_to_int_timedelta)
+from .input_entities import ActivityBoundaries, Event, Strategy
 from .metrics import Metrics
-from .output_entities import Activity, ActivityByStrategy
-from ..helpers.helpers import event_data_to_str, seconds_to_int_timedelta
+
+
+@dataclasses.dataclass
+class ActivityByStrategy: 
+    """
+    Group of events aggregated for the specific strategy.
+    """
+
+    suggested_start_time: datetime.datetime
+    """Suggested start time of the activity."""
+    suggested_end_time: datetime.datetime
+    """Suggested end time of the activity."""
+    max_start_time: datetime.datetime
+    """Maximum start time of the activity possible. Later then 'start time'."""
+    min_end_time: datetime.datetime
+    """Minimum end time of the activity possible. Earlier then 'end time'."""
+    duration: float
+    """
+    Total duration of the activity in seconds measured by events.
+    Note that events may be placed with gaps between.
+    """
+    events: List[Event]
+    """List of (dominant) events the activity consists of."""
+    grouping_data: str
+    """Object describing why enclosed events are aggregated into activity."""
+    strategy: Strategy
+    """ Strategy used to create this activity."""
+
+    def __repr__(self) -> str:
+        return f"{seconds_to_int_timedelta(self.duration)},"\
+               f" {from_start_to_end_to_str(self.suggested_start_time, self.suggested_end_time)}"\
+               f" (min {from_start_to_end_to_str(self.max_start_time, self.min_end_time)}),"\
+               f" {len(self.events):>3} {self.strategy.name} events grouped by {self.grouping_data}."
 
 
 @dataclasses.dataclass

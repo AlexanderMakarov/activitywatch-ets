@@ -4,7 +4,7 @@ import collections
 from typing import Dict, List
 
 from .metrics import Metrics
-from .input_entities import Event, Rule2, Strategy
+from .input_entities import Event, Rule2
 from .interval import Interval
 from ..helpers.helpers import seconds_to_int_timedelta, from_start_to_end_to_str
 
@@ -27,39 +27,6 @@ class RuleResult:
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(description={self.description}, rule={self.rule})"
-
-
-@dataclasses.dataclass
-class ActivityByStrategy:  # TODO move into other file.
-    """
-    Group of events aggregated for the specific strategy.
-    """
-
-    suggested_start_time: datetime.datetime
-    """Suggested start time of the activity."""
-    suggested_end_time: datetime.datetime
-    """Suggested end time of the activity."""
-    max_start_time: datetime.datetime
-    """Maximum start time of the activity possible. Later then 'start time'."""
-    min_end_time: datetime.datetime
-    """Minimum end time of the activity possible. Earlier then 'end time'."""
-    duration: float
-    """
-    Total duration of the activity in seconds measured by events.
-    Note that events may be placed with gaps between.
-    """
-    events: List[Event]
-    """List of (dominant) events the activity consists of."""
-    grouping_data: str
-    """Object describing why enclosed events are aggregated into activity."""
-    strategy: Strategy
-    """ Strategy used to create this activity."""
-
-    def __repr__(self) -> str:
-        return f"{seconds_to_int_timedelta(self.duration)},"\
-               f" {from_start_to_end_to_str(self.suggested_start_time, self.suggested_end_time)}"\
-               f" (min {from_start_to_end_to_str(self.max_start_time, self.min_end_time)}),"\
-               f" {len(self.events):>3} {self.strategy.name} events grouped by {self.grouping_data}."
 
 
 @dataclasses.dataclass

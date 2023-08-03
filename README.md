@@ -46,12 +46,13 @@ For time reports this feature is not flexible enough because:
 So the idea is to use out-of-the-box ActivityWatch data, enhance it with data from working environment:
 - Jira Cloud events ([get_jira_events.py](/get_jira_events.py)),
 - MS Exchange Calendar ([get_outlook_events.py](/get_outlook_events.py)) - aka OWA, Office 365 Mail,
-- Git commits (TODO)
+- Git commits ([get_git_events.py](/get_git_events.py))
 and combine total ~2500 events per day
 (depends on number of watchers/importers and style of work) into 5-12 activities by set of predefined rules.
-Generated activities are expected to have long/messy description each time and would require manual correction,
-but the main purpose - provide a way to don't rely on a memory during time reports assembling but on a data.
-It allows to reduce effort spending on a time reports and improve time management.
+Generated activities are expected to be short and have long/messy description.
+So need to assemble good activities manually, but they will be based on the data, not on a memory.
+It allows to reduce effort spending on filling time reports, make them more precise.
+Even without necessity to fill time reports output of the applicaiton allows handle time management effectively.
 See [get_activities.py](/get_activities.py) script.
 
 Default (i.e. configurable if need) restrictions for "assembling activities" logic are:
