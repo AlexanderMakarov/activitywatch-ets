@@ -68,16 +68,18 @@ class AnalyzerResult:
     debug_dict: Dict[str, List[Event]]
     """Map of debug bucket name to list of events to report into."""
 
-    def to_str(self, append_equal_intervals_longer_that: float = -1.0) -> str:
+    def to_str(self, append_equal_intervals_longer_that: float = -1.0,
+               ignore_metrics_by_substrings: List[str] = None) -> str:
         """
         Converts not debug data into human-friendly representation.
         :param append_equal_intervals_longer_that: If equal or more than 0 then result would contain 'equal'
         (i.e. with the same description) activities longer than specified value.
         Otherwise if would be skipped in the output completely - only activities.
+        :param ignore_metrics_by_substrings: List of substrings to ignore metrics with them in the output.
         :return: String with metrics, 'equal' activities if configured, activities.
         """
         desc = ""
-        sorted_metrics_strings = list(self.metrics.to_strings())
+        sorted_metrics_strings = list(self.metrics.to_strings(ignore_metrics_by_substrings))
         desc += "Metrics from intervals analysis (total %s):\n  %s\n" % \
                 (len(sorted_metrics_strings), "\n  ".join(sorted_metrics_strings))
         # Print "less than MIN_DURATION_SEC" values from 'activity_counter'.

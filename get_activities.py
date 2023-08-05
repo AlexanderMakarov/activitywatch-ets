@@ -89,36 +89,28 @@ def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.Acti
         LOG.info(upload_events(events, DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
 
 
-def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_hints: Set[str],
+def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_substrings: List[str],
                                     is_import_debug_buckets: bool) -> AnalyzerResult:
     """
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
     analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
     prints them into output.
     :param events_date: Date to get events on.
-    :param ignore_hints: Set of problems to disable in logs.
+    :param ignore_substrings: List of substrings to ignore metrics with them in logs.
     :param is_import_debug_buckets: Flag to assemble and import into ActivityWatch debugging information as events for
     "debugging" buckets.
     :return: `AnalyzerResult` object or `None` if no intervals to analyze were found.
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
-    # # Build time-ordered linked list of intervals by provided events.
-    # interval = get_interval(events_date, client)
-    # if interval is None:
-    #     LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
-    #     return None
-    # # Convert (analyze) intervals list into activities.
-    # analyzer_result: AnalyzerResult = analyze_intervals(interval, MIN_DURATION_SEC, RULES, is_import_debug_buckets,
-    #                                                     ignore_hints)
     LOG.info("Starting to build activities per strategy...")
     activities_by_strategy, metrics = get_activities_by_strategy(events_date, client)
-    LOG.info("Analyzed all buckets separately. Results:%s", metrics)
-    LOG.info("Starting to assemble resulting activities from all strategies...")
-    # TODO add ability to skip metrics starting with 'events with data '.
-    LOG.info("Got following activities-per-strategy:\n%s", "\n".join(str(x) for x in activities_by_strategy))
+    metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
+    LOG.info("Analyzed all buckets separately:\n  %s", "\n  ".join(metrics_strings))
+    LOG.info("Got following activities-per-strategy:\n%s",
+             "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in activities_by_strategy))
 
     analyzer_result = analyze_activities_per_strategy(activities_by_strategy, is_import_debug_buckets)
-    LOG.info(analyzer_result.to_str())
+    LOG.info(analyzer_result.to_str(ignore_metrics_by_substrings=ignore_substrings))
     # LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
     if is_import_debug_buckets:
         reload_debug_buckets(analyzer_result, client)
@@ -136,11 +128,12 @@ def main():
                              "If omit here but set 'back days' argument then date is calculated as today - back_days.")
     parser.add_argument('-b', '--back-days', type=int,
                         help="How many days back search events on. I.e. '1' value means 'search for yesterday.")
-    parser.add_argument('-i', '--ignore-hints', nargs='*', default=[],
-                        help="Hints to ignore in report. Helps filter log messages about rule mistakes."
-                             f" Supported values in importance order: {ProblemReporter.SUPPORTED_ITEMS.keys()}."
-                             " Expected to be the last item in arguments list. Example of usage:"
-                             ' `./get_activities.py 2022-12-31 -i "prefix a" "prefix b"`')
+    parser.add_argument('-i', '--ignore-substrings', nargs='*', default=[],
+                        help="Substrings to ignore metrics or other logs with. Helps reduce log messages."
+                             " Just add substring from logs you don't want to see."
+                             " Supports multiple arguments therefore should be the last flag in the command line."
+                             ' Example of usage (are filtered logs containing "events with data" and "prefix b"):'
+                             ' `./get_activities.py -b 1 -i "events with data" "prefix b"`')
     parser.add_argument('-d', '--debug-buckets', dest='is_import_debug_buckets', action='store_true',
                         help="Flag to import debugging buckets into ActivityWatch which allows to debug analyzing"
                              f" behavior. All such bucket ID's starts with' {DEBUG_BUCKET_PREFIX}' string."
@@ -152,7 +145,7 @@ def main():
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
         events_date = (events_date - datetime.timedelta(days=args.back_days))
-    convert_aw_events_to_activities(events_date, set(args.ignore_hints), args.is_import_debug_buckets)
+    convert_aw_events_to_activities(events_date, list(args.ignore_substrings), args.is_import_debug_buckets)
 
 
 if __name__ == '__main__':

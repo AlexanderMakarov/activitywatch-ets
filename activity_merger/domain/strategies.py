@@ -50,20 +50,24 @@ class ActivitiesByStrategy:
     activities: List[ActivityByStrategy]
     metrics: Metrics
 
-    def __repr__(self) -> str:
+    def to_string(self, ignore_metrics_by_substrings: List[str] = None) -> str:
         """
-        Converts not debug data into human-friendly representation.
+        Converts content into human-friendly representation.
         :param append_equal_intervals_longer_that: If equal or more than 0 then result would contain 'equal'
         (i.e. with the same description) activities longer than specified value.
         Otherwise if would be skipped in the output completely - only activities.
-        :return: String with metrics, 'equal' activities if configured, activities.
+        :param ignore_metrics_by_substrings: List of substrings to ignore metrics with them in the output.
+        :return: String with metrics and activities inside.
         """
         # Note that Metrics.to_strings append 2 spaces indent.
-        metrics_strings = list(self.metrics.to_strings())
+        metrics_strings = list(self.metrics.to_strings(ignore_with_substrings=ignore_metrics_by_substrings))
         metrics = "\n  ".join(metrics_strings)
         activities = "\n    ".join(str(x) for x in self.activities)
         return f"{self.strategy}\n  Metrics ({len(metrics_strings)}):\n  {metrics}"\
                f"\n  ActivityByStrategy-es ({len(self.activities)}):\n    {activities}"
+
+    def __repr__(self) -> str:
+        return self.to_string()
 
 
 def handle_events(strategy: Strategy, events: List[Event], metrics: Metrics) -> ActivitiesByStrategy:
@@ -208,10 +212,10 @@ def _aggregate_events_with_one_sliding_window(strategy: Strategy, events: List[E
     return ActivitiesByStrategy(strategy, activities, metrics)
 
 
-def _add_event_to_window(event: Event, window_key: 'WindowKey',
-                            windows: Dict['WindowKey', List[Event]], metrics: Metrics):
+def _add_event_to_window(event: Event, window_key: 'WindowKey', windows: Dict['WindowKey', List[Event]],
+                         metrics: Metrics):
     window = windows.setdefault(window_key, [])
-    # TODO revert metrics.incr(f'events with data {window_key}', event.duration.seconds)
+    metrics.incr(f'events with data {window_key}', event.duration.seconds)
     window.append(event)
 
 

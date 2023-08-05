@@ -103,21 +103,30 @@ class Metrics:
         """
         return self.metrics.get(metric_name)
 
-    def to_strings(self, is_exclude_empty: bool = True, is_exclude_duration=False) -> List[str]:
+    def to_strings(self, is_exclude_empty: bool = True, is_exclude_duration=False,
+                   ignore_with_substrings: List[str] = None) -> List[str]:
         """
         Returns generator of sorted (first by duration, next by count) metric descriptions.
         :param is_exclude_zero: Flag to return only metrics with only positive count.
         :param is_exclude_duration: Flag to don't print duration at all (useful for cases when we now that all
             metrics inside doesn't provide duration).
+        :param ignore_with_substrings: List of substrings to don't return metrics with.
         :return: Ready to use generator of metrics converted to strings and sorted by duration.
         """
         sorted_metric_entries = sorted(self.metrics.items(), key=lambda x: (x[1].duration, x[1].cnt), reverse=True)
+
+        def generate():
+            for metric in sorted_metric_entries:
+                if (not is_exclude_empty or metric[1].cnt > 0)\
+                        and (not ignore_with_substrings\
+                             or not any(map(metric[0].__contains__, ignore_with_substrings))):
+                    yield metric
+
         if is_exclude_duration:
-            return (f"{x[1].cnt:4} - {x[0]}"
-                    for x in sorted_metric_entries if not is_exclude_empty or x[1].cnt > 0)
+            return (f"{x[1].cnt:4} - {x[0]}" for x in generate())
         else:
             return (f"{x[1].cnt:4} on {str(datetime.timedelta(seconds=int(x[1].duration))).rjust(8, '0')} - {x[0]}"
-                    for x in sorted_metric_entries if not is_exclude_empty or x[1].cnt > 0)
+                    for x in generate())
 
     def __repr__(self) -> str:
         return "\n  " + "\n  ".join(self.to_strings())

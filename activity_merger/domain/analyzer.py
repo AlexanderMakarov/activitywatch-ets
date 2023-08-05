@@ -189,7 +189,7 @@ def _window_to_activity(window: RuleResultsWindow, rule_result: RuleResult, acti
         activity_debug_events.append(debug_event)
 
 def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Rule2],
-                      is_build_debug_buckets: bool = False, ignore_hints: Set[str]= None) -> AnalyzerResult:
+                      is_build_debug_buckets: bool = False) -> AnalyzerResult:
     """
     Analyzes linked list of 'Interval'-s to convert them into list of 'Activity'-es and provide explanation about
     how well it was done.
@@ -197,7 +197,6 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
     :param round_to: Both minimal summary interval length to show and step to align reporting intervals to.
     :param custom_rules: User-specific/crafted map of `Rule2`-s.
     :param is_build_debug_buckets: Flag to build debug buckets.
-    :param ignore_hints: List of problems to disable in logs.
     :return: Tuple of:
     1 - List of assembled `Activity`-es.
     2 - `Counter` of intervals-by-rule description-s to sum of their durations.
@@ -230,7 +229,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
     # Make containers for outputs.
     rules_counter = collections.Counter()
     activities: List[Activity] = []
-    metrics = Metrics(ProblemReporter.SUPPORTED_ITEMS, ignore_hints)
+    metrics = Metrics(ProblemReporter.SUPPORTED_ITEMS)
     raw_rule_result_debug_events = []
     final_rule_result_debug_events = []
     activity_debug_events = []
