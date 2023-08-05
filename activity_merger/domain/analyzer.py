@@ -738,9 +738,9 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             LOG.warning("Unsupported setup for %s* strategy - in_activities_may_overlap=True."
                         "Skipping any AFK-related logic populated by this strategy.", bucket_prefix)
             continue
-        # Add to afk_tree only AFK activities. Expect that they are not intersect. TODO support.
+        # Add to afk_tree only AFK activities. Expect that they are not intersect.
         for activity in strategy_result.activities:
-            status = activity.events[0].data['status']  # TODO get it from ActivityByStrategy.grouping_data
+            status = activity.grouping_data.values[0]  # grouping_data is WindowKey.
             if status == 'afk':
                 afk_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
                 metrics.incr('afk intervals', activity.duration)
@@ -826,12 +826,6 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             debug_buckets_cnt = _add_debug_events_to_not_overlap(
                 remained_activities, debug_dict, strategy.bucket_prefix, debug_buckets_cnt, metrics
             )
-
-    # TODO:
-    # - update merger.py to populate "strict_start_time" and "strict_end_time" for `out_activity_boundaries` behavior.
-    # + Separate "strategy activity" and "result activity".
-    # + use `out_activity_name` to sanitize activity name.
-    # + multiple debug buckets for "window" strategy (for all with in_activities_may_overlap=true) to avoid overlaps.
 
     # 5. Iterate remained activities to fill `result` remained gaps.
     LOG.info('Determine activities from remained and chopped activities.')

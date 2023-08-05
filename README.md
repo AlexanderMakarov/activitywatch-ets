@@ -135,6 +135,7 @@ TODO:
 - [ ] Use for ETS for a few days. Adjust `STRATEGIES`.
 - [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
 - [ ] Prepare for distribution.
+- [ ] Support intersecting AFK events in analyzer.analyze_activities_per_strategy
 - [ ] Importers - support parsing few days at once.
 - [ ] OWA importer - adopt Chrome as well.
 
