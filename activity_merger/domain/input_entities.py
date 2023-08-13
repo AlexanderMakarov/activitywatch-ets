@@ -208,9 +208,10 @@ class Rule2:
 
 
 class ActivityBoundaries(enum.Enum):
+    STRICT = enum.auto()
     START = enum.auto()
     END = enum.auto()
-    WHOLE = enum.auto()
+    DIM = enum.auto()
 
     @classmethod
     def from_str(cls, name: Union[str, 'ActivityBoundaries']) -> 'ActivityBoundaries':

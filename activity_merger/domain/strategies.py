@@ -20,9 +20,9 @@ class ActivityByStrategy:
     suggested_end_time: datetime.datetime
     """Suggested end time of the activity."""
     max_start_time: datetime.datetime
-    """Maximum start time of the activity possible. Later then 'start time'."""
+    """Maximum start time of the activity possible. Equal or later then 'start time'."""
     min_end_time: datetime.datetime
-    """Minimum end time of the activity possible. Earlier then 'end time'."""
+    """Minimum end time of the activity possible. Equal or earlier then 'end time'."""
     duration: float
     """
     Total duration of the activity in seconds measured by events.
@@ -139,6 +139,8 @@ def _make_activity_between_events(events: List[Event], grouping_data: any, out_a
     start_time = events[0].timestamp
     end_time = events[-1].timestamp + events[-1].duration
     # For max and min time check 'out_activity_boundaries' and put start/end time of first/last event respectively.
+    # Note that for STRICT and DIM boundaries max and min time points aren't used.
+    # Because any overlap is either removes activity or splits it.
     max_start_time = start_time
     min_end_time = end_time
     if out_activity_boundaries == ActivityBoundaries.END:
