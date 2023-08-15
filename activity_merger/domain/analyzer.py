@@ -388,7 +388,7 @@ def _exclude_tree_intervals(activities: List[ActivityByStrategy], tree: interval
                             name_of_tree: str) -> List[ActivityByStrategy]:
     """
     Cuts different parts of activities which overlap with intervals in the specified tree.
-    Note that for metrics are used bounds of activities, not sum of event intervals.
+    Note that for metrics are used bounds of activities, not inner event intervals sum.
     :param activities: List of activities to cut tree intervals from.
     :param tree: Tree with intervals to cut activities by.
     :param metrics: Metrics instance.
@@ -462,6 +462,7 @@ def _include_tree_intervals(activities: List[ActivityByStrategy], boundaries: Ac
                                 -> List[ActivityByStrategy]:
     """
     Cuts different parts of activities which doesn't overlap with intervals in the specified tree.
+    Note that for metrics are used bounds of activities, not inner event intervals sum.
     :param activities: List of activities to fit into the tree.
     :param boundaries: Boundaries of activity.
     :param tree: Tree with intervals to cut activities by.
@@ -482,7 +483,8 @@ def _include_tree_intervals(activities: List[ActivityByStrategy], boundaries: Ac
 
         # Check that activity is not overlapping at all.
         if not overlapping_intervals:
-            metrics.incr(f'activities removed because are out of {name_of_tree}', activity.duration)
+            metrics.incr(f'activities removed because are out of {name_of_tree}',
+                         (activity.suggested_end_time - activity.suggested_start_time).total_seconds())
             continue
 
         # Build continuous overlapping segments to chop activity by them. Sort segments.
@@ -502,42 +504,47 @@ def _include_tree_intervals(activities: List[ActivityByStrategy], boundaries: Ac
 
         # Check that activty is fully covered. The only possibility to keep ActivityBoundaries.STRICT.
         if start_covered and end_covered and not gaps_in_middle:
-            metrics.incr(f'activities completely covered by {name_of_tree}', activity.duration)
+            metrics.incr(f'activities completely covered by {name_of_tree}',
+                         (activity.suggested_end_time - activity.suggested_start_time).total_seconds())
             result.append(activity)
             continue
 
         # Check remained ActivityBoundaries cases.
         if boundaries == ActivityBoundaries.START:
             if not start_covered:
-                metrics.incr(f'activities removed with {boundaries} boundaries started before {name_of_tree}',
-                             activity.duration)
+                metrics.incr(f'activities removed with {boundaries} started before {name_of_tree}',
+                             (activity.suggested_end_time - activity.suggested_start_time).total_seconds())
                 continue
             if segments[0][1] < activity.max_start_time:
-                metrics.incr(f'activities removed with {boundaries} boundaries end out of {name_of_tree}',
-                             activity.duration)
+                metrics.incr(f'activities removed with {boundaries} end out of {name_of_tree}',
+                             (activity.suggested_end_time - activity.suggested_start_time).total_seconds())
                 continue
-            prev_duration = activity.duration
+            prev_end_time = activity.suggested_end_time
             activity = _cut_activity_end(activity, segments[0][1])
-            metrics.incr(f'activities with tail chopped by {name_of_tree}', (prev_duration - activity.duration))
+            result.append(activity)
+            metrics.incr(f'activities with tail cut by {name_of_tree}',
+                         (prev_end_time - activity.suggested_end_time).total_seconds())
         elif boundaries == ActivityBoundaries.END:
             if not end_covered:
-                metrics.incr(f'activities removed with {boundaries} boundaries ended before {name_of_tree}',
-                             activity.duration)
+                metrics.incr(f'activities removed with {boundaries} ended before {name_of_tree}',
+                             (activity.suggested_end_time - activity.suggested_start_time).total_seconds())
                 continue
-            if segments[-1][0] < activity.min_end_time:
-                metrics.incr(f'activities removed with {boundaries} boundaries start out of {name_of_tree}',
-                             activity.duration)
+            if segments[-1][0] > activity.min_end_time:
+                metrics.incr(f'activities removed with {boundaries} start out of {name_of_tree}',
+                             (activity.suggested_end_time - activity.suggested_start_time).total_seconds())
                 continue
-            prev_duration = activity.duration
+            prev_start_time = activity.suggested_start_time
             activity = _cut_activity_start(activity, segments[-1][0])
-            metrics.incr(f'activities with start chopped by {name_of_tree}', prev_duration - activity.duration)
+            result.append(activity)
+            metrics.incr(f'activities with start cut by {name_of_tree}',
+                         (activity.suggested_start_time - prev_start_time).total_seconds())
             continue
         elif boundaries == ActivityBoundaries.DIM:
             for segment in segments:
                 # Chop some segment from the activity. Doesn't check min and max time points of activity.
                 tmp = activity
                 is_chopped = False
-                prev_duration = tmp.duration
+                prev_duration = tmp.suggested_end_time - tmp.suggested_start_time
                 if segment[0] > tmp.suggested_start_time:
                     tmp = _cut_activity_start(tmp, segments[-1][0])
                     is_chopped = True
@@ -546,11 +553,15 @@ def _include_tree_intervals(activities: List[ActivityByStrategy], boundaries: Ac
                     is_chopped = True
                 result.append(tmp)
                 if is_chopped:
-                    metrics.incr(f'activities with {boundaries} boundaries chopped by {name_of_tree}',
-                                (prev_duration - tmp.duration))
+                    # Update metric without duration because very often activity is cut few times and resulting
+                    # cumulative duration is bigger than initial activity duration.
+                    metrics.incr(f'activities with {boundaries} cut by {name_of_tree}')
                 else:
-                    metrics.incr(f'activities completely covered by {name_of_tree}', prev_duration - tmp.duration)
+                    metrics.incr(f'activities completely covered by {name_of_tree}', prev_duration.total_seconds())
                 activity = tmp
+        else:
+            metrics.incr(f'activities with {boundaries} removed by {name_of_tree}',
+                         (activity.suggested_end_time - activity.suggested_start_time).total_seconds())
     return result
 
     # Iterate until there are "not checked" activities in the queue.

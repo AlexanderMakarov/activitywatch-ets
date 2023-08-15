@@ -208,10 +208,19 @@ class Rule2:
 
 
 class ActivityBoundaries(enum.Enum):
+    """Enum of possible activity boundary rules."""
+
     STRICT = enum.auto()
+    """ Activity boundaries is not a subject of change. """
+
     START = enum.auto()
+    """ Activity start is strict but the end may be chopped. """
+
     END = enum.auto()
+    """ Activity end is strict but the start may be chopped. """
+
     DIM = enum.auto()
+    """ Activity boundaries are not strict and may be changed. """
 
     @classmethod
     def from_str(cls, name: Union[str, 'ActivityBoundaries']) -> 'ActivityBoundaries':
@@ -278,7 +287,7 @@ class Strategy:
     """
     out_activity_boundaries: ActivityBoundaries
     """
-    [whole, start, end] - means which part of activity is trustable.
+    Means which boundaries of activity are strict.
     """
     out_activity_name: str
     """

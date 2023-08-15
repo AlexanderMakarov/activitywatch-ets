@@ -296,106 +296,125 @@ class TestAnalyzer(unittest.TestCase):
             "wrong metrics"
         )
 
-    # @parameterized.expand([
-    #     activities:   5.6 7..9 10.......13  14...16 17..18
-    #     intervals : 4.....7 8..10 11.12 13....15           19..21
-    #     expected-------------------------------------
-    #         strict: 7.8   10.11                17..18
-    #          start: 7.8   10.11                17..18
-    #            end:             12.13    15.16 17..18
-    #            dim: 7.8   10.11 12.13    15.16 17..18
-    #     Note that activities duration is measured by events, not as "start - end".
-    #     (
-    #         'start_boundaries',
-    #         ACTIVITIES,
-    #         'start',
-    #         TREE,
-    #         [
-    #             ActivityByStrategy(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-9', 3600, None),
-    #             ActivityByStrategy(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a10-13', 5400, None),
-    #             ActivityByStrategy(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600, None),  # 'a14-16'.
-    #         ],
-    #         {
-    #             'activities cut on end by tt': Metric(2, float(3600 + 5400)),  # half of 'a7-9' + part of 'a10-13'.
-    #             'activities removed because impossible to cut on start by tt': Metric(1, 7200.0),
-    #             'activities removed by tt': Metric(1, 3600.0),  # 'a19-20'.
-    #         },
-    #     ),
-    #     (
-    #         'end_boundaries',
-    #         ACTIVITIES,
-    #         'end',
-    #         TREE,
-    #         [
-    #             ActivityByStrategy(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a10-13', 5400, None),
-    #             ActivityByStrategy(HOUR15_00, HOUR16_00, [EVENT1400_1600], 'a14-16', 7200, None),  # Duration from the only event.
-    #             ActivityByStrategy(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600, None),
-    #         ],
-    #         {
-    #             'activities cut on start by tt': Metric(2, float(5400 + 0)),  # Part of 'a10-13' and 'a14-16'.
-    #             'activities removed because impossible to cut on end by tt': Metric(1, 7200.0),  # 'a7-9'.
-    #             'activities removed by tt': Metric(1, 3600.0),  # 'a19-20'.
-    #         },
-    #     ),
-    #     (
-    #         'whole_boundaries',
-    #         ACTIVITIES,
-    #         'whole',
-    #         TREE,
-    #         [
-    #             ActivityByStrategy(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-9', 3600, None),
-    #             ActivityByStrategy(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a10-13', 5400, None),
-    #             ActivityByStrategy(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a10-13', 5400, None),
-    #             ActivityByStrategy(HOUR15_00, HOUR16_00, [EVENT1400_1600], 'a14-16', 7200, None),
-    #             ActivityByStrategy(HOUR17_00, HOUR18_00, [EVENT1700_1800], 'a17-18', 3600, None),
-    #         ],
-    #         {
-    #             'activities cut on start by tt': Metric(1, 0.0),  # 'a14-16' and one event remained duration.
-    #             'activities cut on end by tt': Metric(1, 3600.0),  # 'a7-9'.
-    #             'activities with cut out middle by tt': Metric(1, 7200.0),  # 'a10-13' remained part.
-    #             'activities removed by tt': Metric(1, 3600.0),  # 'a19-20'.
-    #         },
-    #     ),
-    #     (
-    #         'whole_boundaries_big_activity',
-    #         [
-    #             ActivityByStrategy(
-    #                 suggested_start_time=HOUR7_00,
-    #                 suggested_end_time=HOUR18_00,
-    #                 events=[EVENT700_730, EVENT730_800, EVENT830_900, EVENT900_1000, EVENT1000_1030, EVENT1030_1130,
-    #                         EVENT1130_1300, EVENT1300_1400, EVENT1400_1600, EVENT1600_1700, EVENT1700_1800],
-    #                 description='a7-18',
-    #                 duration=39600,
-    #                 strategy=None,
-    #             ),
-    #         ],
-    #         'whole',
-    #         TREE,
-    #         [
-    #             ActivityByStrategy(HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 'a7-18', 3600, None),
-    #             ActivityByStrategy(HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], 'a7-18', 5400, None),
-    #             ActivityByStrategy(HOUR12_00, HOUR13_00, [EVENT1130_1300], 'a7-18', 5400, None),
-    #             ActivityByStrategy(HOUR15_00, HOUR18_00, [EVENT1400_1600, EVENT1600_1700, EVENT1700_1800], 'a7-18', 14400, None),
-    #         ],
-    #         {
-    #             'activities with cut out middle by tt': Metric(3, 73800.0),  # We only cut our parts from one activity.
-    #         },
-    #     ),
-    # ])
-    # def test_include_tree_intervals(
-    #     self, test_name: str, activities: List[ActivityByStrategy], boundaries: ActivityBoundaries,
-    #     tree: intervaltree.IntervalTree, expected_activities: List[ActivityByStrategy],
-    #     expected_metrics: Dict[str, Metric]
-    # ):
-    #     self.maxDiff = None
-    #     metrics = Metrics({})
-    #     # Act
-    #     actual: List[Activity] = _include_tree_intervals(activities, boundaries, tree, metrics, "tt")
-    #     # Assert
-    #     err_msg = f"'{test_name}' case wrong "
-    #     self.assertListEqual(actual, expected_activities, err_msg + "activities")
-    #     self.assertDictEqual(
-    #         {k: v for (k, v) in metrics.metrics.items() if v.cnt > 0},
-    #         {k: v for (k, v) in expected_metrics.items()},
-    #         err_msg + "metrics"
-    #     )
+    @parameterized.expand([
+        # activities:   5.6 7...9 10.......13  14....16 17..18
+        #  intervals: 4.....7 8...10 11.12 13.....15           19..21
+        # expected-------------------------------------
+        #     strict:   5.6
+        #      start:   5.6                    14.15
+        #        end:   5.6   8.9
+        #        dim:   5.6   8.9    11.12     14.15
+        (
+            'strict_boundaries',
+            ACTIVITIES,
+            ActivityBoundaries.STRICT,
+            TREE,
+            [
+                ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, 3600, [EVENT500_600], 'a5-6', STRATEGY),
+            ],
+            {
+                'activities completely covered by tt': Metric(1, float(3600)),  # a5-6
+                'activities removed because are out of tt': Metric(1, float(3600)),  # a17-18
+                'activities with ActivityBoundaries.STRICT removed by tt': Metric(3, float(25200))
+            },
+        ),
+        (
+            'start_boundaries',
+            ACTIVITIES,
+            ActivityBoundaries.START,
+            TREE,
+            [
+                ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, 3600, [EVENT500_600], 'a5-6', STRATEGY),
+                ActivityByStrategy(HOUR14_00, HOUR15_00, HOUR14_00, HOUR15_00, 7200, [EVENT1400_1600],
+                                   'a14-16', STRATEGY),  # Note that duration is measured by event-s length.
+            ],
+            {
+                'activities completely covered by tt': Metric(1, float(3600)),  # a5-6
+                'activities removed because are out of tt': Metric(1, float(3600)),  # a17-18
+                'activities removed with ActivityBoundaries.START started before tt': Metric(2, float(18000)),
+                'activities with tail cut by tt': Metric(1, float(3600)), # a14-16
+            },
+        ),
+        (
+            'end_boundaries',
+            ACTIVITIES,
+            ActivityBoundaries.END,
+            TREE,
+            [
+                ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, 3600, [EVENT500_600], 'a5-6', STRATEGY),
+                ActivityByStrategy(HOUR8_00, HOUR9_00, HOUR8_00, HOUR9_00, 3600, [EVENT830_900], 'a7-9', STRATEGY),
+            ],
+            {
+                'activities completely covered by tt': Metric(1, float(3600)),  # a5-6
+                'activities removed because are out of tt': Metric(1, float(3600)),  # a17-18
+                'activities removed with ActivityBoundaries.END ended before tt': Metric(2, float(18000)),
+                'activities with start cut by tt': Metric(1, float(3600)),  # a8-9
+            },
+        ),
+        (
+            'dim_boundaries',
+            ACTIVITIES,
+            ActivityBoundaries.DIM,
+            TREE,
+            [
+                ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, 3600, [EVENT500_600], 'a5-6', STRATEGY),
+                ActivityByStrategy(HOUR8_00, HOUR9_00, HOUR8_00, HOUR9_00, 3600, [EVENT830_900], 'a7-9', STRATEGY),
+                ActivityByStrategy(HOUR11_00, HOUR12_00, HOUR11_00, HOUR12_00, 9000, [EVENT1030_1130, EVENT1130_1300],
+                                   'a10-13', STRATEGY),  # Note that duration is measured by event-s length.
+                ActivityByStrategy(HOUR14_00, HOUR15_00, HOUR14_00, HOUR15_00, 7200, [EVENT1400_1600],
+                                   'a14-16', STRATEGY),  # Note that duration is measured by event-s length.
+            ],
+            {
+                'activities completely covered by tt': Metric(1, float(3600)),  # a5-6
+                'activities removed because are out of tt': Metric(1, float(3600)),  # a17-18
+                'activities with ActivityBoundaries.DIM cut by tt': Metric(3, 0.0),
+            },
+        ),
+        (
+            'dim_boundaries_big_activity',
+            [
+                ActivityByStrategy(
+                    suggested_start_time=HOUR5_00,
+                    suggested_end_time=HOUR18_00,
+                    max_start_time=HOUR5_00,
+                    min_end_time=HOUR18_00,
+                    duration=39600,
+                    events=[EVENT500_600, EVENT700_730, EVENT730_800, EVENT830_900, EVENT900_1000, EVENT1000_1030,
+                            EVENT1030_1130, EVENT1130_1300, EVENT1300_1400, EVENT1400_1600, EVENT1600_1700,
+                            EVENT1700_1800],
+                    grouping_data='a5-18',
+                    strategy=STRATEGY,
+                ),
+            ],
+            ActivityBoundaries.DIM,
+            TREE,
+            [
+                ActivityByStrategy(HOUR5_00, HOUR7_00, HOUR5_00, HOUR7_00, 3600, [EVENT500_600], 'a5-18', STRATEGY),
+                ActivityByStrategy(HOUR8_00, HOUR10_00, HOUR8_00, HOUR10_00, 3600,
+                                   [EVENT830_900, EVENT830_900, EVENT900_1000], 'a5-18', STRATEGY),
+                ActivityByStrategy(HOUR11_00, HOUR12_00, HOUR11_00, HOUR12_00, 9000, [EVENT1030_1130, EVENT1130_1300],
+                                   'a5-18', STRATEGY),  # Note that duration is measured by event-s length.
+                ActivityByStrategy(HOUR14_00, HOUR15_00, HOUR14_00, HOUR15_00, 7200, [EVENT1400_1600],
+                                   'a5-18', STRATEGY),  # Note that duration is measured by event-s length.
+            ],
+            {
+                'activities with cut out middle by tt': Metric(3, 73800.0),  # We only cut our parts from one activity.
+            },
+        ),
+    ])
+    def test_include_tree_intervals(
+        self, test_name: str, activities: List[ActivityByStrategy], boundaries: ActivityBoundaries,
+        tree: intervaltree.IntervalTree, expected_activities: List[ActivityByStrategy],
+        expected_metrics: Dict[str, Metric]
+    ):
+        self.maxDiff = None
+        metrics = Metrics({})
+        # Act
+        actual: List[Activity] = _include_tree_intervals(activities, boundaries, tree, metrics, "tt")
+        # Assert
+        self.assertListEqual(expected_activities, actual, "wrong activities")
+        self.assertDictEqual(
+            {k: v for (k, v) in expected_metrics.items()},
+            {k: v for (k, v) in metrics.metrics.items() if v.cnt > 0},
+            "wrong metrics"
+        )
