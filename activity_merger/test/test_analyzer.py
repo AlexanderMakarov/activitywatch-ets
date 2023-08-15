@@ -243,10 +243,10 @@ class TestAnalyzer(unittest.TestCase):
                                    'a17-18', STRATEGY),
             ],
             {
-                'activities cut on end by tt': Metric(1, float(3600)),  # a7-9
-                'activities cut on start by tt': Metric(1, float(0)),  # a14-16 but it is single event.
+                'activities with head cut by tt': Metric(1, float(3600)),  # a7-9
+                'activities with middle cut by tt': Metric(1, 0.0),  # a10-13
+                'activities with tail cut by tt': Metric(1, float(3600)),  # a14-16
                 'activities removed by tt': Metric(1, float(3600)),  # a5-6
-                'activities with cut out middle by tt': Metric(1, float(7200)),  # a10-13 but no events disappeared.
             },
         ),
         (
@@ -277,8 +277,8 @@ class TestAnalyzer(unittest.TestCase):
                                    [EVENT1400_1600, EVENT1600_1700, EVENT1700_1800], 'a7-18', STRATEGY),
             ],
             {
-                'activities cut on start by tt': Metric(1, float(3600)),
-                'activities with cut out middle by tt': Metric(3, float(3600 + 1800 + 3600 + 3600)),
+                'activities with head cut by tt': Metric(1, float(7200)),
+                'activities with middle cut by tt': Metric(3, 0.0),  # I.e. there were 3 cuts.
             },
         ),
     ])

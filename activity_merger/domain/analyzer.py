@@ -342,7 +342,7 @@ def analyze_intervals(interval: Interval, round_to: float, custom_rules: List[Ru
 
 def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
     """
-    Cuts start from activity and returns only tail after specified point.
+    Cuts start from activity (suggested and 'max_start_time' if need) and returns only tail after specified point.
     """
     events = [x for x in activity.events if (x.timestamp + x.duration) > point]  # Keep "border" event.
     return ActivityByStrategy(
@@ -359,7 +359,7 @@ def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) 
 
 def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
     """
-    Cuts end from activity and returns only head before specified point.
+    Cuts end from activity (suggested and 'min_end_time' if need) and returns only head before specified point.
     """
     events = [x for x in activity.events if x.timestamp < point]  # Keep "border" event.
     return ActivityByStrategy(
@@ -377,9 +377,9 @@ def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime) ->
 def _split_activity(activity: ActivityByStrategy, start_point: datetime.datetime, end_point: datetime.datetime)\
         -> List[ActivityByStrategy]:
     """
-    Cuts activity on 2 parts and returns 2 new 'ActivityByStrategy'-s:
-    - from the start of initial activity to start_point,
-    - from end_point to the end of initial activity.
+    Cuts some middle part from the activity to get 2 new 'ActivityByStrategy'-s:
+    - from the start of initial activity to the 'start_point',
+    - from the 'end_point' to the end of initial activity.
     """
     return [_cut_activity_end(activity, start_point), _cut_activity_start(activity, end_point)]
 
@@ -388,6 +388,7 @@ def _exclude_tree_intervals(activities: List[ActivityByStrategy], tree: interval
                             name_of_tree: str) -> List[ActivityByStrategy]:
     """
     Cuts different parts of activities which overlap with intervals in the specified tree.
+    Note that for metrics are used bounds of activities, not sum of event intervals.
     :param activities: List of activities to cut tree intervals from.
     :param tree: Tree with intervals to cut activities by.
     :param metrics: Metrics instance.
@@ -417,14 +418,16 @@ def _exclude_tree_intervals(activities: List[ActivityByStrategy], tree: interval
             # Interval starts before activity.
             # Check activity is covered by interval completely.
             if interval.end >= activity.suggested_end_time:
-                metrics.incr('activities removed by ' + name_of_tree, activity.duration)
+                metrics.incr('activities removed by ' + name_of_tree,
+                             (activity.suggested_end_time - activity.suggested_start_time).total_seconds())
                 continue
             # Check (second time actually) interval overlaps activity.
-            if interval.end < activity.suggested_end_time:  # TODO: check how much
-                prev_duration = activity.duration
+            if interval.end < activity.suggested_end_time:
+                prev_start_time = activity.suggested_start_time
                 tmp = _cut_activity_start(activity, interval.end)
                 activities_queue.append(tmp)
-                metrics.incr('activities cut on start by ' + name_of_tree, prev_duration - tmp.duration)
+                metrics.incr('activities with head cut by ' + name_of_tree,
+                             (tmp.suggested_start_time - prev_start_time).total_seconds())
                 continue
             else:
                 raise NotImplementedError(f'Inner error with {interval} actually not overlapping with'
@@ -432,23 +435,23 @@ def _exclude_tree_intervals(activities: List[ActivityByStrategy], tree: interval
         elif interval.end >= activity.suggested_end_time:
             # Interval ends after activity.
             # Check (second time actually) activity end is overlapped by interval.
-            if interval.begin > activity.suggested_start_time:  # TODO: check how much
-                prev_duration = activity.duration
+            if interval.begin > activity.suggested_start_time:
+                prev_end_time = activity.suggested_end_time
                 tmp = _cut_activity_end(activity, interval.begin)
                 activities_queue.append(tmp)  # Due to interval was random, activity need to check one more time.
-                metrics.incr('activities cut on end by '+ name_of_tree, prev_duration - tmp.duration)
+                metrics.incr('activities with tail cut by ' + name_of_tree,
+                             (prev_end_time - tmp.suggested_end_time).total_seconds())
             else:
                 raise NotImplementedError(f'Inner error with {interval} actually not overlapping with'
                                           f' {activity}.')
         else:
             # Interval is placed in the middle of the current activity.
-            prev_duration = activity.duration
             split_activities = _split_activity(activity, interval.begin, interval.end)
             # Due to interval was random, both parts of the initial activity should be checked again.
             activities_queue.extend(split_activities)
-            # Note that duration is measured by events.
-            metrics.incr('activities with cut out middle by ' + name_of_tree,
-                            prev_duration - (interval.end - interval.begin).total_seconds())
+            # Update metric without duration because very often activity is cut few times and resulting
+            # cumulative duration is bigger than initial activity duration.
+            metrics.incr('activities with middle cut by ' + name_of_tree)
             continue
     # Sort result because parts of long activities may be placed into it randomly.
     return sorted(result, key=lambda x: x.suggested_start_time)
