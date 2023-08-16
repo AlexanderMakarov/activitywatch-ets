@@ -542,23 +542,26 @@ def _include_tree_intervals(activities: List[ActivityByStrategy], boundaries: Ac
         elif boundaries == ActivityBoundaries.DIM:
             for segment in segments:
                 # Chop some segment from the activity. Doesn't check min and max time points of activity.
-                tmp = activity
+                prev_duration = activity.suggested_end_time - activity.suggested_start_time
                 is_chopped = False
-                prev_duration = tmp.suggested_end_time - tmp.suggested_start_time
-                if segment[0] > tmp.suggested_start_time:
-                    tmp = _cut_activity_start(tmp, segments[-1][0])
+                # Check activity start is covered by segment.
+                if segment[0] > activity.suggested_start_time:
+                    activity = _cut_activity_start(activity, segment[0])  # Get rid of head not covered by segment.
                     is_chopped = True
-                if segment[1] < tmp.suggested_end_time:
-                    tmp = _cut_activity_end(tmp, segments[0][1])
+                # Check end of activity is covered by segment.
+                if segment[1] < activity.suggested_end_time:
+                    tmp = _cut_activity_end(activity, segment[1])  # Cut head coverent by segment to put into result.
+                    result.append(tmp)
                     is_chopped = True
-                result.append(tmp)
+                else:
+                    result.append(activity)  # Put the whole activity into result.
+                # Check activity was chopped at all.
                 if is_chopped:
                     # Update metric without duration because very often activity is cut few times and resulting
                     # cumulative duration is bigger than initial activity duration.
                     metrics.incr(f'activities with {boundaries} cut by {name_of_tree}')
                 else:
                     metrics.incr(f'activities completely covered by {name_of_tree}', prev_duration.total_seconds())
-                activity = tmp
         else:
             metrics.incr(f'activities with {boundaries} removed by {name_of_tree}',
                          (activity.suggested_end_time - activity.suggested_start_time).total_seconds())

@@ -390,15 +390,15 @@ class TestAnalyzer(unittest.TestCase):
             TREE,
             [
                 ActivityByStrategy(HOUR5_00, HOUR7_00, HOUR5_00, HOUR7_00, 3600, [EVENT500_600], 'a5-18', STRATEGY),
-                ActivityByStrategy(HOUR8_00, HOUR10_00, HOUR8_00, HOUR10_00, 3600,
-                                   [EVENT830_900, EVENT830_900, EVENT900_1000], 'a5-18', STRATEGY),
+                ActivityByStrategy(HOUR8_00, HOUR10_00, HOUR8_00, HOUR10_00, 7200,
+                                   [EVENT830_900, EVENT900_1000], 'a5-18', STRATEGY),
                 ActivityByStrategy(HOUR11_00, HOUR12_00, HOUR11_00, HOUR12_00, 9000, [EVENT1030_1130, EVENT1130_1300],
                                    'a5-18', STRATEGY),  # Note that duration is measured by event-s length.
-                ActivityByStrategy(HOUR14_00, HOUR15_00, HOUR14_00, HOUR15_00, 7200, [EVENT1400_1600],
+                ActivityByStrategy(HOUR13_00, HOUR15_00, HOUR13_00, HOUR15_00, 10800, [EVENT1300_1400, EVENT1400_1600],
                                    'a5-18', STRATEGY),  # Note that duration is measured by event-s length.
             ],
             {
-                'activities with cut out middle by tt': Metric(3, 73800.0),  # We only cut our parts from one activity.
+                'activities with ActivityBoundaries.DIM cut by tt': Metric(4, 0.0),  # We only cut parts of 1 activity.
             },
         ),
     ])
