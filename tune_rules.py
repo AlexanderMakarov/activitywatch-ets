@@ -25,7 +25,7 @@ from pick import pick
 from activity_merger.config.config import LOG, MIN_DURATION_SEC, RULES, BUCKET_DEBUG_RAW_RULE_RESULTS
 from activity_merger.domain.input_entities import Event, Rule2
 from activity_merger.domain.interval import Interval, intervals_duration
-from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date, seconds_to_int_timedelta
+from activity_merger.helpers.helpers import event_data_to_str, setup_logging, valid_date, seconds_to_timedelta
 from activity_merger.domain.analyzer import analyze_intervals, ProblemReporter, find_rule_for_event
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.domain.metrics import Metrics
@@ -148,7 +148,7 @@ class ItemToDecide():
         if len(self.intervals) > 1:
             examples.append(self.intervals[1].to_str())
         return '%d intervals on %s which capture rules:\n  %s\nExamples:\n  %s' % \
-               (len(self.intervals), seconds_to_int_timedelta(self.sum_duration), "\n  ".join(rules_str),
+               (len(self.intervals), seconds_to_timedelta(self.sum_duration), "\n  ".join(rules_str),
                 "\n  ".join(examples))
 
 

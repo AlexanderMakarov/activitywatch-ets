@@ -10,7 +10,7 @@ from ..config.config import (AFK_RULE_PRIORITY, CURRENT_TIMEZONE,
                              DEBUG_BUCKET_PREFIX, LOG, MIN_DURATION_SEC,
                              TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,
                              WATCHDOG_RULE_PRIORITY)
-from ..helpers.helpers import event_data_to_str, seconds_to_int_timedelta
+from ..helpers.helpers import event_data_to_str, seconds_to_timedelta
 from .input_entities import ActivityBoundaries, Event, Rule2
 from .interval import Interval, intervals_duration
 from .metrics import Metrics
@@ -51,11 +51,11 @@ class RuleResultsWindow:
         :param debug: Flag to make output more detailed.
         :return: String representation of the window.
         """
-        prefix = f"{seconds_to_int_timedelta(self.duration)} with priority={self.priority}"
+        prefix = f"{seconds_to_timedelta(self.duration)} with priority={self.priority}"
         if debug:
             events = dict((x.event.timestamp, x.event) for x in self.rule_results)
             events_str = "\n  ".join(
-                f"{seconds_to_int_timedelta(x.duration.total_seconds())} {event_data_to_str(x)}"
+                f"{seconds_to_timedelta(x.duration.total_seconds())} {event_data_to_str(x)}"
                 for x in events.values()
             )
             return f"{prefix}, description='{self.description}' and {len(events)} events:" + "\n  " + events_str

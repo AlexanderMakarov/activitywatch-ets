@@ -4,7 +4,7 @@ from collections import namedtuple
 from typing import Dict, List, Set, Tuple
 
 from ..config.config import MIN_DURATION_SEC
-from ..helpers.helpers import (from_start_to_end_to_str, seconds_to_int_timedelta)
+from ..helpers.helpers import (from_start_to_end_to_str, seconds_to_timedelta)
 from .input_entities import ActivityBoundaries, Event, Strategy
 from .metrics import Metrics
 
@@ -36,7 +36,7 @@ class ActivityByStrategy:
     """ Strategy used to create this activity."""
 
     def __repr__(self) -> str:
-        return f"{seconds_to_int_timedelta(self.duration)},"\
+        return f"{seconds_to_timedelta(self.duration)},"\
                f" {from_start_to_end_to_str(self.suggested_start_time, self.suggested_end_time)}"\
                f" (min {from_start_to_end_to_str(self.max_start_time, self.min_end_time)}),"\
                f" {len(self.events):>3} {self.strategy.name} events grouped by {self.grouping_data}."

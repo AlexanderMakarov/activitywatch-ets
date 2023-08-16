@@ -40,7 +40,7 @@ def from_start_to_end_to_str(start: datetime.datetime, end: datetime.datetime) -
     return f"{start.astimezone(CURRENT_TIMEZONE):%H:%M:%S}..{end.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"
 
 
-def seconds_to_int_timedelta(seconds: float) -> datetime.timedelta:
+def seconds_to_timedelta(seconds: float) -> datetime.timedelta:
     return datetime.timedelta(seconds=int(seconds))
 
 

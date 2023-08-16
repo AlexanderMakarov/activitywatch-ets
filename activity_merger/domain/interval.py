@@ -1,7 +1,7 @@
 import datetime
 from typing import List, Callable
 from .input_entities import Event
-from ..helpers.helpers import from_start_to_end_to_str, seconds_to_int_timedelta, event_data_to_str
+from ..helpers.helpers import from_start_to_end_to_str, seconds_to_timedelta, event_data_to_str
 
 
 class Interval:
@@ -62,7 +62,7 @@ class Interval:
         """
         result = from_start_to_end_to_str(self.start_time, self.end_time)
         if only_time:
-            return f"{result} ({seconds_to_int_timedelta(self.get_duration())}):"
+            return f"{result} ({seconds_to_timedelta(self.get_duration())}):"
         if len(self.events) > 0:
             if debug:
                 events_str = ";".join((event_data_to_str(x) for x in self.events))

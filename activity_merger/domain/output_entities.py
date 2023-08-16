@@ -6,7 +6,7 @@ from typing import Dict, List
 from .metrics import Metrics
 from .input_entities import Event, Rule2
 from .interval import Interval
-from ..helpers.helpers import seconds_to_int_timedelta, from_start_to_end_to_str
+from ..helpers.helpers import seconds_to_timedelta, from_start_to_end_to_str
 
 
 @dataclasses.dataclass
@@ -84,7 +84,7 @@ class AnalyzerResult:
                 (len(sorted_metrics_strings), "\n  ".join(sorted_metrics_strings))
         # Print "less than MIN_DURATION_SEC" values from 'activity_counter'.
         if append_equal_intervals_longer_that > 0.0:
-            dumb_activities = [f"{seconds_to_int_timedelta(v)} {k}" for k, v in self.events_counter.most_common()
+            dumb_activities = [f"{seconds_to_timedelta(v)} {k}" for k, v in self.events_counter.most_common()
                                if v >= append_equal_intervals_longer_that]
             desc += "There were %d 'equal' events with %d longer than %d seconds:\n  %s\n" %\
                     (len(self.events_counter), len(dumb_activities), append_equal_intervals_longer_that,
@@ -92,7 +92,8 @@ class AnalyzerResult:
         # Print resulting activities as is. Order is important here.
         activities_string = "\n  ".join(str(x) for x in self.activities)
         total_duration = sum((x.duration for x in self.activities), start=datetime.timedelta()).total_seconds()
-        desc += "Assembled %d activities on %s:\n  %s" % (len(self.activities), total_duration, activities_string)
+        desc += "Assembled %d activities on %s:\n  %s" %\
+                (len(self.activities), seconds_to_timedelta(total_duration), activities_string)
         return desc
 
     def __repr__(self):
