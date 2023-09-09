@@ -111,7 +111,6 @@ def convert_aw_events_to_activities(events_date: datetime.datetime, ignore_subst
 
     analyzer_result = analyze_activities_per_strategy(activities_by_strategy, is_import_debug_buckets)
     LOG.info(analyzer_result.to_str(ignore_metrics_by_substrings=ignore_substrings))
-    # LOG.info(analyzer_result.to_str(append_equal_intervals_longer_that=MIN_DURATION_SEC))
     if is_import_debug_buckets:
         reload_debug_buckets(analyzer_result, client)
     return analyzer_result

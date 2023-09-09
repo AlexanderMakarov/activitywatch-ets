@@ -10,7 +10,7 @@ from .metrics import Metrics
 
 
 @dataclasses.dataclass
-class ActivityByStrategy: 
+class ActivityByStrategy:
     """
     Group of events aggregated for the specific strategy.
     """
@@ -30,7 +30,7 @@ class ActivityByStrategy:
     """
     events: List[Event]
     """List of (dominant) events the activity consists of."""
-    grouping_data: str
+    grouping_data: str  # TODO change to object
     """Object describing why enclosed events are aggregated into activity."""
     strategy: Strategy
     """ Strategy used to create this activity."""
