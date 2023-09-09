@@ -107,11 +107,22 @@ def _window_key_to_activity_description(strategy_name: str, window_key: 'WindowK
     return desc
 
 
+def _check_skip_event(event: Event, strategy: Strategy, metrics: Metrics) -> bool:
+    if strategy.in_skip_key_value:
+        for k, v in strategy.in_skip_key_value.items():
+            if event.data.get(k) == v:
+                metrics.increment(f'events skipped because have {k}={v}')
+                return True
+    return False
+
+
 def _convert_each_event_into_activity(strategy: Strategy, events: List[Event], metrics: Metrics)\
         -> ActivitiesByStrategy:
     # Produces Activity per each event.
     activities: List[ActivityByStrategy] = []
     for event in events:
+        if _check_skip_event(event, strategy, metrics):
+            continue
         end_time = event.timestamp + event.duration
         activity = ActivityByStrategy(
             suggested_start_time=event.timestamp,
@@ -169,6 +180,8 @@ def _aggregate_events_with_one_sliding_window(strategy: Strategy, events: List[E
     window_kv_pairs: Set[Tuple[str, str]] = set()
     # Start iterate over events with collecting windows.
     for event in events:
+        if _check_skip_event(event, strategy, metrics):
+            continue
         kv_pairs: Set[Tuple[str, str]] = set()
         if strategy.in_group_by_keys:
             for key_tuple in strategy.in_group_by_keys:
@@ -221,7 +234,7 @@ def _add_event_to_window(event: Event, window_key: 'WindowKey', windows: Dict['W
     window.append(event)
 
 
-def _separate_events_per_windows(events: List[Event], group_by_keys: List[Tuple[str]], metrics: Metrics)\
+def _separate_events_per_windows(events: List[Event], strategy: Strategy, metrics: Metrics)\
         -> Dict['WindowKey', List[Event]]:
     """
     Separates list of events into windows basing on the data inside and 'group_by_keys'.
@@ -233,11 +246,13 @@ def _separate_events_per_windows(events: List[Event], group_by_keys: List[Tuple[
     """
     # First collect all possible windows.
     windows: Dict[WindowKey, List[Event]] = {}
-    if group_by_keys:
+    if strategy.in_group_by_keys:
         for event in events:
+            if _check_skip_event(event, strategy, metrics):
+                continue
             # If way to make windows is specified they make window per each group of keys.
             is_added = False
-            for key_tuple in group_by_keys:
+            for key_tuple in strategy.in_group_by_keys:
                 if all(key in event.data for key in key_tuple):
                     window_key = WindowKey(key_tuple, tuple(event.data[key] for key in key_tuple))
                     _add_event_to_window(event, window_key, windows, metrics)
@@ -249,7 +264,8 @@ def _separate_events_per_windows(events: List[Event], group_by_keys: List[Tuple[
     else:
         # If way to make windows is not specified then build window key as tuple of data key-value pairs.
         for event in events:
-            # window_key = [(k, v) for k, v in event.data.items()]
+            if _check_skip_event(event, strategy, metrics):
+                continue
             window_key = WindowKey(None, event.data)
             _add_event_to_window(event, window_key, windows, metrics)
     # Next check windows for the "same events" entries which may appear if group_by_keys contains few entries
@@ -285,7 +301,7 @@ def _aggregate_events_with_few_sliding_windows(strategy: Strategy, events: List[
         -> ActivitiesByStrategy:
     """ Produces Activities covering all "same data" events. """
     windows: Dict[WindowKey, List[Event]] = _separate_events_per_windows(
-        events, strategy.in_group_by_keys, metrics
+        events, strategy, metrics
     )
     # Make activities from the each window.
     activities = []
@@ -305,7 +321,7 @@ def _aggregate_events_with_few_sliding_windows_by_density(strategy: Strategy, ev
         -> ActivitiesByStrategy:
     """ Produces overlapping Activities basing on theirs density on time scale. """
     windows: Dict[Tuple, List[Event]] = _separate_events_per_windows(
-        events, strategy.in_group_by_keys, metrics
+        events, strategy, metrics
     )
     # Analyse gaps in each window.
     activities: List[ActivityByStrategy] = []

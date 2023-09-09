@@ -246,20 +246,24 @@ class Strategy:
     """
     Name of events source to be provided into resulting activity description. Expected to be short.
     """
+
     bucket_prefix: str
     """
     Prefix for buckets to analyze with this activity.
     """
+
     in_each_event_is_activity: bool
     """
     Flag that each event is the separate activity. Overrides all other "in_*" flags.
     """
+
     in_events_density_matters: bool
     """
     Flag that need to separate events by density.
     Like if there is big time gap between equal (by data) events then they represent different activities,
     but if such events are close to each other then it is the same activity.
     """
+
     in_activities_may_overlap: bool
     """
     Flag that events from different activities may alternate with each other but still represent few
@@ -267,6 +271,7 @@ class Strategy:
     not overlapping later on, but on the "in_*" stage better to have as much as possible guesses about
     probable activities.
     """
+
     in_group_by_keys: List[Tuple[str]]
     """
     Keys to separte events into the windows/activities.
@@ -277,18 +282,29 @@ class Strategy:
     Note that order of tuples in the list is important - event will be added to the activity/window with
     values for the key(s) from the 2nd tuple if its "data" doesn't have keys from the 1st tuple and so on.
     """
+
+    in_skip_key_value: List[Tuple[str]]
+    """
+    Map of key/value pairs (i.e. dictionary) to skip and don't make activities from.
+    Useful for "uknown" events which are bad source of information and may be duplicated by more
+    meaningful events/activities.
+    """
+
     out_self_sufficient: bool
     """
     True means activity from this bucket may overlaps others. Any conflicts leads to errors.
     """
+
     out_only_not_afk: bool
     """
     True means that activities will be cut by AFK data on corresponding host.
     """
+
     out_activity_boundaries: ActivityBoundaries
     """
     Means which boundaries of activity are strict.
     """
+
     out_activity_name: str
     """
     [alone, auxiliary] - means whether activity name is trustable.
