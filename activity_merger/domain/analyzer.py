@@ -619,7 +619,7 @@ def _add_debug_events_to_not_overlap(activites: List[ActivityByStrategy], debug_
                 timestamp=activity.suggested_start_time,
                 # For debug events need to use end-start time, not duration by events.
                 duration=activity.suggested_end_time - activity.suggested_start_time,  
-                description=str(activity.grouping_data),
+                description=activity.grouping_data.get_description(),
                 events_count=len(activity.events),
             )
             metrics.incr('debug events in ' + debug_bucket_prefix, activity.duration)
@@ -759,9 +759,9 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
     # TODO set name properly.
     for activity in overlapping_activities:
         if activity.strategy.out_activity_name == "alone":
-            dominant_names.append(str(activity.grouping_data))
+            dominant_names.append(activity.grouping_data.get_description())
         else:
-            other_names.append(str(activity.grouping_data))
+            other_names.append(activity.grouping_data.get_description())
     description = "; ".join(dominant_names)
     if len(description) < 1:
         metrics.incr("result activities without distinct name", ra_duration)
@@ -859,7 +859,7 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
             continue
         # Add to not_afk_tree only not-AFK activities. Expect that they are not intersect.
         for activity in strategy_result.activities:
-            status = activity.grouping_data.values[0]  # grouping_data is WindowKey.
+            status = activity.events[0].data["status"]
             if status == 'not-afk':
                 not_afk_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
                 metrics.incr('not-afk intervals', activity.duration)

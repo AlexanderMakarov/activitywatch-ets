@@ -9,6 +9,59 @@ from .input_entities import ActivityBoundaries, Event, Strategy
 from .metrics import Metrics
 
 
+class GroupingDescriptior:
+    """
+    Object representing way of grouping a list of events into a single activity.
+    Is used as a key for dictionary.
+    """
+
+    def __hash__(self):
+        raise NotImplementedError("__hash__ is not implemented")
+
+    def __eq__(self, other):
+        raise NotImplementedError("__eq__ is not implemented")
+
+    def get_description(self) -> str:
+        raise NotImplementedError("get_description is not implemented")
+
+
+@dataclasses.dataclass
+class StringDescriptor(GroupingDescriptior):
+    """
+    Simple grouping descriptor from a string.
+    """
+
+    name: str
+
+    def __hash__(self):
+        return hash(self.name)
+
+    def __eq__(self, other):
+        return self.name == other.name
+
+    def get_description(self) -> str:
+        return self.name
+
+@dataclasses.dataclass
+class ListOfPairsDescriptor(GroupingDescriptior):
+    """
+    Group desctriptor from a list of key-value pairs.
+    """
+
+    pairs: List[Tuple[str, str]]
+
+    def __hash__(self):
+        return hash(frozenset(self.pairs))
+
+    def __eq__(self, other):
+        if not isinstance(other, ListOfPairsDescriptor):
+            return False
+        return frozenset(self.pairs) == frozenset(other.pairs)
+
+    def get_description(self) -> str:
+        return ", ".join(f'{k}={v}' for k, v in self.pairs)
+
+
 @dataclasses.dataclass
 class ActivityByStrategy:
     """
@@ -30,7 +83,7 @@ class ActivityByStrategy:
     """
     events: List[Event]
     """List of (dominant) events the activity consists of."""
-    grouping_data: str  # TODO change to object
+    grouping_data: GroupingDescriptior
     """Object describing why enclosed events are aggregated into activity."""
     strategy: Strategy
     """ Strategy used to create this activity."""
@@ -92,21 +145,6 @@ def handle_events(strategy: Strategy, events: List[Event], metrics: Metrics) -> 
             return _aggregate_events_with_one_sliding_window(strategy, events, metrics)
 
 
-WindowKey = namedtuple('WindowKey', ['keys', 'values'])
-""" Key for a window of events. """
-
-
-def _window_key_to_activity_description(strategy_name: str, window_key: 'WindowKey') -> str:
-    desc = strategy_name + ": "
-    if window_key.keys:
-        desc += ", ".join(f'{k}={v}' for k, v in zip(window_key.keys, window_key.values))
-    elif isinstance(window_key.values, dict):
-        desc += ", ".join(f'{k}={v}' for k, v in window_key.values.items())
-    else:
-        desc += str(window_key.values)
-    return desc
-
-
 def _check_skip_event(event: Event, strategy: Strategy, metrics: Metrics) -> bool:
     if strategy.in_skip_key_value:
         for k, v in strategy.in_skip_key_value.items():
@@ -131,7 +169,7 @@ def _convert_each_event_into_activity(strategy: Strategy, events: List[Event], m
             min_end_time=end_time,
             duration=event.duration.seconds,
             events=[event],
-            grouping_data=_window_key_to_activity_description(strategy.name, WindowKey(None, event.data)),
+            grouping_data=ListOfPairsDescriptor([(k, str(v)) for k, v in event.data.items()]),
             strategy=strategy,
         )
         metrics.incr('activities', event.duration.seconds)
@@ -139,8 +177,9 @@ def _convert_each_event_into_activity(strategy: Strategy, events: List[Event], m
     return ActivitiesByStrategy(strategy, activities, metrics)
 
 
-def _make_activity_between_events(events: List[Event], grouping_data: any, out_activity_boundaries: ActivityBoundaries,
-                                  activities: List[ActivityByStrategy], strategy: Strategy, metrics: Metrics):
+def _make_activity_between_events(events: List[Event], grouping_data: GroupingDescriptior,
+                                  out_activity_boundaries: ActivityBoundaries, activities: List[ActivityByStrategy],
+                                  strategy: Strategy, metrics: Metrics):
     """
     Makes activity starting on start of first event and ending at the end of last event.
     Next adds it to provided list and updates `Metrics` with it.
@@ -201,7 +240,7 @@ def _aggregate_events_with_one_sliding_window(strategy: Strategy, events: List[E
             continue
         # Otherwise if window exists then create Activity from it.
         if window:
-            window_key = WindowKey(*zip(*window_kv_pairs))
+            window_key = ListOfPairsDescriptor(list(window_kv_pairs))
             _make_activity_between_events(
                 window,
                 window_key,
@@ -218,7 +257,7 @@ def _aggregate_events_with_one_sliding_window(strategy: Strategy, events: List[E
     if window:
         _make_activity_between_events(
             window,
-            WindowKey(*zip(*window_kv_pairs)),
+            ListOfPairsDescriptor(list(window_kv_pairs)),
             strategy.out_activity_boundaries,
             activities,
             strategy,
@@ -227,15 +266,15 @@ def _aggregate_events_with_one_sliding_window(strategy: Strategy, events: List[E
     return ActivitiesByStrategy(strategy, activities, metrics)
 
 
-def _add_event_to_window(event: Event, window_key: 'WindowKey', windows: Dict['WindowKey', List[Event]],
+def _add_event_to_window(event: Event, key: GroupingDescriptior, windows: Dict[GroupingDescriptior,List[Event]],
                          metrics: Metrics):
-    window = windows.setdefault(window_key, [])
-    metrics.incr(f'events with data {window_key}', event.duration.seconds)
+    window = windows.setdefault(key, [])
+    metrics.incr(f'events with data {key}', event.duration.seconds)
     window.append(event)
 
 
 def _separate_events_per_windows(events: List[Event], strategy: Strategy, metrics: Metrics)\
-        -> Dict['WindowKey', List[Event]]:
+        -> Dict[GroupingDescriptior, List[Event]]:
     """
     Separates list of events into windows basing on the data inside and 'group_by_keys'.
     :param events: List of events to separate.
@@ -245,7 +284,7 @@ def _separate_events_per_windows(events: List[Event], strategy: Strategy, metric
     and values as correspondings lists of event's.
     """
     # First collect all possible windows.
-    windows: Dict[WindowKey, List[Event]] = {}
+    windows: Dict[GroupingDescriptior, List[Event]] = {}
     if strategy.in_group_by_keys:
         for event in events:
             if _check_skip_event(event, strategy, metrics):
@@ -254,7 +293,7 @@ def _separate_events_per_windows(events: List[Event], strategy: Strategy, metric
             is_added = False
             for key_tuple in strategy.in_group_by_keys:
                 if all(key in event.data for key in key_tuple):
-                    window_key = WindowKey(key_tuple, tuple(event.data[key] for key in key_tuple))
+                    window_key = ListOfPairsDescriptor([(key, str(event.data[key])) for key in key_tuple])
                     _add_event_to_window(event, window_key, windows, metrics)
                     is_added = True
                     break
@@ -266,7 +305,7 @@ def _separate_events_per_windows(events: List[Event], strategy: Strategy, metric
         for event in events:
             if _check_skip_event(event, strategy, metrics):
                 continue
-            window_key = WindowKey(None, event.data)
+            window_key = ListOfPairsDescriptor([(k, str(v)) for k, v in event.data])
             _add_event_to_window(event, window_key, windows, metrics)
     # Next check windows for the "same events" entries which may appear if group_by_keys contains few entries
     # and some set of events have the same value for both keys.
@@ -300,7 +339,7 @@ def _separate_events_per_windows(events: List[Event], strategy: Strategy, metric
 def _aggregate_events_with_few_sliding_windows(strategy: Strategy, events: List[Event], metrics: Metrics)\
         -> ActivitiesByStrategy:
     """ Produces Activities covering all "same data" events. """
-    windows: Dict[WindowKey, List[Event]] = _separate_events_per_windows(
+    windows: Dict[GroupingDescriptior, List[Event]] = _separate_events_per_windows(
         events, strategy, metrics
     )
     # Make activities from the each window.
@@ -325,11 +364,11 @@ def _aggregate_events_with_few_sliding_windows_by_density(strategy: Strategy, ev
     )
     # Analyse gaps in each window.
     activities: List[ActivityByStrategy] = []
-    for key, events in windows.items():
+    for key, window_events in windows.items():
         # Measure all gaps.
         gaps: List[Tuple[int, float]] = []
         prev_event = None
-        for i, event in enumerate(events):
+        for i, event in enumerate(window_events):
             if prev_event:
                 gap = (event.timestamp - (prev_event.timestamp + prev_event.duration)).seconds
                 if gap > 0:
@@ -338,7 +377,7 @@ def _aggregate_events_with_few_sliding_windows_by_density(strategy: Strategy, ev
         if len(gaps) <= 0:
             # If there are no gaps then just create one activity from all events.
             _make_activity_between_events(
-                events,
+                window_events,
                 key,
                 strategy.out_activity_boundaries,
                 activities,
@@ -353,7 +392,7 @@ def _aggregate_events_with_few_sliding_windows_by_density(strategy: Strategy, ev
             # If gap bigger than minimal activity duration then it is a separate activity.
             if gap[1] >= MIN_DURATION_SEC:
                 _make_activity_between_events(
-                    events[last_activity_event_index:gap[0]],
+                    window_events[last_activity_event_index:gap[0]],
                     key,
                     strategy.out_activity_boundaries,
                     activities,
@@ -362,9 +401,9 @@ def _aggregate_events_with_few_sliding_windows_by_density(strategy: Strategy, ev
                 )
                 last_activity_event_index = gap[0]
         # Here we have activities made up to the last big gap. Make activity from the remained events.
-        if last_activity_event_index < len(events) - 1:
+        if last_activity_event_index < len(window_events) - 1:
             _make_activity_between_events(
-                events[last_activity_event_index:-1],
+                window_events[last_activity_event_index:-1],
                 key,
                 strategy.out_activity_boundaries,
                 activities,
