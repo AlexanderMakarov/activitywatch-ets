@@ -15,13 +15,13 @@ For "on demand" measurements see
 [ActivityWatch Importers list](https://docs.activitywatch.net/en/latest/importers.html).
 
 ActivityWatch has [Categorization feature](https://docs.activitywatch.net/en/latest/features/categorization.html)
-which allows to configure tree of "Categories" and filter events into these categories with (May 2023)
+which allows to configure tree of "Categories" and filter events into these categories with (September 2023)
 > The regular expression is matched on the ‘app’ and ‘title’ value of events (not yet URLs).
 
 For time reports this feature is not flexible enough because:
 1. For "time reports" we need name activity in a specific way. Not from predifined categories.
     I.e. mention that we worked exactly on "X" and meeting was especially with "Y".
-2. Regexp on ‘app’ and ‘title’ value is not enough usually. Various event watchers and importers provide
+2. Regexp on event's ‘data’ is not enough usually. Various event watchers and importers provide
     different events with different `data` fields.
 3. ActivityWatch doesn't count events happened during "AFK" periods. But in some cases is it wrong behavior -
     imagine:
@@ -43,24 +43,40 @@ For time reports this feature is not flexible enough because:
 6. Data from existing ActivityWatch watchers and importers usually is not enough. More data - more precise reports
     may be generated.
 
-So the idea is to use out-of-the-box ActivityWatch data, enhance it with data from working environment:
+So the idea is to use out-of-the-box ActivityWatch data, enhance it with data from the popular 
+time-aware tools like:
 - Jira Cloud events ([get_jira_events.py](/get_jira_events.py)),
 - MS Exchange Calendar ([get_outlook_events.py](/get_outlook_events.py)) - aka OWA, Office 365 Mail,
 - Git commits ([get_git_events.py](/get_git_events.py))
 and combine total ~2500 events per day
-(depends on number of watchers/importers and style of work) into 5-12 activities by set of predefined rules.
-Generated activities are expected to be short and have long/messy description.
-So need to assemble good activities manually, but they will be based on the data, not on a memory.
+(depends on number of watchers/importers and style of work) into 5-12 activities by the set of predefined rules.
+It is impossible to generate activities with human-friendly description on the bare heuristic without using
+some kind of LLM-s (aka ChatGPT) trained on the personal data (which insecure for free if use public services).
+So solution is not fully automated yet and relies on the user to assemble good activities and theirs names.
+But it provides solid template to do it, basing all intervals not on a memory but on a data.
 It allows to reduce effort spending on filling time reports, make them more precise.
-Even without necessity to fill time reports output of the applicaiton allows handle time management effectively.
-See [get_activities.py](/get_activities.py) script.
+Even without the necessity to fill time reports for the employer/client
+this applicaiton's allows to handle personal time management in a measurable way and, therefore, effectively.
+
+See [get_activities.py](/get_activities.py) script, run it with `--help` for the details.
 
 Default (i.e. configurable if need) restrictions for "assembling activities" logic are:
 - Activity can't be longer than 2 hours and duration is rounded to 0.25 hour.
-- Events shorter than 1 second are skipped.
+- Events shorter than 1 second are skipped (it doesn't affect resulting activities intervals).
 - All timestamps are rounded to seconds.
 
-Everything is configured in [config.py](/activity_merger/config/config.py) file.
+Everything is configurable in [config.py](/activity_merger/config/config.py) file.
+
+In the result, application allows to mitigate of fix weaknesses of "native ActivityWatch" approach
+mentioned above in a way:
+1. Name of activity is assembled from events data, not from predefined names of categories.
+2. Behavior of interpreting events from the each bucket is configured separately and not just
+    "category A" or "category B" but as generic activity with generic name.
+3. Each bucket is configured perconaly to be related to "AFK" or not.
+4. "Uncategorisable" events may be skipped or be "outweighted" by events from the other bucket.
+5. Activities are assembled basing on the all bucket's events.
+    Moreover - one bucket may provide different activities suggestions for the same interval.
+6. At least 3 sources of data/events (Jira, Outlook calendar, Git) are added.
 
 ## Setup
 
@@ -107,13 +123,26 @@ Script will open new Firefox window with the only tab of Web Outlook which will 
 open Calendar with the specified date, grab from the screen bars of events, parse time and description from them
 and send resulting data into ActivityWatch.
 
+### Git
+
+To build and import events from your Git daily activities:
+- (one time action) Set in [config.py](/activity_merger/config/config.py) at least `GIT_FOLDERS_WITH_REPOS`.
+  Probably it would be necessary to correct `GIT_DEPTH_IN_FOLDER` as well.
+- Run [get_git_events.py](/get_git_events.py) script with target date (run with `--help` for details).
+Script will check all repos in the specified folders for the specified day and with author equal to 
+author recieved from `git config user.name` command (handles different in each repo).
+From each commit would be created event with the same strategy as with Jira - i.e. first event starts from
+the midnight and ends at the time of commit, second commit starts from the first and so on.
+But in contrast to Jira (and relevant projects) it handles all repositories separately,
+i.e. time of commit from A repo is not used for B repo events.
+
 ## Configure get_activities.py
 
 Everything is configured in [config.py](/activity_merger/config/config.py).
 
 ## Roadmap
 
-TODO:
+### Must:
 
 - [x] Dry run for importers.
 - [x] Why get_outlook_events.py default "today" don't implemented? It doesn't work with back_days=0.
@@ -125,37 +154,27 @@ TODO:
 - [x] Prepare script to run all event importers and get_activities.py for the specific date.
 - [x] For `Strategy.in_group_by_keys` need an ability specify "if key doesn't exist then use this", not both. IDEA case.
 - [x] Add "git exporter".
+- [x] Add to Strategy 'in_skip_events_with_key_value' or 'in_key_value_skip' property to skip "app=unknown" events.
+- [x] Restore 'ignore_hints' in 'get_activities.py'.
+- [x] Separate "strategy activity" and "result activity".
 - [ ] Add ability for activities within `out_activity_boundaries` not "whole" strategies keep track "max cut from left/right".
-- [ ] Add to Strategy 'in_skip_events_with_key_value' or 'in_key_value_skip' property to skip "app=unknown" events.
-- [ ] Restore 'ignore_hints' in 'get_activities.py'.
 - [ ] Keep exact events in result activities.
 - [ ] Complete get_activities.py
 - [ ] Try it for myself. Adjust `STRATEGIES` and code if need.
 - [ ] Change licence.
 - [ ] Use for ETS for a few days. Adjust `STRATEGIES`.
 - [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
-- [ ] Prepare for distribution.
+- [ ] Prepare for distribution (decide how it would look like).
 - [ ] Support intersecting AFK events in analyzer.analyze_activities_per_strategy
 - [ ] Importers - support parsing few days at once.
 - [ ] OWA importer - adopt Chrome as well.
 
-Questionable:
-- [ ] Separate "strategy activity" and "result activity".
+### Questionable:
+
 - [ ] Add support for TODO cases in test_merger.
+- [ ] Think about way to make configuration file not to be "too deep in sources".
 - [ ] Separate `aw_export_one_day.py` into use standalone. The same is useful with exporters as well.
-- [ ] Wrap into the web server - send JSON with day data - get activities.
-- [ ] Made a tool to help build rules. See z1 and mark
-  - "skip" (non-working or AFK),
-  - "merge_next" (e.g. for "unknown"),
-  - "these events" (1 or few if not sure which points on activity better)
-  In result need to provide user with list of problems which would lead to reconsideration
-  or creating more precise rules (subhandlers).
-  Better to remember answers or provide ability to reiterate only some of events, for example
-  those where were issues previous iteration. It means database...
-- [x] Ask user for decision about each interval cut by rules.
-    Appeared it is too tedious - 2k intervals per working day with few seconds duration.
-- [ ] Enhance above - ask user only about unique combination of events.
-    Thus we omit inconsistent decisions as well. But need a way to suggest better rules.
-- [ ] "tune_rules.py" - support `WindowsTerminalLeader`.
   [ ] Improve "windows to activities" (`analyzer._window_to_activity`) with parallel sliding windows.
+- [ ] Wrap into the web server - send JSON with day data - get activities.
 - [ ] Interactive way to merge activities.
+- [ ] Support remained "combinations of "in_" settings in `handle_events` (TODO-s in strategies.py)
