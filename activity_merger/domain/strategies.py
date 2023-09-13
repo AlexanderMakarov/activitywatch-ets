@@ -1,6 +1,5 @@
 import dataclasses
 import datetime
-from collections import namedtuple
 from typing import Dict, List, Set, Tuple
 
 from ..config.config import MIN_DURATION_SEC
@@ -21,26 +20,9 @@ class GroupingDescriptior:
     def __eq__(self, other):
         raise NotImplementedError("__eq__ is not implemented")
 
-    def get_description(self) -> str:
+    def get_kv_pairs(self) -> List[Tuple[str, str]]:
         raise NotImplementedError("get_description is not implemented")
 
-
-@dataclasses.dataclass
-class StringDescriptor(GroupingDescriptior):
-    """
-    Simple grouping descriptor from a string.
-    """
-
-    name: str
-
-    def __hash__(self):
-        return hash(self.name)
-
-    def __eq__(self, other):
-        return self.name == other.name
-
-    def get_description(self) -> str:
-        return self.name
 
 @dataclasses.dataclass
 class ListOfPairsDescriptor(GroupingDescriptior):
@@ -58,8 +40,8 @@ class ListOfPairsDescriptor(GroupingDescriptior):
             return False
         return frozenset(self.pairs) == frozenset(other.pairs)
 
-    def get_description(self) -> str:
-        return ", ".join(f'{k}={v}' for k, v in self.pairs)
+    def get_kv_pairs(self) -> List[Tuple[str, str]]:
+        return self.pairs
 
 
 @dataclasses.dataclass

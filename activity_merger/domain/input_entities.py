@@ -233,7 +233,7 @@ class ActivityBoundaries(enum.Enum):
             raise ValueError(f"Invalid '{name}' value is provided as an ActivityBoundaries.")
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class Strategy:
     """
     Structure representing how to aggregate events from the one source of events (i.e. watcher or exporter).
@@ -305,13 +305,24 @@ class Strategy:
     Means which boundaries of activity are strict.
     """
 
-    out_activity_name: str
+    out_produces_good_activity_name: bool
     """
-    [alone, auxiliary] - means whether activity name is trustable.
+    Flag that strategy events may provide good resulting activity name.
+    """
+
+    out_activity_name_sentence_builder: Callable[[List[Tuple[str, str]]], str]
+    """
+    Function which builds one sentence for the resulting activity name from the list of
+    key-value pairs aggregated from ActivityWatch event's "data" dictionaries which were used to merge
+    multiple events into one activity. Should start from upper case letter and end with the point.
+    If `None` then uses simple "dict to string" logic.
+    If function returns `None` or empty string then strategy won't contribute to the resulting activity name.
     """
 
     def __post_init__(self):
-        self.out_activity_boundaries = ActivityBoundaries.from_str(self.out_activity_boundaries)
+        # Convert out_activity_boundaries from string to `ActivityBoundaries`.
+        # https://stackoverflow.com/a/54119384/1535127
+        object.__setattr__(self, 'out_activity_boundaries', ActivityBoundaries.from_str(self.out_activity_boundaries))
 
     __properties = [
         'bucket_prefix', 
@@ -322,7 +333,8 @@ class Strategy:
         'out_self_sufficient',
         'out_only_not_afk',
         'out_activity_boundaries',
-        'out_activity_name'
+        'out_produces_good_activity_name',
+        'out_activity_name_sentence_builder',
     ]
 
     def __repr__(self) -> str:

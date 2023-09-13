@@ -11,7 +11,7 @@ from ..config.config import (AFK_RULE_PRIORITY, CURRENT_TIMEZONE,
                              TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,
                              WATCHDOG_RULE_PRIORITY)
 from ..helpers.helpers import event_data_to_str, seconds_to_timedelta
-from .input_entities import ActivityBoundaries, Event, Rule2
+from .input_entities import ActivityBoundaries, Event, Rule2, Strategy
 from .interval import Interval, intervals_duration
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult, RuleResult
@@ -618,8 +618,9 @@ def _add_debug_events_to_not_overlap(activites: List[ActivityByStrategy], debug_
                 bucket_id=debug_bucket_prefix,
                 timestamp=activity.suggested_start_time,
                 # For debug events need to use end-start time, not duration by events.
-                duration=activity.suggested_end_time - activity.suggested_start_time,  
-                description=activity.grouping_data.get_description(),
+                duration=activity.suggested_end_time - activity.suggested_start_time,
+                # Build description in easiest way.
+                description=", ".join(f'{k}={v}' for k, v in activity.grouping_data.get_kv_pairs()),
                 events_count=len(activity.events),
             )
             metrics.incr('debug events in ' + debug_bucket_prefix, activity.duration)
@@ -752,31 +753,66 @@ def _build_result_activity(ba_interval: intervaltree.Interval, candidates_tree: 
         # Skip all other cases.
         raise NotImplementedError(f'Inner error when {activity} marked as overlapping with basic activity'
                                     f'{ba_interval} but in reality it is not.')
-    ra_duration = ba_interval.length().seconds
-    # Find right description for the resulting activity.
-    dominant_names = []
-    other_names = []
-    # TODO set name properly.
-    for activity in overlapping_activities:
-        if activity.strategy.out_activity_name == "alone":
-            dominant_names.append(activity.grouping_data.get_description())
-        else:
-            other_names.append(activity.grouping_data.get_description())
-    description = "; ".join(dominant_names)
-    if len(description) < 1:
-        metrics.incr("result activities without distinct name", ra_duration)
-        description = "; ".join(other_names)
-    else:
-        metrics.incr(f"result activities with {len(dominant_names)} distinct names", ra_duration)
 
     # Build raw RA, i.e. with "not sure end". Fill it with all the events from the "enhancing" activities.
+    ra_duration = ba_interval.length().seconds
+    name = _build_activity_name(overlapping_activities, metrics, ra_duration, True) # TODO get last arg from user.
     metrics.incr("result activities", ra_duration)
     return Activity(
         ba_interval.begin,
         ba_interval.end,
         ra_events,
-        description,
+        name,
     )
+
+
+def _build_activity_name(activities: List[ActivityByStrategy], metrics: Metrics, duration_sec: float,
+                         is_use_all_strategies: bool) -> str:
+    # Group activities by Strategy. Keep map of strategies to name. Name is a key in both dictionaries.
+    strategy_to_name: Dict[str, Strategy] = {}
+    grouped_activities: Dict[str, List[ActivitiesByStrategy]] = collections.defaultdict(list)
+    for activity in activities:
+        strategy_name = activity.strategy.name
+        grouped_activities[strategy_name].append(activity)
+        strategy_to_name[strategy_name] = activity.strategy
+    # Sort groups to get "out_produces_good_activity_name" strategy activities first.
+    sorted_strategies = sorted(strategy_to_name.values(), key=lambda x: x.out_produces_good_activity_name,
+                               reverse=True)
+    sorted_grouped_activities = [grouped_activities[x.name] for x in sorted_strategies]
+
+    # Determine whether need to include all strategies in the result.
+    include_all = is_use_all_strategies or not sorted_strategies[0].out_produces_good_activity_name
+
+    # Process each group of activities to build sentence.
+    resulting_names: List[str] = []
+    for grouped_activity_list in sorted_grouped_activities:
+        common_kv_pairs = collections.defaultdict(set)
+
+        # Collect the common key-value pairs from grouping_data
+        activity: ActivityByStrategy
+        for activity in grouped_activity_list:
+            for pair in activity.grouping_data.get_kv_pairs():
+                common_kv_pairs[pair[0]].add(pair[1])
+
+        # Convert all values to comma-separated string.
+        common_kv_list = [(k, ", ".join(sorted(v))) for k, v in common_kv_pairs.items()]
+
+        # Use the strategy's out_activity_name_builder to get the name, or use a default logic.
+        strategy = strategy_to_name[grouped_activity_list[0].strategy.name]
+        name_builder = strategy.out_activity_name_sentence_builder if strategy.out_activity_name_sentence_builder \
+                       else lambda kv_pairs: ", ".join([f"{k}: {v}" for k, v in kv_pairs])
+
+        # Append to resulting names if the strategy produces a good activity name
+        generated_name = name_builder(common_kv_list)
+        if generated_name:
+            resulting_names.append(generated_name)
+        if not include_all and not strategy.out_produces_good_activity_name:
+            metrics.incr("result activities with good name", duration_sec)
+            break
+    metrics.incr(f"result activities with name combined from {len(sorted_grouped_activities)} strategies",
+                 duration_sec)
+
+    return " ".join(resulting_names)
 
 
 def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStrategy],
@@ -918,6 +954,8 @@ def analyze_activities_per_strategy(activities_by_strategy: List[ActivitiesByStr
     # Check that at least something was added to the result tree. Otherwise no debug events were added.
     if len(result_tree) > 0:
         debug_buckets_cnt += 1
+
+    # TODO: fix empty activity into AFK time 0:13:06.636000 (09:15:37..09:28:43)
 
     # 4. Make tree from remained activities. Chop them by existing `result` activities if there are such.
     candidates_tree = intervaltree.IntervalTree()
