@@ -10,6 +10,7 @@ from ..config.config import (
     AFK_RULE_PRIORITY,
     CURRENT_TIMEZONE,
     DEBUG_BUCKET_PREFIX,
+    LIMIT_OF_RESULTING_ACTIVITIES,
     LOG,
     MIN_DURATION_SEC,
     TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS,
@@ -1102,9 +1103,9 @@ def analyze_activities_per_strategy(
     LOG.info("Assemble activities-by-strategies into result activities.")
     current_start_point: datetime.datetime = candidates_tree.begin()  # Start from leftest/oldest activity.
     debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
-    while (
-        current_start_point and len(result_tree) < 100
-    ):  # Limit number of iterations to avoid infinite loops on bugs or wrong input.
+
+    # Limit number of iterations to avoid infinite loops on bugs or wrong input.
+    while (current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES):
         metrics.incr("iterations to assemble remaining activities")
         # Find "basic activity" to base "result" activity on interval of it.
         ba_interval = _find_basic_activity_interval(candidates_tree, current_start_point, metrics)
@@ -1112,13 +1113,15 @@ def analyze_activities_per_strategy(
             break  # No more activities.
         # Find all overlapping activities and make new `result` activity (RA).
         ra = _build_result_activity(ba_interval, candidates_tree, metrics)
-        # Cut RA by already existing result activities.
+        # Check RA doesn't overlaps with existing result activities at the end.
         result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
         # If we had interval in `result_tree` when added RA then we need to search next gap.
         # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
         for existing_interval in result_tree_overlapped_with_ra_end:
             if existing_interval.begin < ra.end_time:
-                ra.end_time = existing_interval.begin  # TODO remove events from RA and correct name.
+                # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
+                ra.end_time = existing_interval.begin
+                ra.events = [x for x in ra.events if x.timestamp < ra.end_time]
                 metrics.incr(
                     "result activities shrinked because it overlaps by end with alredy existing",
                     (ra.end_time - existing_interval.begin).total_seconds(),
