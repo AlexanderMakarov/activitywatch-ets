@@ -5,7 +5,7 @@ import enum
 from typing import Tuple, Callable, List, Union
 
 
-Event = collections.namedtuple('Event', ['bucket_id', 'timestamp', 'duration', 'data'])
+Event = collections.namedtuple("Event", ["bucket_id", "timestamp", "duration", "data"])
 """
 Lightweight representation of ActivityWatcher event without "id" field but with "bucket_it" field to trach source.
 """
@@ -33,9 +33,19 @@ class Rule2:
     Use `with_subrules` to buld tree of rules and make more specific activities.
     See `skip`, `merge_next`, `placeholder` methods to add specific behavior to rules/activities.
     """
-    __slots__ = ('__pattern', '__regexp', 'priority', 'to_string',
-                 '__is_skip', '__is_merge_next', '__is_placeholder',
-                 '__parent', '__data_key', '__subrules')
+
+    __slots__ = (
+        "__pattern",
+        "__regexp",
+        "priority",
+        "to_string",
+        "__is_skip",
+        "__is_merge_next",
+        "__is_placeholder",
+        "__parent",
+        "__data_key",
+        "__subrules",
+    )
 
     def __init__(self, pattern: str, priority: int, to_string: Union[Callable[[str], str], str] = None):
         self.__pattern = pattern
@@ -50,11 +60,18 @@ class Rule2:
         self.__subrules = None
 
     def __hash__(self):
-        return hash((self.__pattern, self.priority,
-                    self.__is_skip, self.__is_merge_next, self.__is_placeholder,
-                    self.__data_key))
+        return hash(
+            (
+                self.__pattern,
+                self.priority,
+                self.__is_skip,
+                self.__is_merge_next,
+                self.__is_placeholder,
+                self.__data_key,
+            )
+        )
 
-    def skip(self) -> 'Rule2':
+    def skip(self) -> "Rule2":
         """
         Marks rule to skip underlying interval from reports. May be used for "non working" activities.
         """
@@ -63,7 +80,7 @@ class Rule2:
         self.__is_skip = True
         return self
 
-    def merge_next(self) -> 'Rule2':
+    def merge_next(self) -> "Rule2":
         """
         Marks rule to merge underlying interval with the next interval to add to it's rule.
         Useful for 'new browser tab' like activities when it is impossible to reveal activity from related event
@@ -76,7 +93,7 @@ class Rule2:
         self.__is_merge_next = True
         return self
 
-    def placeholder(self) -> 'Rule2':
+    def placeholder(self) -> "Rule2":
         """
         Marks "service" rules. They are useless for report and usually 0 priority.
         Causes hints about necessity of new rule to cover related acitivity.
@@ -86,7 +103,7 @@ class Rule2:
         self.__is_placeholder = True
         return self
 
-    def with_subrules(self, key: str, subrules: List['Rule2']):
+    def with_subrules(self, key: str, subrules: List["Rule2"]):
         """
         Builds tree from rules to handle different aspects of events.
         :param key: Key in `Event.data` dictionary to apply subrules on.
@@ -128,7 +145,7 @@ class Rule2:
             desc += f", parent={self.__parent}"
         return f"Rule '{self.__pattern}', priority={self.priority}{desc}"
 
-    def find_rule_for_event(self, event: Event) -> Tuple['Rule2', str]:
+    def find_rule_for_event(self, event: Event) -> Tuple["Rule2", str]:
         """
         Find rule for the even in a recursive way passing down to subrules.
         :param event: Event to find "leaf" rule for.
@@ -223,7 +240,7 @@ class ActivityBoundaries(enum.Enum):
     """ Activity boundaries are not strict and may be changed. """
 
     @classmethod
-    def from_str(cls, name: Union[str, 'ActivityBoundaries']) -> 'ActivityBoundaries':
+    def from_str(cls, name: Union[str, "ActivityBoundaries"]) -> "ActivityBoundaries":
         """Constructs instance from the name if string is given."""
         if isinstance(name, ActivityBoundaries):
             return name
@@ -322,23 +339,23 @@ class Strategy:
     def __post_init__(self):
         # Convert out_activity_boundaries from string to `ActivityBoundaries`.
         # https://stackoverflow.com/a/54119384/1535127
-        object.__setattr__(self, 'out_activity_boundaries', ActivityBoundaries.from_str(self.out_activity_boundaries))
+        object.__setattr__(self, "out_activity_boundaries", ActivityBoundaries.from_str(self.out_activity_boundaries))
 
     __properties = [
-        'bucket_prefix', 
-        'in_each_event_is_activity', 
-        'in_events_density_matters', 
-        'in_activities_may_overlap',
-        'in_group_by_keys',
-        'out_self_sufficient',
-        'out_only_not_afk',
-        'out_activity_boundaries',
-        'out_produces_good_activity_name',
-        'out_activity_name_sentence_builder',
+        "bucket_prefix",
+        "in_each_event_is_activity",
+        "in_events_density_matters",
+        "in_activities_may_overlap",
+        "in_group_by_keys",
+        "out_self_sufficient",
+        "out_only_not_afk",
+        "out_activity_boundaries",
+        "out_produces_good_activity_name",
+        "out_activity_name_sentence_builder",
     ]
 
     def __repr__(self) -> str:
         desc = [f"Strategy '{self.name}':"]
         for prop in Strategy.__properties:
             desc.append(f"  {prop} = {getattr(self, prop)}")
-        return '\n'.join(desc)
+        return "\n".join(desc)

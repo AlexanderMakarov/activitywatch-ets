@@ -18,22 +18,24 @@ def setup_logging() -> logging.Logger:
     logging.addLevelName(logging.DEBUG, "DEBU")  # To be 4 chars length as another ones.
     logging.basicConfig(
         level=os.getenv("LOGLEVEL", "INFO").upper(),
-        format='%(asctime)s.%(msecs)03d %(levelname)-4s: %(message)s',
-        datefmt="%H:%M:%S"
+        format="%(asctime)s.%(msecs)03d %(levelname)-4s: %(message)s",
+        datefmt="%H:%M:%S",
     )
     return logging.getLogger()
 
 
 def event_data_to_str(event: Event) -> str:
     if not event:
-        return 'null'
+        return "null"
     return str(event.data)
 
 
 def event_to_str(event: Event) -> str:
-    return f"{event.timestamp.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"\
-           f"..{(event.timestamp + event.duration).astimezone(CURRENT_TIMEZONE):%H:%M:%S}("\
-           f"{event_data_to_str(event)})"
+    return (
+        f"{event.timestamp.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"
+        f"..{(event.timestamp + event.duration).astimezone(CURRENT_TIMEZONE):%H:%M:%S}("
+        f"{event_data_to_str(event)})"
+    )
 
 
 def from_start_to_end_to_str(start: datetime.datetime, end: datetime.datetime) -> str:
@@ -44,23 +46,23 @@ def seconds_to_timedelta(seconds: float) -> datetime.timedelta:
     return datetime.timedelta(seconds=int(seconds))
 
 
-def valid_date(s) -> datetime.datetime:  # https://stackoverflow.com/a/25470943
+def valid_date(date_str) -> datetime.datetime:  # https://stackoverflow.com/a/25470943
     try:
-        return datetime.datetime.strptime(s, "%Y-%m-%d").astimezone()
-    except ValueError as e:
-        msg = "not a valid date: {0!r}".format(s)
-        raise argparse.ArgumentTypeError(msg) from e
+        return datetime.datetime.strptime(date_str, "%Y-%m-%d").astimezone()
+    except ValueError as err:
+        msg = "not a valid date: {0!r}".format(date_str)
+        raise argparse.ArgumentTypeError(msg) from err
 
 
-def ensure_datetime(d):  # https://stackoverflow.com/a/29840081/1535127
+def ensure_datetime(obj):  # https://stackoverflow.com/a/29840081/1535127
     """
     Takes a date or a datetime as input, outputs a datetime.
     :param d: Datetime or date.
     :return: Always datetime in current time zone.
     """
-    if isinstance(d, datetime.datetime):
-        return d
-    return datetime.datetime(d.year, d.month, d.day).astimezone(CURRENT_TIMEZONE)
+    if isinstance(obj, datetime.datetime):
+        return obj
+    return datetime.datetime(obj.year, obj.month, obj.day).astimezone(CURRENT_TIMEZONE)
 
 
 def delete_buckets(bucket_ids: List[str], client: aw_client.ActivityWatchClient) -> str:
@@ -77,13 +79,19 @@ def delete_buckets(bucket_ids: List[str], client: aw_client.ActivityWatchClient)
             if bucket_id in buckets.keys():
                 client.delete_bucket(bucket_id, True)
                 result.append("Deleted '" + bucket_id + "' bucket. ")
-    except Exception as ex:
-        return "Wasn't able connect to ActivityWatch client because: " + str(ex)
-    return ''.join(result)
+    except Exception as err:
+        return "Wasn't able connect to ActivityWatch client because: " + str(err)
+    return "".join(result)
 
 
-def upload_events(events: List[Event], event_type: str, bucket_id: str, is_replace: bool = False,
-                  aw_client_name: str = "upload_events", client: aw_client.ActivityWatchClient = None) -> str:
+def upload_events(
+    events: List[Event],
+    event_type: str,
+    bucket_id: str,
+    is_replace: bool = False,
+    aw_client_name: str = "upload_events",
+    client: aw_client.ActivityWatchClient = None,
+) -> str:
     """
     Takes list of `Event`-s, converts them into ActivityWatch events, creates new ActivityWatch client, removes bucket
     if need, creates bucket and uploads events into it.

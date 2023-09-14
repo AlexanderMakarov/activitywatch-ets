@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Set, Callable
 from .interval import Interval
 
 
-Metric = collections.namedtuple('Metric', ['cnt', 'duration'])
+Metric = collections.namedtuple("Metric", ["cnt", "duration"])
 """
 One entry in `Metrics` object.
 :param cnt: Number of occurences.
@@ -31,7 +31,7 @@ class Metrics:
         self.skip_metrics = skip_metrics if isinstance(skip_metrics, set) else set()
 
     @staticmethod
-    def from_dict(metrics: Dict[str, Metric]) -> 'Metrics':
+    def from_dict(metrics: Dict[str, Metric]) -> "Metrics":
         """
         Builds `Metrics` instance directly, with specified metrics inside. Useful for tests.
         :param metrics: Dict of metrics and values expected to be presented inside.
@@ -49,14 +49,11 @@ class Metrics:
         if metric_name in self.skip_metrics:
             return
         metric = self.metrics.get(metric_name, Metric(0, 0.0))
-        metric = Metric(
-            metric.cnt + 1,
-            metric.duration + interval.get_duration() if interval else 0
-        )
+        metric = Metric(metric.cnt + 1, metric.duration + interval.get_duration() if interval else 0)
         self.metrics[metric_name] = metric
         return metric
 
-    def incr(self, metric_name: str, duration: float=0.0) -> Metric:
+    def incr(self, metric_name: str, duration: float = 0.0) -> Metric:
         """
         Increment metric on one event with given duration. May add new metrics and skip None intervals.
         :param metric_name: Name of metric to increment.
@@ -65,10 +62,7 @@ class Metrics:
         if metric_name in self.skip_metrics:
             return
         metric = self.metrics.get(metric_name, Metric(0, 0.0))
-        metric = Metric(
-            metric.cnt + 1,
-            metric.duration + duration
-        )
+        metric = Metric(metric.cnt + 1, metric.duration + duration)
         self.metrics[metric_name] = metric
         return metric
 
@@ -103,8 +97,9 @@ class Metrics:
         """
         return self.metrics.get(metric_name)
 
-    def to_strings(self, is_exclude_empty: bool = True, is_exclude_duration=False,
-                   ignore_with_substrings: List[str] = None) -> List[str]:
+    def to_strings(
+        self, is_exclude_empty: bool = True, is_exclude_duration=False, ignore_with_substrings: List[str] = None
+    ) -> List[str]:
         """
         Returns generator of sorted (first by duration, next by count) metric descriptions.
         :param is_exclude_zero: Flag to return only metrics with only positive count.
@@ -117,16 +112,18 @@ class Metrics:
 
         def generate():
             for metric in sorted_metric_entries:
-                if (not is_exclude_empty or metric[1].cnt > 0)\
-                        and (not ignore_with_substrings\
-                             or not any(map(metric[0].__contains__, ignore_with_substrings))):
+                if (not is_exclude_empty or metric[1].cnt > 0) and (
+                    not ignore_with_substrings or not any(map(metric[0].__contains__, ignore_with_substrings))
+                ):
                     yield metric
 
         if is_exclude_duration:
             return (f"{x[1].cnt:4} - {x[0]}" for x in generate())
         else:
-            return (f"{x[1].cnt:4} on {str(datetime.timedelta(seconds=int(x[1].duration))).rjust(8, '0')} - {x[0]}"
-                    for x in generate())
+            return (
+                f"{x[1].cnt:4} on {str(datetime.timedelta(seconds=int(x[1].duration))).rjust(8, '0')} - {x[0]}"
+                for x in generate()
+            )
 
     def __repr__(self) -> str:
         return "\n  " + "\n  ".join(self.to_strings())

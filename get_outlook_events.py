@@ -13,8 +13,14 @@ import contextlib
 import unittest
 import parameterized
 
-from activity_merger.config.config import LOG, FIREFOX_PROFILE_PATH, OWA_SCRAPER_NAME, OWA_URL, OWA_BUCKET_ID,\
-                                          OWA_MAX_SCROLL_BACK
+from activity_merger.config.config import (
+    LOG,
+    FIREFOX_PROFILE_PATH,
+    OWA_SCRAPER_NAME,
+    OWA_URL,
+    OWA_BUCKET_ID,
+    OWA_MAX_SCROLL_BACK,
+)
 from activity_merger.helpers.helpers import setup_logging, valid_date, upload_events
 from activity_merger.domain.input_entities import Event
 
@@ -32,12 +38,13 @@ CALENDAR_TODAY_URL_SUFFIX = "/#path=/calendar/view/Day"
 
 
 @contextlib.contextmanager
-def start_firefox_under_existing_profile(profile: str, page: str,  headless: bool = True) -> WebDriver:
+def start_firefox_under_existing_profile(profile: str, page: str, headless: bool = True) -> WebDriver:
     options = webdriver.FirefoxOptions()
-    firefox_args = [ # moz:firefoxOptions
-        '--new-instance',  # --safe-mode is dangerous - it uninstalls all plugins from profile!
-        '--new-tab', page,
-        '--start-maximized',
+    firefox_args = [  # moz:firefoxOptions
+        "--new-instance",  # --safe-mode is dangerous - it uninstalls all plugins from profile!
+        "--new-tab",
+        page,
+        "--start-maximized",
     ]
     options._arguments.extend(firefox_args)
     # Note that '--profile' inside options._arguments causes alert "window with such profile is already opened".
@@ -52,8 +59,9 @@ def start_firefox_under_existing_profile(profile: str, page: str,  headless: boo
         driver.quit()
 
 
-def call_web_element_with_fail_handling(description: str, container: WebElement, func: Callable,
-        check_result_not_empty: bool = True) -> Any:
+def call_web_element_with_fail_handling(
+    description: str, container: WebElement, func: Callable, check_result_not_empty: bool = True
+) -> Any:
     assert container, f"call_web_element_with_fail_handling: Can't get {description} from empty container: {container}"
     try:
         result = None
@@ -69,21 +77,24 @@ def call_web_element_with_fail_handling(description: str, container: WebElement,
         return result
     except Exception as e:
         container.screenshot(SCREENSHOT_FAIL_NAME)
-        LOG.error(f"Can't find {description} on {container}. Container inner HTML:" +
-                  "\n" + container.get_attribute('innerHTML'))
+        LOG.error(
+            f"Can't find {description} on {container}. Container inner HTML:"
+            + "\n"
+            + container.get_attribute("innerHTML")
+        )
         raise e
 
 
 def _wait_on_page(driver: WebDriver, xpath: str) -> Any:
     try:
-        return WebDriverWait(driver, 1*60).until(
+        return WebDriverWait(driver, 1 * 60).until(
             EC.visibility_of_all_elements_located((By.XPATH, xpath)),
-            f"Can't find/wait Outlook Web 'Calendar' page elements. Make sure that you've logged in on main window."
+            f"Can't find/wait Outlook Web 'Calendar' page elements. Make sure that you've logged in on main window.",
         )
-    except Exception as e:
+    except Exception as err:
         driver.get_screenshot_as_file(SCREENSHOT_FAIL_NAME)
-        LOG.error(e.text + ". Page HTML:\n" + driver.page_source)
-        raise e
+        LOG.error(err.text + ". Page HTML:\n" + driver.page_source)
+        raise err
 
 
 def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
@@ -102,9 +113,9 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
                     lambda x: x.find_element(
                         By.XPATH,  # Note that page may contains a lot of elements with only one visible.
                         "button[contains(@class,'o365button')]"
-                            "/span[contains(@class,'o365buttonLabel') and not(contains(@style,'none'))]"
+                        "/span[contains(@class,'o365buttonLabel') and not(contains(@style,'none'))]",
                     ),
-                    False
+                    False,
                 )
                 if date_label_span:
                     current_day_desc = date_label_span.text
@@ -119,10 +130,12 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
             scroll_back: WebElement = call_web_element_with_fail_handling(
                 "'Open previous day' button",
                 scroll_area,
-                lambda x: x.find_element(By.XPATH, f"button/{SCROLL_BACK_XPATH_SELECTOR}/..")
+                lambda x: x.find_element(By.XPATH, f"button/{SCROLL_BACK_XPATH_SELECTOR}/.."),
             )
-            LOG.info(f"From {current_day_desc} page clicking on '{scroll_back.get_attribute('ariaLabel')}' button"
-                     f"(rect={scroll_back.rect}) to shift on previous day.")
+            LOG.info(
+                f"From {current_day_desc} page clicking on '{scroll_back.get_attribute('ariaLabel')}' button"
+                f"(rect={scroll_back.rect}) to shift on previous day."
+            )
             scroll_back.click()
             scrolls_back += 1
     LOG.info(f"Finishing on {current_day_desc} page.")
@@ -136,27 +149,26 @@ def _get_hour_points(container_web_element: WebElement):
             By.XPATH,
             ".//span[contains(@class,'ms-font-m')"
             " and contains(@class,'semilight')"
-            " and contains(@class,'ms-font-color-neutralPrimary')]"
-        )
+            " and contains(@class,'ms-font-color-neutralPrimary')]",
+        ),
     )
     # Note that WebElement.rect/location are based on Element.getBoundingClientRect() though are adding padding
     # and border-width. See https://developer.mozilla.org/en-US/docs/Web/API/Element/getBoundingClientRect
     # Also not that "padding-top" is returned as "10px" so need to parse only digits.
     hour_points = [
-        (
-            int(x.text),
-            x.rect['y'] + int(''.join(c for c in x.value_of_css_property("padding-top") if c.isdigit()))
-        )
-        for x in hour_spans if x.text.isnumeric()
+        (int(x.text), x.rect["y"] + int("".join(c for c in x.value_of_css_property("padding-top") if c.isdigit())))
+        for x in hour_spans
+        if x.text.isnumeric()
     ]
     if len(hour_points) < 24:
-        LOG.error(container_web_element.get_attribute('innerHTML'))
+        LOG.error(container_web_element.get_attribute("innerHTML"))
         assert False, "Can't find all 24 'hour' points on the screen."
     return hour_points
 
 
-def _find_start_and_duration(hour_points: List[Tuple[int, float]], event_div: WebElement, event_name: str,
-        event_date: datetime.datetime) -> Tuple[datetime.datetime, datetime.timedelta]:
+def _find_start_and_duration(
+    hour_points: List[Tuple[int, float]], event_div: WebElement, event_name: str, event_date: datetime.datetime
+) -> Tuple[datetime.datetime, datetime.timedelta]:
     """
     Roughly (by web element coordinates) finds out start and duration of event.
     :param hour_points: List of tuples [hour value, relevant div rectangle dict].
@@ -165,8 +177,8 @@ def _find_start_and_duration(hour_points: List[Tuple[int, float]], event_div: We
     :param event_date: Date to set for event.
     :return: Tuple [event start, event duration].
     """
-    start_y = event_div.rect['y']
-    end_y = start_y + event_div.rect['height'] 
+    start_y = event_div.rect["y"]
+    end_y = start_y + event_div.rect["height"]
     # There are following option here:
     # 1) Event starts on hour start, ends inside it.
     # 2) Event starts on hour start, ends in some following hour.
@@ -191,23 +203,39 @@ def _find_start_and_duration(hour_points: List[Tuple[int, float]], event_div: We
             index_started_in = 23
             index_ended_in = 23  # We can't see meetings from the next day so assume it ends at midnight.
         else:
-            assert False, f"Can't find start hour for element '{event_name}' with y coordinate {start_y}"\
-                          f" among hours: {hour_points}"
+            assert False, (
+                f"Can't find start hour for element '{event_name}' with y coordinate {start_y}"
+                f" among hours: {hour_points}"
+            )
     if index_ended_in is None:
-        assert False, f"Can't find end hour for element '{event_name}' with bottom y coordinate {end_y}"\
-                      f" among hours: {hour_points}"
+        assert False, (
+            f"Can't find end hour for element '{event_name}' with bottom y coordinate {end_y}"
+            f" among hours: {hour_points}"
+        )
     # Measure size of hour in pixels.
     hour_height = hour_points[1][1] - hour_points[0][1]
     # Calculate start time.
     hour_started_in = hour_points[index_started_in]
     start_hour_ratio = float(start_y - hour_started_in[1]) / hour_height
-    start_time = datetime.datetime(year=event_date.year, month=event_date.month, day=event_date.day,
-                                   hour=hour_started_in[0], minute=int(start_hour_ratio * 60), second=0).astimezone()
+    start_time = datetime.datetime(
+        year=event_date.year,
+        month=event_date.month,
+        day=event_date.day,
+        hour=hour_started_in[0],
+        minute=int(start_hour_ratio * 60),
+        second=0,
+    ).astimezone()
     # Calculate end time.
     hour_ended_in = hour_points[index_ended_in]
     end_hour_ratio = float(end_y - hour_ended_in[1]) / hour_height
-    end_time = datetime.datetime(year=event_date.year, month=event_date.month, day=event_date.day,
-                                 hour=hour_ended_in[0], minute=int(end_hour_ratio * 60), second=0).astimezone()
+    end_time = datetime.datetime(
+        year=event_date.year,
+        month=event_date.month,
+        day=event_date.day,
+        hour=hour_ended_in[0],
+        minute=int(end_hour_ratio * 60),
+        second=0,
+    ).astimezone()
     return start_time, end_time - start_time
 
 
@@ -222,20 +250,22 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
     events_containers = _wait_on_page(
         driver,
         "//div[contains(@class,'scrollContainer') and not(contains(@style,'none'))]"
-            "/div[@role='presentation' and not(contains(@style,'none'))]"
+        "/div[@role='presentation' and not(contains(@style,'none'))]",
     )
-    events_container = next(x for x in events_containers if x.size['height'] > 100)
+    events_container = next(x for x in events_containers if x.size["height"] > 100)
     # Wait until all events are rendered on the container. Immediate check returns only first event(s).
     driver.implicitly_wait(1)
     events_container.screenshot(SCREENSHOT_NAME)
     LOG.info(f"Page of required day is opened, scrapping events. See screenshot {SCREENSHOT_NAME}.")
     # Note that these div-s also contains elements with calendar(s) name.
-    TYPE_DIV_XPATH_SELECTOR = "div[contains(@class,'calendarBusy') or contains(@class,'calendarTentative')"\
-                              " or contains(@class,'calendarFree')]"
+    TYPE_DIV_XPATH_SELECTOR = (
+        "div[contains(@class,'calendarBusy') or contains(@class,'calendarTentative')"
+        " or contains(@class,'calendarFree')]"
+    )
     probable_event_divs: List[WebElement] = call_web_element_with_fail_handling(
         "probable containers of event rectangles",
         events_container,
-        lambda x: x.find_elements(By.XPATH, f".//{TYPE_DIV_XPATH_SELECTOR}/..")
+        lambda x: x.find_elements(By.XPATH, f".//{TYPE_DIV_XPATH_SELECTOR}/.."),
     )
     hour_points: List[int, float] = _get_hour_points(events_container)
     events: List[Event] = []
@@ -245,7 +275,7 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
             '"time" rectangle',
             probable_event_div,
             lambda x: x.find_element(By.XPATH, f".//{TYPE_DIV_XPATH_SELECTOR}"),
-            False
+            False,
         )
         if not event_div:
             LOG.info(f"Skipping '{probable_event_div.text}' because event rectangle is not placed in it.")
@@ -257,7 +287,7 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
             "div with event data",
             probable_event_div,
             lambda x: x.find_element(By.XPATH, ".//div[(count(span)=3) or (count(span)=1 and count(div)=2)]"),
-            False
+            False,
         )
         if not event_data_container:
             LOG.info(f"Skipping '{probable_event_div.text}' because event data is not placed in it.")
@@ -267,7 +297,7 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
         event_elements: List[WebElement] = call_web_element_with_fail_handling(
             "elements of event",
             event_data_container,
-            lambda x: x.find_elements(By.XPATH, ".//span")  # In both cases elements are placed in span-s in order.
+            lambda x: x.find_elements(By.XPATH, ".//span"),  # In both cases elements are placed in span-s in order.
         )
         div_classes = event_div.get_attribute("class")
         event_type = None  # Value of class from TYPE_DIV_XPATH_SELECTOR.
@@ -279,30 +309,37 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
             event_type = "busy"
         start_time, duration = _find_start_and_duration(hour_points, event_div, event_data_container.text, events_date)
         # Assemble event.
-        events.append(Event(OWA_BUCKET_ID, start_time, duration, {
-            'type': event_type,
-            'name': event_elements[0].text,
-            'location': event_elements[1].text,
-            'sender': event_elements[2].text,
-        }))
+        events.append(
+            Event(
+                OWA_BUCKET_ID,
+                start_time,
+                duration,
+                {
+                    "type": event_type,
+                    "name": event_elements[0].text,
+                    "location": event_elements[1].text,
+                    "sender": event_elements[2].text,
+                },
+            )
+        )
     return events
 
 
-def _calculate_events_date_and_scrolls_back(events_date: datetime.datetime, back_days: int, date_label: str)\
-        -> Tuple[datetime.datetime, int]:
+def _calculate_events_date_and_scrolls_back(
+    events_date: datetime.datetime, back_days: int, date_label: str
+) -> Tuple[datetime.datetime, int]:
     # Check parameters for validity.
     if events_date:
-        assert (isinstance(events_date, datetime.datetime) or isinstance(events_date, datetime.date))\
-                and events_date.tzinfo,\
-            f"'events_date' value ({events_date}) should be a date/datetime with timezone info."
+        assert (
+            isinstance(events_date, datetime.datetime) or isinstance(events_date, datetime.date)
+        ) and events_date.tzinfo, f"'events_date' value ({events_date}) should be a date/datetime with timezone info."
     if back_days:
-        assert isinstance(back_days, int),\
-            f"'back_days' value ({back_days}) should be an integer."
-        assert 0 <= back_days < OWA_MAX_SCROLL_BACK,\
-            f"'back_days' value ({back_days}) should be positive and not more than limit {OWA_MAX_SCROLL_BACK}."
+        assert isinstance(back_days, int), f"'back_days' value ({back_days}) should be an integer."
+        assert (
+            0 <= back_days < OWA_MAX_SCROLL_BACK
+        ), f"'back_days' value ({back_days}) should be positive and not more than limit {OWA_MAX_SCROLL_BACK}."
     if date_label:
-        assert isinstance(date_label, str),\
-            f"'date_label' value ({date_label}) should be a string with date label."
+        assert isinstance(date_label, str), f"'date_label' value ({date_label}) should be a string with date label."
     # Calculate events_date and back_days for events.
     if events_date is None:
         events_date = datetime.datetime.today().astimezone()
@@ -311,11 +348,20 @@ def _calculate_events_date_and_scrolls_back(events_date: datetime.datetime, back
     else:
         back_days = (datetime.datetime.today() - events_date.replace(tzinfo=None)).days
     events_date = events_date.date()  # Convert to date because for events need to remove "time" part.
-    return events_date, back_days,
+    return (
+        events_date,
+        back_days,
+    )
 
 
-def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool = False,
-        events_date: datetime.datetime = None, back_days: int = 0, date_label: str = None) -> List[Event]:
+def get_events_from_owa(
+    profile_abs_path: str,
+    owa_url: str,
+    headless: bool = False,
+    events_date: datetime.datetime = None,
+    back_days: int = 0,
+    date_label: str = None,
+) -> List[Event]:
     """
     Scapes events from OWA page. Starts Firefox browser with OWA page "Calendar for a day" in headless mode (if need),
     scrolls to requered date if need, finds all events
@@ -338,8 +384,10 @@ def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool = Fa
     assert profile_abs_path, "Firefox profile folder path is not specified."
     assert owa_url, "OWA365/Web Outlook URL is not specified."
     events_date, back_days = _calculate_events_date_and_scrolls_back(events_date, back_days, date_label)
-    LOG.info(f"Starting Firefox with profile '{profile_abs_path}'."
-             " Note that you need to have OWA opened and authenticated under this profile, otherwise it would fail.")
+    LOG.info(
+        f"Starting Firefox with profile '{profile_abs_path}'."
+        " Note that you need to have OWA opened and authenticated under this profile, otherwise it would fail."
+    )
     # In "with UI" mode some parsing on my machine takes 65s, in headless - the same 65s.
     page_url = owa_url + CALENDAR_TODAY_URL_SUFFIX
     with start_firefox_under_existing_profile(profile_abs_path, page_url, headless) as driver:
@@ -354,46 +402,89 @@ def get_events_from_owa(profile_abs_path: str, owa_url: str, headless: bool = Fa
 def main():
     parser = argparse.ArgumentParser(
         description="Opens Firefox (headless if need) under specified profile (see '--profile-path' parameter)"
-                    " with given Office 365 Email/Calendar page (aka OWA365), scrolls to specified date in Calendar,"
-                    " parses all found events in it and loads them into ActivityWatch. Note that you need to have"
-                    " Firefox opened in another window and be logged in OWA in order to pass authentication."
+        " with given Office 365 Email/Calendar page (aka OWA365), scrolls to specified date in Calendar,"
+        " parses all found events in it and loads them into ActivityWatch. Note that you need to have"
+        " Firefox opened in another window and be logged in OWA in order to pass authentication."
     )
-    parser.add_argument('events_date', nargs='?', type=valid_date, default=datetime.datetime.now().astimezone(),
-                        help="Date to set for OWA365/Web Outlook Calendar events in format 'YYYY-mm-dd'."
-                             " By default is today.")
-    parser.add_argument('-b', '--back-days', type=int,
-                        help="How many days need to scroll back from today to reach day to scrape Calendar events."
-                             f" Overwrites EVENTS_DATE if specified. Max to {OWA_MAX_SCROLL_BACK}."
-                             " If is not specified then calculated as 'today - EVENTS_DATE'.")
-    parser.add_argument('-l', '--date-label', type=str,
-                        help="Date label on OWA page for 'scroll days back until open page with this label' logic."
-                             " Value depends on the language, region, OWA365 settings, etc. It should match 'date'"
-                             " parameter and is just extra check for the day we want to gather events from.")
-    parser.add_argument('--headless', action='store_true',
-                        help="Flag to open Firefox window in the headless mode. Doesn't make parsing faster"
-                             "but eliminates risk to click something on the page and break parsing.")
-    parser.add_argument('-p', '--profile-path', type=str, default=FIREFOX_PROFILE_PATH,
-                        help="Absolute path to Firefox profile folder. On Linux it looks like "
-                             "'/home/{username}/.mozilla/firefox/{some_id}.default-release/'.")
-    parser.add_argument('-u', '--owa-url', type=str, default=OWA_URL,
-                        help="URL to Web (MS Office Web Apps) Outlook. Page where email box opens."
-                             "May look like 'https://mail.company.com/owa'.")
-    parser.add_argument('-r', '--replace', dest='is_replace_bucket', action='store_true',
-                        help=f"Flag to delete ActivityWatch '{OWA_BUCKET_ID}' bucket first."
-                            " Removes all previous events in it, for all time.")
-    parser.add_argument('--dry-run', dest='is_dry_run', action='store_true',
-                        help="Flag to just parse and log events, don't upload them into ActivityWatch.")
+    parser.add_argument(
+        "events_date",
+        nargs="?",
+        type=valid_date,
+        default=datetime.datetime.now().astimezone(),
+        help="Date to set for OWA365/Web Outlook Calendar events in format 'YYYY-mm-dd'." " By default is today.",
+    )
+    parser.add_argument(
+        "-b",
+        "--back-days",
+        type=int,
+        help="How many days need to scroll back from today to reach day to scrape Calendar events."
+        f" Overwrites EVENTS_DATE if specified. Max to {OWA_MAX_SCROLL_BACK}."
+        " If is not specified then calculated as 'today - EVENTS_DATE'.",
+    )
+    parser.add_argument(
+        "-l",
+        "--date-label",
+        type=str,
+        help="Date label on OWA page for 'scroll days back until open page with this label' logic."
+        " Value depends on the language, region, OWA365 settings, etc. It should match 'date'"
+        " parameter and is just extra check for the day we want to gather events from.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Flag to open Firefox window in the headless mode. Doesn't make parsing faster"
+        "but eliminates risk to click something on the page and break parsing.",
+    )
+    parser.add_argument(
+        "-p",
+        "--profile-path",
+        type=str,
+        default=FIREFOX_PROFILE_PATH,
+        help="Absolute path to Firefox profile folder. On Linux it looks like "
+        "'/home/{username}/.mozilla/firefox/{some_id}.default-release/'.",
+    )
+    parser.add_argument(
+        "-u",
+        "--owa-url",
+        type=str,
+        default=OWA_URL,
+        help="URL to Web (MS Office Web Apps) Outlook. Page where email box opens."
+        "May look like 'https://mail.company.com/owa'.",
+    )
+    parser.add_argument(
+        "-r",
+        "--replace",
+        dest="is_replace_bucket",
+        action="store_true",
+        help=f"Flag to delete ActivityWatch '{OWA_BUCKET_ID}' bucket first."
+        " Removes all previous events in it, for all time.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        dest="is_dry_run",
+        action="store_true",
+        help="Flag to just parse and log events, don't upload them into ActivityWatch.",
+    )
     args = parser.parse_args()
-    events = get_events_from_owa(args.profile_path, args.owa_url, args.headless, events_date=args.events_date, 
-                                 back_days=args.back_days, date_label=args.date_label)
+    events = get_events_from_owa(
+        args.profile_path,
+        args.owa_url,
+        args.headless,
+        events_date=args.events_date,
+        back_days=args.back_days,
+        date_label=args.date_label,
+    )
     LOG.info("Ready to upload %d events:\n  %s", len(events), "\n  ".join(str(x) for x in events))
     # Load events into ActivityWatcher
     if not args.is_dry_run:
-        LOG.info(upload_events(events, OWA_SCRAPER_NAME, OWA_BUCKET_ID, args.is_replace_bucket,
-                               aw_client_name="owa365.calendar.event"))
+        LOG.info(
+            upload_events(
+                events, OWA_SCRAPER_NAME, OWA_BUCKET_ID, args.is_replace_bucket, aw_client_name="owa365.calendar.event"
+            )
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     LOG = setup_logging()
     main()
 
@@ -401,58 +492,64 @@ if __name__ == '__main__':
 # Tests are placed right here because of Python imports inflexibility.
 class TestGetOutlookEvents(unittest.TestCase):
     today = datetime.datetime.now().astimezone()
-    day_ago = (today - datetime.timedelta(days=1))
+    day_ago = today - datetime.timedelta(days=1)
 
-    @parameterized.parameterized.expand([
-        (
-            "all None-s",
-            None, None, None,
-            None, today.date(), 0
-        ),
-        (
-            "date_label only",
-            None, None, "some",
-            None, today.date(), 0
-        ),
-        (
-            "wrong events_date",
-            "some", None, None,
-            "'events_date' value \(some\) should be a date/datetime with timezone info.", None, None
-        ),
-        (
-            "events_date is without timezone info",
-            datetime.datetime.now(), None, None,
-            "'events_date' value (.*) should be a date/datetime with timezone info.", None, None
-        ),
-        (
-            "only events_date - use it",
-            day_ago, None, None,
-            None, day_ago.date(), 1
-        ),
-        (
-            "wrong back_days",
-            day_ago, "100500", None,
-            "'back_days' value \(100500\) should be an integer.", None, None
-        ),
-        (
-            "too big back_days",
-            day_ago, 100500, None,
-            f"'back_days' value \(100500\) should be positive and not more than limit {OWA_MAX_SCROLL_BACK}.",
-            None, None
-        ),
-        (
-            "no date_label",
-            day_ago, None, None,
-            None, day_ago.date(), 1
-        ),
-        (
-            "both date and back-days provided",
-            day_ago, 2, None,
-            None, (today - datetime.timedelta(days=2)).date(), 2
-        ),
-    ])
-    def test_calculate_events_date_and_scrolls_back(self, test_name, events_date, back_days, date_label,
-            expected_message, expected_date, expected_back_days):
+    @parameterized.parameterized.expand(
+        [
+            ("all None-s", None, None, None, None, today.date(), 0),
+            ("date_label only", None, None, "some", None, today.date(), 0),
+            (
+                "wrong events_date",
+                "some",
+                None,
+                None,
+                "'events_date' value \(some\) should be a date/datetime with timezone info.",
+                None,
+                None,
+            ),
+            (
+                "events_date is without timezone info",
+                datetime.datetime.now(),
+                None,
+                None,
+                "'events_date' value (.*) should be a date/datetime with timezone info.",
+                None,
+                None,
+            ),
+            ("only events_date - use it", day_ago, None, None, None, day_ago.date(), 1),
+            (
+                "wrong back_days",
+                day_ago,
+                "100500",
+                None,
+                "'back_days' value \(100500\) should be an integer.",
+                None,
+                None,
+            ),
+            (
+                "too big back_days",
+                day_ago,
+                100500,
+                None,
+                f"'back_days' value \(100500\) should be positive and not more than limit {OWA_MAX_SCROLL_BACK}.",
+                None,
+                None,
+            ),
+            ("no date_label", day_ago, None, None, None, day_ago.date(), 1),
+            (
+                "both date and back-days provided",
+                day_ago,
+                2,
+                None,
+                None,
+                (today - datetime.timedelta(days=2)).date(),
+                2,
+            ),
+        ]
+    )
+    def test_calculate_events_date_and_scrolls_back(
+        self, test_name, events_date, back_days, date_label, expected_message, expected_date, expected_back_days
+    ):
         if expected_message:
             with self.assertRaisesRegex(AssertionError, expected_message, msg=f"'{test_name}' wrong error."):
                 _calculate_events_date_and_scrolls_back(events_date, back_days, date_label)
