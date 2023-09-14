@@ -1065,8 +1065,6 @@ def analyze_activities_per_strategy(
     if len(result_tree) > 0:
         debug_buckets_cnt += 1
 
-    # TODO: fix empty activity into AFK time 0:13:06.636000 (09:15:37..09:28:43)
-
     # 4. Make tree from remained activities. Chop them by existing `result` activities if there are such.
     candidates_tree = intervaltree.IntervalTree()
     if len(result_tree) > 0:
@@ -1096,6 +1094,9 @@ def analyze_activities_per_strategy(
             " strategies activities found this day."
         )
         for strategy_result in activities_by_strategy:
+            # Don't use AFK activities to build resulting activities on.
+            if strategy_result.strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX):
+                continue
             for activity in strategy_result.activities:
                 candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
 
@@ -1105,7 +1106,7 @@ def analyze_activities_per_strategy(
     debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
 
     # Limit number of iterations to avoid infinite loops on bugs or wrong input.
-    while (current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES):
+    while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
         metrics.incr("iterations to assemble remaining activities")
         # Find "basic activity" to base "result" activity on interval of it.
         ba_interval = _find_basic_activity_interval(candidates_tree, current_start_point, metrics)
