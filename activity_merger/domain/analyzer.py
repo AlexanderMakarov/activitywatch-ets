@@ -773,7 +773,8 @@ def _find_basic_activity_interval(
 
 
 def _build_result_activity(
-    ba_interval: intervaltree.Interval, candidates_tree: intervaltree.IntervalTree, metrics: Metrics
+    ba_interval: intervaltree.Interval, candidates_tree: intervaltree.IntervalTree,
+    is_only_good_strategies_for_description: bool, metrics: Metrics
 ) -> Activity:
     # Find all overlapping activities.
     overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)  # Includes BA.
@@ -858,7 +859,8 @@ def _build_result_activity(
 
     # Build raw RA, i.e. with "not sure end". Fill it with all the events from the "enhancing" activities.
     ra_duration = ba_interval.length().seconds
-    name = _build_activity_name(overlapping_activities, metrics, ra_duration, True)  # TODO get last arg from user.
+    name = _build_activity_name(overlapping_activities, metrics, ra_duration, 
+                                not is_only_good_strategies_for_description)
     metrics.incr("result activities", ra_duration)
     return Activity(
         ba_interval.begin,
@@ -920,7 +922,8 @@ def _build_activity_name(
 
 
 def analyze_activities_per_strategy(
-    activities_by_strategy: List[ActivitiesByStrategy], is_add_debug_buckets: bool = True
+    activities_by_strategy: List[ActivitiesByStrategy], is_only_good_strategies_for_description: bool,
+    is_add_debug_buckets: bool = True
 ) -> AnalyzerResult:
     """
     Analyzes activities-by-strategy to produce a result.
@@ -1113,7 +1116,7 @@ def analyze_activities_per_strategy(
         if ba_interval is None:
             break  # No more activities.
         # Find all overlapping activities and make new `result` activity (RA).
-        ra = _build_result_activity(ba_interval, candidates_tree, metrics)
+        ra = _build_result_activity(ba_interval, candidates_tree, is_only_good_strategies_for_description, metrics)
         # Check RA doesn't overlaps with existing result activities at the end.
         result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
         # If we had interval in `result_tree` when added RA then we need to search next gap.

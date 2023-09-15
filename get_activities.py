@@ -108,7 +108,8 @@ def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.Acti
 
 
 def convert_aw_events_to_activities(
-    events_date: datetime.datetime, ignore_substrings: List[str], is_import_debug_buckets: bool
+    events_date: datetime.datetime, ignore_substrings: List[str],
+    is_only_good_strategies_for_description: bool, is_import_debug_buckets: bool,
 ) -> AnalyzerResult:
     """
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
@@ -116,6 +117,7 @@ def convert_aw_events_to_activities(
     prints them into output.
     :param events_date: Date to get events on.
     :param ignore_substrings: List of substrings to ignore metrics with them in logs.
+    :param is_use_all_strategies_for_description: Flag to use all strategies to build resulting activities description.
     :param is_import_debug_buckets: Flag to assemble and import into ActivityWatch debugging information as events for
     "debugging" buckets.
     :return: `AnalyzerResult` object or `None` if no intervals to analyze were found.
@@ -130,7 +132,11 @@ def convert_aw_events_to_activities(
         "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in activities_by_strategy),
     )
 
-    analyzer_result = analyze_activities_per_strategy(activities_by_strategy, is_import_debug_buckets)
+    analyzer_result = analyze_activities_per_strategy(
+        activities_by_strategy=activities_by_strategy,
+        is_only_good_strategies_for_description=is_only_good_strategies_for_description,
+        is_add_debug_buckets=is_import_debug_buckets,
+    )
     LOG.info(analyzer_result.to_str(ignore_metrics_by_substrings=ignore_substrings))
     if is_import_debug_buckets:
         reload_debug_buckets(analyzer_result, client)
@@ -179,11 +185,24 @@ def main():
         " Note that these debugging buckets are pre-removed (for the whole time)"
         " and aren't machine-specific. Also they may be quite heavy for UI to render.",
     )
+    parser.add_argument(
+        "-g",
+        "--only-good-strategies-description",
+        dest="is_only_good_strategies_for_description",
+        action="store_true",
+        help="Flag to build resulting activities description only from marked as"
+        "'produces good activity name' strategies. Descriptions would be shorter but less informative.",
+    )
     args = parser.parse_args()
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
         events_date = events_date - datetime.timedelta(days=args.back_days)
-    convert_aw_events_to_activities(events_date, list(args.ignore_substrings), args.is_import_debug_buckets)
+    convert_aw_events_to_activities(
+        events_date=events_date,
+        ignore_substrings=list(args.ignore_substrings),
+        is_only_good_strategies_for_description=args.is_only_good_strategies_for_description,
+        is_import_debug_buckets=args.is_import_debug_buckets,
+    )
 
 
 if __name__ == "__main__":

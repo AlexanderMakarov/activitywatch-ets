@@ -21,7 +21,11 @@ class GroupingDescriptior:
         raise NotImplementedError("__eq__ is not implemented")
 
     def get_kv_pairs(self) -> List[Tuple[str, str]]:
-        raise NotImplementedError("get_description is not implemented")
+        """
+        Returns a list of key-value pairs representing ActivityWatch event's 'data' parts
+        which were common for the events in the relevant group of events, aka Activity.
+        """
+        raise NotImplementedError("get_kv_pairs is not implemented")
 
 
 @dataclasses.dataclass
