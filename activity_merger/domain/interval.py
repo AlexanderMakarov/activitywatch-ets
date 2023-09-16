@@ -3,7 +3,7 @@ from typing import List, Callable
 from .input_entities import Event
 from ..helpers.helpers import from_start_to_end_to_str, seconds_to_timedelta, event_data_to_str
 
-
+# TODO remove - not used.
 class Interval:
     """
     Interval in time when at least one full `Event` happened. Used to make time-ordered linked list.

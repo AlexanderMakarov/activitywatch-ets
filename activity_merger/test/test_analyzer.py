@@ -4,12 +4,12 @@ from typing import List, Dict, Tuple
 from parameterized import parameterized
 import intervaltree
 
-from . import build_datetime, build_timedelta, build_intervals_linked_list
+from activity_merger.domain.analyzer import _exclude_tree_intervals, _include_tree_intervals
+
+from . import build_datetime, build_timedelta
 from ..domain.metrics import Metric, Metrics
-from ..domain.analyzer import analyze_intervals, _exclude_tree_intervals, _include_tree_intervals
-from ..domain.input_entities import ActivityBoundaries, Rule2, Event, Strategy
-from ..domain.interval import Interval
-from ..domain.output_entities import Activity, AnalyzerResult, RuleResult
+from ..domain.input_entities import ActivityBoundaries, Event, Strategy
+from ..domain.output_entities import Activity
 from ..domain.strategies import ActivityByStrategy
 
 BUCKET1 = 'buck1'
@@ -30,17 +30,6 @@ event2A = Event(BUCKET2, DAY2, DELTA1, {"name": "a"})
 event2B = Event(BUCKET2, DAY2, DELTA1, {"name": "b"})
 event2C = Event(BUCKET2, DAY2, DELTA1, {"name": "c"})
 
-rule1A = Rule2(r"a", 611).skip()
-rule1B = Rule2(r"b", 612)
-rule1C = Rule2(r"c", 613).placeholder()
-rule1END = Rule2(r".*", 601)
-rule2A = Rule2(r"a", 711)
-rule2B = Rule2(r"b", 712).merge_next()
-rule2END = Rule2(r".*", 701)
-RULES_SET1 = [
-    Rule2(BUCKET1, 600).with_subrules("name", [rule1A, rule1B, rule1C, rule1END]),
-    Rule2(BUCKET2, 700).with_subrules("name", [rule2A, rule2B, rule2END]),
-]
 METRIC1_1 = Metric(1, DELTA1S)
 METRIC2_2 = Metric(2, DELTA2S)
 
@@ -79,7 +68,7 @@ EVENT1600_1700 = Event("b1", HOUR16_00, datetime.timedelta(hours=1), "16:00..17:
 EVENT1700_1800 = Event("b1", HOUR17_00, datetime.timedelta(hours=1), "17:00..18:00")
 EVENT1900_2000 = Event("b1", HOUR19_00, datetime.timedelta(hours=1), "19:00..20:00")
 
-STRATEGY = Strategy("ts", "ts", False, False, False, [], False, False, ActivityBoundaries.DIM, "ts")
+STRATEGY = Strategy("ts", "ts", False, False, False, [], [], False, False, ActivityBoundaries.DIM, False, None)
 ACTIVITIES = [
     ActivityByStrategy(
         suggested_start_time=HOUR5_00,
@@ -141,86 +130,7 @@ TREE = intervaltree.IntervalTree([
 ])
 
 
-class ActivityMatcher:
-    expected: Activity
-
-    def __init__(self, expected):
-        self.expected = expected
-
-    @staticmethod
-    def __rule_results_to_str(activity: Activity) -> str:
-        return "\n  ".join(str(x) for x in activity.events)
-
-    def __repr__(self):
-        return repr(self.expected) + "\n" + ActivityMatcher.__rule_results_to_str(self.expected)
-
-    def __eq__(self, other):
-        return self.expected.suggested_start_time == other.expected.suggested_start_time and \
-               self.expected.suggested_end_time == other.expected.suggested_end_time and \
-               self.expected.duration == other.expected.duration and \
-               self.expected.description == other.expected.description and \
-               ActivityMatcher.__rule_results_to_str(self.expected) == \
-                   ActivityMatcher.__rule_results_to_str(other.expected)
-
-
 class TestAnalyzer(unittest.TestCase):
-
-    # @parameterized.expand([  # TODO remove together with analyze_intervals
-    #     (
-    #         "highest_priority_rule_one_event",
-    #         build_intervals_linked_list([
-    #             (1, True, 1, [event1B]),
-    #         ]),
-    #         RULES_SET1,
-    #         {
-    #             "intervals to build activities from": METRIC1_1,
-    #             str(rule1B): METRIC1_1,
-    #         },
-    #         [
-    #             Activity(DAY1, DAY2, [
-    #                 RuleResult(rule1B, None, "buck1, b", None),
-    #             ], "buck1, b"),
-    #         ],
-    #     ),
-    #     (
-    #         "highest_priority_rule_merge_next_at_end",
-    #         build_intervals_linked_list([
-    #             (1, True, 1, [event1A, event1B, event1C, event1D]),
-    #             (1, False, 1, [event2A, event2B, event2C]),
-    #         ]),
-    #         RULES_SET1,
-    #         {
-    #             "intervals to build activities from": METRIC2_2,
-    #             str(rule1C): METRIC1_1,
-    #             str(rule2B): METRIC1_1,
-    #             "intervals merged to next rule": METRIC1_1,
-    #             "intervals need to reveal rule for": METRIC1_1,
-    #         },
-    #         [
-    #             Activity(DAY1, DAY2, [
-    #                 RuleResult(rule1C, None, "buck1, c", None),
-    #                 RuleResult(rule2B, None, "buck2, b", None),
-    #             ], "buck1, c, buck2, b"),
-    #         ],
-    #     ),
-    # ])
-    # def test_analyze_intervals(self, test_name: str, interval: Interval, rules: List[Rule2],
-    #                            expected_metrics: Dict[str, Metric], expected_activities: List[Activity]):
-    #     self.maxDiff = None
-    #     # Act
-    #     analyzer_result: AnalyzerResult = analyze_intervals(interval, 0.25, rules)
-    #     # Assert
-    #     err_msg = f"'{test_name}' case wrong "
-    #     self.assertDictEqual(
-    #         {k: v for (k, v) in analyzer_result.metrics.metrics.items() if v.cnt > 0},
-    #         {k: v for (k, v) in expected_metrics.items() if v.cnt > 0},
-    #         err_msg + "metrics"
-    #     )
-    #     self.assertListEqual(
-    #         [ActivityMatcher(x) for x in analyzer_result.activities],
-    #         [ActivityMatcher(x) for x in expected_activities],
-    #         err_msg + "activities"
-    #     )
 
     @parameterized.expand([
         # activities:   5.6 7..9 10.......13  14...16 17..18
@@ -410,7 +320,7 @@ class TestAnalyzer(unittest.TestCase):
         self.maxDiff = None
         metrics = Metrics({})
         # Act
-        actual: List[Activity] = _include_tree_intervals(activities, boundaries, tree, metrics, "tt")
+        actual: List[ActivityByStrategy] = _include_tree_intervals(activities, boundaries, tree, metrics, "tt")
         # Assert
         self.assertListEqual(expected_activities, actual, "wrong activities")
         self.assertDictEqual(

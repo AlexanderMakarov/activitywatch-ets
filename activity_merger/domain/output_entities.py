@@ -1,32 +1,11 @@
+import collections
 import dataclasses
 import datetime
-import collections
 from typing import Dict, List
 
+from ..helpers.helpers import from_start_to_end_to_str, seconds_to_timedelta
+from .input_entities import Event
 from .metrics import Metrics
-from .input_entities import Event, Rule2
-from .interval import Interval
-from ..helpers.helpers import seconds_to_timedelta, from_start_to_end_to_str
-
-
-@dataclasses.dataclass
-class RuleResult:
-    """
-    Structure to represent rule output like covered intervals, source event and information why all of them were
-    chosen to be connected under one `Rule`.
-    :param rule: `Rule` which produced this instance.
-    :param event: `Event` choosen by `Rule`.
-    :param description: Description of underlying time span obtained by event.
-    :param intervals: List of `Interval`-s covering by this rule.
-    """
-
-    rule: Rule2
-    event: Event
-    description: str
-    intervals: List[Interval]
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(description={self.description}, rule={self.rule})"
 
 
 @dataclasses.dataclass

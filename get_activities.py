@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
+import argparse
 import datetime
 import os
-import argparse
 from typing import List, Tuple
+
 import aw_client
 
 from activity_merger.config.config import (
-    LOG,
-    EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
-    DEBUG_BUCKETS_IMPORTER_NAME,
     DEBUG_BUCKET_PREFIX,
+    DEBUG_BUCKETS_IMPORTER_NAME,
+    EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+    LOG,
     STRATEGIES,
 )
-from activity_merger.domain.interval import Interval
-from activity_merger.domain.metrics import Metrics
-from activity_merger.domain.strategies import ActivitiesByStrategy
-from activity_merger.helpers.helpers import setup_logging, valid_date, upload_events
-from activity_merger.domain.merger import report_from_buckets, analyze_buckets
 from activity_merger.domain.analyzer import analyze_activities_per_strategy
+from activity_merger.domain.merger import analyze_buckets, report_from_buckets
+from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
+from activity_merger.domain.strategies import ActivitiesByStrategy
+from activity_merger.helpers.helpers import setup_logging, upload_events, valid_date
 
 
 def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
@@ -35,34 +35,6 @@ def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
         )
         exit(1)
     return result
-
-
-def get_interval(events_date: datetime.datetime, client: aw_client.ActivityWatchClient) -> Interval:
-    """
-    Connects to ActivityWatch, gets list of buckets and builds linked list of `Interval`-s representing events.
-    :param events_date: Date to get events for.
-    :param client: ActivityWatch client to use.
-    :return: Linked list of `Interval`-s.
-    """
-    try:
-        # Remove debug buckets because they may become sources of events.
-        LOG.info("Deleted [%s] debug buckets.", ", ".join(delete_debug_buckets(client)))
-        # Get existing buckets.
-        buckets = client.get_buckets()
-    except Exception as ex:
-        LOG.exception(
-            "Can't connect to ActivityWatcher. Please check that it is enabled on localhost: %s", ex, exc_info=True
-        )
-        exit(1)
-    LOG.info("Buckets to analyze: [%s]", ", ".join(buckets.keys()))
-    # Build time-ordered linked list of intervals by provided events.
-    return report_from_buckets(
-        client,
-        events_date.date(),
-        events_date.date() + datetime.timedelta(days=1),
-        buckets,
-        EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
-    )
 
 
 def get_activities_by_strategy(
@@ -108,8 +80,10 @@ def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.Acti
 
 
 def convert_aw_events_to_activities(
-    events_date: datetime.datetime, ignore_substrings: List[str],
-    is_only_good_strategies_for_description: bool, is_import_debug_buckets: bool,
+    events_date: datetime.datetime,
+    ignore_substrings: List[str],
+    is_only_good_strategies_for_description: bool,
+    is_import_debug_buckets: bool,
 ) -> AnalyzerResult:
     """
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
