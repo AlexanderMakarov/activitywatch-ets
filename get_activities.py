@@ -6,19 +6,21 @@ from typing import List, Tuple
 
 import aw_client
 
-from activity_merger.config.config import (
-    DEBUG_BUCKET_PREFIX,
-    DEBUG_BUCKETS_IMPORTER_NAME,
-    EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
-    LOG,
-    STRATEGIES,
-)
-from activity_merger.domain.analyzer import analyze_activities_per_strategy
-from activity_merger.domain.merger import analyze_buckets, report_from_buckets
+from activity_merger.config.config import (DEBUG_BUCKET_PREFIX,
+                                           DEBUG_BUCKETS_IMPORTER_NAME,
+                                           EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+                                           LOG, STRATEGIES)
+from activity_merger.domain.analyzer import (
+    ChopActivitiesByNotAfkTreeStep, ChopActivitiesByResultTreeStep,
+    MakeCandidatesTreeStep, MakeNotAfkTreeStep,
+    MakeResultTreeFromSelfSufficientActivitiesStep,
+    MergeCandidatesTreeIntoResultTreeStep, merge_activities)
+from activity_merger.domain.merger import analyze_buckets
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.domain.strategies import ActivitiesByStrategy
-from activity_merger.helpers.helpers import setup_logging, upload_events, valid_date
+from activity_merger.helpers.helpers import (setup_logging, upload_events,
+                                             valid_date)
 
 
 def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
@@ -106,10 +108,23 @@ def convert_aw_events_to_activities(
         "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in activities_by_strategy),
     )
 
-    analyzer_result = analyze_activities_per_strategy(
+    # TODO: Remove below
+    # analyzer_result = analyze_activities_per_strategy(
+    #     activities_by_strategy=activities_by_strategy,
+    #     is_only_good_strategies_for_description=is_only_good_strategies_for_description,
+    #     is_add_debug_buckets=is_import_debug_buckets,
+    # )
+    analyzer_result = merge_activities(
         activities_by_strategy=activities_by_strategy,
-        is_only_good_strategies_for_description=is_only_good_strategies_for_description,
-        is_add_debug_buckets=is_import_debug_buckets,
+        steps=[
+            MakeNotAfkTreeStep(),
+            ChopActivitiesByNotAfkTreeStep(is_import_debug_buckets),
+            MakeResultTreeFromSelfSufficientActivitiesStep(),
+            ChopActivitiesByResultTreeStep(),
+            MakeCandidatesTreeStep(False, False, is_import_debug_buckets),
+            MergeCandidatesTreeIntoResultTreeStep(is_only_good_strategies_for_description, is_import_debug_buckets),
+        ],
+        ignore_substrings=ignore_substrings,
     )
     LOG.info(analyzer_result.to_str(ignore_metrics_by_substrings=ignore_substrings))
     if is_import_debug_buckets:

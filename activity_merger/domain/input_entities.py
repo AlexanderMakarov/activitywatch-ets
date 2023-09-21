@@ -1,7 +1,7 @@
 import dataclasses
 import collections
 import enum
-from typing import Tuple, Callable, List, Union
+from typing import Dict, Tuple, Callable, List, Union
 
 
 Event = collections.namedtuple("Event", ["bucket_id", "timestamp", "duration", "data"])
@@ -77,16 +77,15 @@ class Strategy:
 
     in_group_by_keys: List[Tuple[str]]
     """
-    Keys to separte events into the windows/activities.
-    Some events may represent one activity if the have the same value in the only one or few `data` keys,
-    if take into the account all fields then events will be unique.
-    For example for JIRA bucket events with the same value in "ticket" key may represent the same actvity -
-    aka "worked on the ticket X".
-    Note that order of tuples in the list is important - event will be added to the activity/window with
-    values for the key(s) from the 2nd tuple if its "data" doesn't have keys from the 1st tuple and so on.
+    Specific keys to separate events into the windows/activities when related values are similar.
+    By default events are grouped together if set of keys and values for all keys are identical.
+    But some events producers may set different sets of keys.
+    If provide list of possible key sets (as Python tuples) then only those keys would be checked and default
+    behavior would be applied only not all keys are presented in the event.
+    Note that order of key sets/tuples is important - if first set of keys was matched then all remained are ignored.
     """
 
-    in_skip_key_value: List[Tuple[str]]
+    in_skip_key_values: Dict[str, any]
     """
     Map of key/value pairs (i.e. dictionary) to skip and don't make activities from.
     Useful for "uknown" events which are bad source of information and may be duplicated by more

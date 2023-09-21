@@ -1,16 +1,12 @@
 import collections
 import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set
 
 import intervaltree
 
-from ..config.config import (
-    CURRENT_TIMEZONE,
-    DEBUG_BUCKET_PREFIX,
-    LIMIT_OF_RESULTING_ACTIVITIES,
-    LOG,
-    MIN_DURATION_SEC,
-)
+from ..config.config import (CURRENT_TIMEZONE, DEBUG_BUCKET_PREFIX,
+                             LIMIT_OF_RESULTING_ACTIVITIES, LOG,
+                             MIN_DURATION_SEC)
 from .input_entities import ActivityBoundaries, Event, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
@@ -281,72 +277,80 @@ def _include_tree_intervals(
     return result
 
 
-def _add_debug_event(
-    debug_dict: Dict[str, List[Event]],
-    bucket_id: str,
-    timestamp: datetime.datetime,
-    duration: datetime.timedelta,
-    description: str,
-    events_count: int,
-):
-    data = {"desc": description, "events_count": str(events_count)}  # Note that ActivityWatch UI shows only strings.
-    debug_dict.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
-
-
-def _add_debug_events_to_not_overlap(
-    activites: List[ActivityByStrategy], debug_dict: Dict, bucket_name: str, debug_buckets_cnt: int, metrics: Metrics
-) -> int:
+class DebugBucketsHandler:
     """
-    Adds debug events to the given dictionary in few buckets where events are not overlapping.
-    Uses "suggested" time boundaries, not "minimal" ones.
-    :param activites: Activities to add debug events from.
-    :param debug_dict: Dictionary to add debug events to.
-    :param bucket_name: Part of name for debug buckets.
-    :param metrics: Metrics instance to report progress.
-    :param debug_buckets_cnt: Counter of debug buckets.
-    :return: Updated counter of debug buckets.
+    Manages debug buckets.
     """
-    activites = sorted(activites, key=lambda x: x.suggested_start_time)
-    groups: List[List[ActivityByStrategy]] = []
-    # Seaparate activities by groups.
-    for activity in activites:
-        found_group = False
-        for group in groups:
-            is_overlapping = False
-            # Iterate all groups each time to find place for the new activity.
-            # Need to pack events as dense as possible - activities may overlap.
-            for existing_activity in group:
-                # Check activities overlap.
-                if (
-                    activity.suggested_end_time >= existing_activity.suggested_start_time
-                    and activity.suggested_start_time <= existing_activity.suggested_end_time
-                ):
-                    is_overlapping = True
+
+    def __init__(self):
+        self.events: Dict[str, List[Event]] = {}
+        self.cnt = 0  # Will be set to 1 in `build_new_bucket_id`.
+
+    def build_new_bucket_id(self, bucket_name: str) -> str:
+        result = f"{DEBUG_BUCKET_PREFIX}{self.cnt:03}_{bucket_name}"
+        self.cnt += 1
+        return result
+
+    def add_event(
+        self,
+        bucket_id: str,
+        timestamp: datetime.datetime,
+        duration: datetime.timedelta,
+        description: str,
+        events_count: int,
+    ):
+        # Note that ActivityWatch UI shows only strings.
+        data = {"desc": description, "events_count": str(events_count)}
+        self.events.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
+
+    def add_debug_events_to_not_overlap(
+        self, activites: List[ActivityByStrategy], bucket_suffix: str, metrics: Metrics
+    ) -> None:
+        """
+        Adds debug events in few buckets where events are not overlapping.
+        Uses "suggested" time boundaries, not "minimal" ones.
+        :param activites: Activities to add debug events from.
+        :param bucket_suffix: Last part of name for debug buckets.
+        :param metrics: Metrics instance to report progress.
+        """
+        activites = sorted(activites, key=lambda x: x.suggested_start_time)
+        groups: List[List[ActivityByStrategy]] = []
+        # Seaparate activities by groups.
+        for activity in activites:
+            found_group = False
+            for group in groups:
+                is_overlapping = False
+                # Iterate all groups each time to find place for the new activity.
+                # Need to pack events as dense as possible - activities may overlap.
+                for existing_activity in group:
+                    # Check activities overlap.
+                    if (
+                        activity.suggested_end_time >= existing_activity.suggested_start_time
+                        and activity.suggested_start_time <= existing_activity.suggested_end_time
+                    ):
+                        is_overlapping = True
+                        break
+                if not is_overlapping:
+                    group.append(activity)
+                    found_group = True
                     break
-            if not is_overlapping:
-                group.append(activity)
-                found_group = True
-                break
-        if not found_group:
-            groups.append([activity])
-            metrics.incr(f"debug event groups for {bucket_name}.* strategy")
-    # Fill buckets of events from groups.
-    for group in groups:
-        debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}{debug_buckets_cnt:03}_{bucket_name}"
-        debug_buckets_cnt += 1
-        for activity in group:
-            _add_debug_event(
-                debug_dict=debug_dict,
-                bucket_id=debug_bucket_prefix,
-                timestamp=activity.suggested_start_time,
-                # For debug events need to use end-start time, not duration by events.
-                duration=activity.suggested_end_time - activity.suggested_start_time,
-                # Build description in easiest way.
-                description=", ".join(f"{k}={v}" for k, v in activity.grouping_data.get_kv_pairs()),
-                events_count=len(activity.events),
-            )
-            metrics.incr("debug events in " + debug_bucket_prefix, activity.duration)
-    return debug_buckets_cnt
+            if not found_group:
+                groups.append([activity])
+                metrics.incr(f"debug event groups for {bucket_suffix}.* strategy")
+        # Fill buckets of events from groups.
+        for group in groups:
+            debug_bucket_prefix = self.build_new_bucket_id(bucket_suffix)
+            for activity in group:
+                self.add_event(
+                    bucket_id=debug_bucket_prefix,
+                    timestamp=activity.suggested_start_time,
+                    # For debug events need to use end-start time, not duration by events.
+                    duration=activity.suggested_end_time - activity.suggested_start_time,
+                    # Build description in easiest way.
+                    description=", ".join(f"{k}={v}" for k, v in activity.grouping_data.get_kv_pairs()),
+                    events_count=len(activity.events),
+                )
+                metrics.incr("debug events in " + debug_bucket_prefix, activity.duration)
 
 
 def _find_basic_activity_interval(
@@ -573,6 +577,324 @@ def _build_activity_name(
     return " ".join(resulting_names)
 
 
+class AnalyzerStep:
+    """
+    Interface of "analyzer" step. Expected to be used for to make chain to analyse "activities by strategy"
+    and transform them into resulting activities.
+    """
+
+    def get_description(self) -> str:
+        """
+        Returns human-friendly step description.
+        """
+        raise NotImplementedError("Not implemented 'get_description'.")
+
+    def check_context(self, context: Dict[str, any]) -> None:  # TODO: consider to use contextvars package.
+        """
+        Checks that all required items are present in the context.
+        Raises an exception if the context is invalid. Expected to be executed before `run` method.
+        By-default checks nothing.
+        """
+
+    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+        """
+        Executes this step on the given context. All results are placed back to the context.
+        By-default does nothing.
+        Should return True if passed.
+        """
+        return False
+
+
+class MakeNotAfkTreeStep(AnalyzerStep):
+    """
+    Makes "not_afk_tree" `IntervalTree` from "activities_by_strategy".
+    """
+
+    def get_description(self) -> str:
+        return "Making 'not_afk_tree' intervals list."
+
+    def check_context(self, context: Dict[str, any]) -> None:
+        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
+
+    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+        not_afk_tree = intervaltree.IntervalTree()
+        strategy_result: ActivitiesByStrategy
+        for strategy_result in context["activities_by_strategy"]:
+            bucket_prefix = strategy_result.strategy.bucket_prefix
+            if not bucket_prefix.startswith(BUCKET_AFK_PREFIX):
+                continue
+            metrics.incr("AFK strategies")
+            if strategy_result.strategy.in_activities_may_overlap:
+                LOG.warning(
+                    "Unsupported setup for %s* strategy - in_activities_may_overlap=True."
+                    "Skipping any AFK-related logic populated by this strategy.",
+                    bucket_prefix,
+                )
+                continue
+            # Add to not_afk_tree only not-AFK activities. Expect that they are not intersect.
+            for activity in strategy_result.activities:
+                status = activity.events[0].data["status"]
+                if status == "not-afk":
+                    not_afk_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
+                    metrics.incr("not-afk intervals", activity.duration)
+                else:
+                    metrics.incr("afk intervals", activity.duration)
+        context["not_afk_tree"] = not_afk_tree
+        return True
+
+
+class ChopActivitiesByNotAfkTreeStep(AnalyzerStep):
+    """
+    Cuts activities by "not_afk_tree" `IntervalTree`.
+    """
+
+    def __init__(self, is_add_debug_buckets: bool = False):
+        super(ChopActivitiesByNotAfkTreeStep, self).__init__()
+        self.is_add_debug_buckets = is_add_debug_buckets
+
+    def get_description(self) -> str:
+        return "Chopping activities by 'not_afk_tree' intervals."
+
+    def check_context(self, context: Dict[str, any]) -> None:
+        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
+        assert "not_afk_tree" in context, "Need in 'not_afk_tree' property"
+        if self.is_add_debug_buckets:
+            if "debug_buckets_handler" not in context:
+                context["debug_buckets_handler"] = DebugBucketsHandler()
+
+    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+        strategy_result: ActivitiesByStrategy
+        debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
+        for strategy_result in context["activities_by_strategy"]:
+            if not strategy_result.strategy.out_only_not_afk:
+                continue
+            metrics.incr("strategies to cut by AFK")
+            strategy_result.activities = _include_tree_intervals(
+                strategy_result.activities,
+                strategy_result.strategy.out_activity_boundaries,
+                context["not_afk_tree"],
+                metrics,
+                "not-AFK",
+            )
+            if self.is_add_debug_buckets:
+                debug_buckets_handler.add_debug_events_to_not_overlap(
+                    activites=strategy_result.activities,
+                    bucket_suffix=strategy_result.strategy.bucket_prefix + "_not_afk",
+                    metrics=metrics,
+                )
+        return True
+
+
+class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
+    """
+    Makes "result_tree" `IntervalTree` from "out_self_sufficient" activities.
+    """
+
+    def get_description(self) -> str:
+        return "Making 'result_tree' from self sufficient activities."
+
+    def check_context(self, context: Dict[str, any]) -> None:
+        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
+
+    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+        result_tree = intervaltree.IntervalTree()
+        strategy_result: ActivitiesByStrategy
+        for strategy_result in context["activities_by_strategy"]:
+            if not strategy_result.strategy.out_self_sufficient:
+                continue
+            metrics.incr("self sufficient strategies")
+            activity: ActivityByStrategy
+            for activity in strategy_result.activities:
+                overlap: List[intervaltree.Interval] = result_tree.overlap(
+                    activity.suggested_start_time, activity.suggested_end_time
+                )
+                if overlap:
+                    raise ValueError(
+                        f"Overlapping activities from {strategy_result.strategy}: "
+                        f"{activity} is overlapping with " + ", ".join(x.data for x in overlap)
+                    )
+                result_tree.addi(activity.start_time, activity.end_time, activity)
+                LOG.info("Found 'self-sufficient' activity: %s", activity)
+                metrics.incr("self sufficient activities", activity.duration)
+        context["result_tree"] = result_tree
+        return True
+
+
+class ChopActivitiesByResultTreeStep(AnalyzerStep):
+    """
+    Cuts activites by "result_tree" `IntervalTree` intervals.
+    """
+
+    def __init__(self, is_skip_self_sufficient_strategies: bool = True):
+        super(ChopActivitiesByResultTreeStep, self).__init__()
+        self.is_skip_self_sufficient_strategies = is_skip_self_sufficient_strategies
+
+    def get_description(self) -> str:
+        return "Chopping 'candidates_tree' from all not self sufficient activities."
+
+    def check_context(self, context: Dict[str, any]) -> None:
+        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
+        assert "result_tree" in context, "Need in 'result_tree' property"
+
+    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+        result_tree: intervaltree.IntervalTree = context.get("result_tree")
+        if len(result_tree) > 0:
+            strategy_result: ActivitiesByStrategy
+            for strategy_result in context["activities_by_strategy"]:
+                bucket_prefix = strategy_result.strategy.bucket_prefix
+                # Skip AFK activities and self sufficient if need.
+                if bucket_prefix.startswith(BUCKET_AFK_PREFIX) or (
+                    self.is_skip_self_sufficient_strategies and strategy_result.strategy.out_self_sufficient
+                ):
+                    continue
+                # Cut activities from strategy by result tree. Do it strictly, i.e. boundaries=whole.
+                strategy_result.activities = _exclude_tree_intervals(
+                    strategy_result.activities, result_tree, metrics, "result_tree"
+                )
+        return True
+
+
+class MakeCandidatesTreeStep(AnalyzerStep):
+    """
+    Makes "candidates_tree" `IntervalTree`.
+    """
+
+    def __init__(
+        self, is_add_afk: bool = False, is_add_self_sufficient: bool = False, is_add_debug_buckets: bool = False
+    ):
+        super(MakeCandidatesTreeStep, self).__init__()
+        self.is_add_afk = is_add_afk
+        self.is_add_self_sufficient = is_add_self_sufficient
+        self.is_add_debug_buckets = is_add_debug_buckets
+
+    def get_description(self) -> str:
+        return "Building 'candidates_tree' activities."
+
+    def check_context(self, context: Dict[str, any]) -> None:
+        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
+        if self.is_add_debug_buckets:
+            if "debug_buckets_handler" not in context:
+                context["debug_buckets_handler"] = DebugBucketsHandler()
+
+    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+        debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
+        candidates_tree = intervaltree.IntervalTree()
+        strategy_result: ActivitiesByStrategy
+        for strategy_result in context["activities_by_strategy"]:
+            # Skip some strategies if need.
+            if (not self.is_add_afk and strategy_result.strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX)) or (
+                not self.is_add_self_sufficient and strategy_result.strategy.out_self_sufficient
+            ):
+                continue
+            for activity in strategy_result.activities:
+                candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
+            if self.is_add_debug_buckets:
+                debug_buckets_handler.add_debug_events_to_not_overlap(
+                    activites=strategy_result.activities,
+                    bucket_suffix=strategy_result.strategy.bucket_prefix + "_candidate",
+                    metrics=metrics,
+                )
+        context["candidates_tree"] = candidates_tree
+        return True
+
+
+class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
+    """
+    Makes "candidates_tree" `IntervalTree`.
+    """
+
+    def __init__(self, is_only_good_strategies_for_description: bool = True, is_add_debug_buckets: bool = False):
+        super(MergeCandidatesTreeIntoResultTreeStep, self).__init__()
+        self.is_only_good_strategies_for_description = is_only_good_strategies_for_description
+        self.is_add_debug_buckets = is_add_debug_buckets
+
+    def get_description(self) -> str:
+        return "Merging 'candidates_tree' into 'result_tree'."
+
+    def check_context(self, context: Dict[str, any]) -> None:
+        assert "result_tree" in context, "Need in 'result_tree' property"
+        assert "candidates_tree" in context, "Need in 'candidates_tree' property"
+        if self.is_add_debug_buckets:
+            if "debug_buckets_handler" not in context:
+                context["debug_buckets_handler"] = DebugBucketsHandler()
+
+    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+        debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
+        result_tree: intervaltree.IntervalTree = context["result_tree"]
+        candidates_tree: intervaltree.IntervalTree = context["candidates_tree"]
+        debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
+
+        current_start_point: datetime.datetime = candidates_tree.begin()  # Start from leftest/oldest activity.
+        while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
+            metrics.incr("iterations to assemble remaining activities")
+            # Find "basic activity" to base "result" activity on interval of it.
+            ba_interval = _find_basic_activity_interval(candidates_tree, current_start_point, metrics)
+            if ba_interval is None:
+                break  # No more activities.
+            # Find all overlapping activities and make new `result` activity (RA).
+            ra = _build_result_activity(
+                ba_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics
+            )
+            # Check RA doesn't overlaps with existing result activities at the end.
+            result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
+            # If we had interval in `result_tree` when added RA then we need to search next gap.
+            # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
+            for existing_interval in result_tree_overlapped_with_ra_end:
+                if existing_interval.begin < ra.end_time:
+                    # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
+                    ra.end_time = existing_interval.begin
+                    ra.events = [x for x in ra.events if x.timestamp < ra.end_time]
+                    metrics.incr(
+                        "result activities shrinked because it overlaps by end with alredy existing",
+                        (ra.end_time - existing_interval.begin).total_seconds(),
+                    )
+            # Add RA into the result tree.
+            result_tree.addi(ra.start_time, ra.end_time, ra)
+            # Add RA to debug bucket if need.
+            if self.is_add_debug_buckets:
+                # Use the only debug bucket here because events should be consequtive.
+                debug_buckets_handler.add_event(
+                    bucket_id=debug_bucket_prefix,
+                    timestamp=ra.start_time,
+                    duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
+                    description=ra.description,
+                    events_count=len(ra.events),
+                )
+            # Configure next iteration.
+            current_start_point = ra.end_time
+        context["analyzer_result"] = AnalyzerResult(
+            sorted([x.data for x in result_tree], key=lambda x: x.start_time),
+            None,
+            metrics,
+            debug_buckets_handler.events if debug_buckets_handler else None,
+        )
+        return True
+
+
+def merge_activities(
+    activities_by_strategy: List[ActivitiesByStrategy],
+    steps: List[AnalyzerStep],
+    ignore_substrings: List[str],
+) -> AnalyzerResult:
+    context = {"activities_by_strategy": activities_by_strategy}
+    for step in steps:
+        metrics = Metrics({})
+        step.check_context(context)
+        step_description = step.get_description()
+        time_tmp = datetime.datetime.now()
+        LOG.info("STEP START: %s", step_description)
+        step_result = step.run(context, metrics)
+        time_tmp = datetime.datetime.now() - time_tmp
+        if step_result:
+            metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
+            LOG.info("STEP FINISH: %s\n%s\n", time_tmp, "\n".join(metrics_strings))
+        else:
+            metrics_strings = list(metrics.to_strings())
+            LOG.error("STEP FAILED: %s\n%s", time_tmp, "\n".join(metrics_strings))
+            return None
+    return context["analyzer_result"]
+
+
 def analyze_activities_per_strategy(
     activities_by_strategy: List[ActivitiesByStrategy],
     is_only_good_strategies_for_description: bool,
@@ -592,18 +914,18 @@ def analyze_activities_per_strategy(
        Name of such "result activity" is assembled from the all activities inside.
        TODO improve this last step
     """
-    ##### Investigation results and thoughts:
-    # Don't decide activity for each interval - it means loosing information about next inetervals.
-    # Need to analyze neighbors.
-    # 1) If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
-    #   If it matches Outlook event then it is a name for the meeting. "Window" should show Zoom or Slack.
-    #   AFK is probably "afk" here due to idle.
-    # 2) If a lot of IDEA activity during some interval then it is an active coding.
-    #   It may be named by JIRA ticket aroung it. "Window" should show Zoom or Slack.
-    #   AFK should be "not-afk" here due to active movements.
-    # 3) If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
-    #   If it is the same tab in browser then it is probably the same web app.
     """
+    Investigation results and thoughts:
+    - Don't decide activity for each interval - it means loosing information about next inetervals.
+    - Need to analyze neighbors.
+    1) If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
+       If it matches Outlook event then it is a name for the meeting. "Window" should show Zoom or Slack.
+       AFK is probably "afk" here due to idle.
+    2) If a lot of IDEA activity during some interval then it is an active coding.
+       It may be named by JIRA ticket aroung it. "Window" should show Zoom or Slack.
+       AFK should be "not-afk" here due to active movements.
+    3) If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
+       If it is the same tab in browser then it is probably the same web app.
     20230921 investigation about 20230120 data:
     1. Outlook activity "Java Exam" matches good.
        It includes PPT-6447, Slack, libreoffice-writer, zoom, Firefox "by density" activities. 'pipeline-tools' project(s) in IDEA.
@@ -625,9 +947,8 @@ def analyze_activities_per_strategy(
     - Don't cut Jira events by AFK but cut by out_only_if_window_app (configuration).
     - Don't cut Jira events (configuration).
     - [optional] Investigate why Jira events disappear.
-    """
 
-    ##### Exact logic:
+    Exact logic:
     # Take all remained intervals and using `out_activity_boundaries` value make activites with logic:
     #   - Make tree of remained intervals by cutting out all activities overlapping `result_tree` intervals.
     #   - Iterate this tree to find activities with at least MIN_DURATION_SEC duration and try to make them minimal.
@@ -644,172 +965,174 @@ def analyze_activities_per_strategy(
     #       - take first longest activity with `out_activity_boundaries` "whole" or "start", name it BA
     #       - find OA-s and merge with the same logic
     #       - Sort longest actvities by `out_activity_name` and make name
+    """
 
-    # Make activities in "sure that activity" order.
-    # In this way "remained gaps" will shape activities for which data is unclear.
-    metrics = Metrics({})
-    debug_dict: Dict[str, List[Event]] = {}
-    debug_buckets_cnt = 1
+    # # Make activities in "sure that activity" order.
+    # # In this way "remained gaps" will shape activities for which data is unclear.
+    # metrics = Metrics({})
+    # debug_dict: Dict[str, List[Event]] = {}
+    # debug_buckets_cnt = 1
 
-    # 1. Find AFK strategy. It is required for `out_only_not_afk` handling.
-    LOG.info("Searching not-AFK intervals.")
-    not_afk_tree = intervaltree.IntervalTree()
-    for strategy_result in activities_by_strategy:
-        bucket_prefix = strategy_result.strategy.bucket_prefix
-        if not bucket_prefix.startswith(BUCKET_AFK_PREFIX):
-            continue
-        metrics.incr("AFK strategies")
-        if strategy_result.strategy.in_activities_may_overlap:
-            LOG.warning(
-                "Unsupported setup for %s* strategy - in_activities_may_overlap=True."
-                "Skipping any AFK-related logic populated by this strategy.",
-                bucket_prefix,
-            )
-            continue
-        # Add to not_afk_tree only not-AFK activities. Expect that they are not intersect.
-        for activity in strategy_result.activities:
-            status = activity.events[0].data["status"]
-            if status == "not-afk":
-                not_afk_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
-                metrics.incr("not-afk intervals", activity.duration)
-            else:
-                metrics.incr("afk intervals", activity.duration)
+    # # 1. Find AFK strategy. It is required for `out_only_not_afk` handling.
+    # LOG.info("Searching not-AFK intervals.")
+    # not_afk_tree = intervaltree.IntervalTree()
+    # for strategy_result in activities_by_strategy:
+    #     bucket_prefix = strategy_result.strategy.bucket_prefix
+    #     if not bucket_prefix.startswith(BUCKET_AFK_PREFIX):
+    #         continue
+    #     metrics.incr("AFK strategies")
+    #     if strategy_result.strategy.in_activities_may_overlap:
+    #         LOG.warning(
+    #             "Unsupported setup for %s* strategy - in_activities_may_overlap=True."
+    #             "Skipping any AFK-related logic populated by this strategy.",
+    #             bucket_prefix,
+    #         )
+    #         continue
+    #     # Add to not_afk_tree only not-AFK activities. Expect that they are not intersect.
+    #     for activity in strategy_result.activities:
+    #         status = activity.events[0].data["status"]
+    #         if status == "not-afk":
+    #             not_afk_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
+    #             metrics.incr("not-afk intervals", activity.duration)
+    #         else:
+    #             metrics.incr("afk intervals", activity.duration)
 
-    # 2. Cut activities from `out_only_not_afk=True` strategies.
-    # Note that some "should be in not-afk" events may be produced as started before AFK watcher started
-    # (for example IDEA events when computer in hibernate mode).
-    LOG.info("Chopping activities by AFK intervals.")
-    for strategy_result in activities_by_strategy:
-        if not strategy_result.strategy.out_only_not_afk:
-            continue
-        metrics.incr("strategies to cut by AFK")
-        strategy_result.activities = _include_tree_intervals(
-            strategy_result.activities,
-            strategy_result.strategy.out_activity_boundaries,
-            not_afk_tree,
-            metrics,
-            "not-AFK",
-        )
-        if is_add_debug_buckets:
-            debug_buckets_cnt = _add_debug_events_to_not_overlap(
-                activites=strategy_result.activities,
-                debug_dict=debug_dict,
-                bucket_name=strategy_result.strategy.bucket_prefix,
-                metrics=metrics,
-                debug_buckets_cnt=debug_buckets_cnt,
-            )
+    # # 2. Cut activities from `out_only_not_afk=True` strategies.
+    # # Note that some "should be in not-afk" events may be produced as started before AFK watcher started
+    # # (for example IDEA events when computer in hibernate mode).
+    # LOG.info("Chopping activities by AFK intervals.")
+    # for strategy_result in activities_by_strategy:
+    #     if not strategy_result.strategy.out_only_not_afk:
+    #         continue
+    #     metrics.incr("strategies to cut by AFK")
+    #     strategy_result.activities = _include_tree_intervals(
+    #         strategy_result.activities,
+    #         strategy_result.strategy.out_activity_boundaries,
+    #         not_afk_tree,
+    #         metrics,
+    #         "not-AFK",
+    #     )
+    #     if is_add_debug_buckets:
+    #         debug_buckets_cnt = _add_debug_events_to_not_overlap(
+    #             activites=strategy_result.activities,
+    #             debug_dict=debug_dict,
+    #             bucket_name=strategy_result.strategy.bucket_prefix,
+    #             metrics=metrics,
+    #             debug_buckets_cnt=debug_buckets_cnt,
+    #         )
 
-    # 3. Add into result activities from `out_self_sufficient=True` strategies. Check for overlappings.
-    LOG.info('Adding "out_self_sufficient" strategies activities.')
-    debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}{debug_buckets_cnt:03}_self_sufficient"
-    result_tree = intervaltree.IntervalTree()
-    for strategy_result in activities_by_strategy:
-        if not strategy_result.strategy.out_self_sufficient:
-            continue
-        metrics.incr("self sufficient strategies")
-        for activity in strategy_result.activities:
-            overlap: List[intervaltree.Interval] = result_tree.overlap(activity.start_time, activity.end_time)
-            if overlap:
-                raise ValueError(
-                    f"Overlapping activities from {strategy_result.strategy}: "
-                    f"{activity} is overlapping with " + ", ".join(x.data for x in overlap)
-                )
-            result_tree.addi(activity.start_time, activity.end_time, activity)
-            LOG.info("Found 'self-sufficient' activity: %s", activity)
-            metrics.incr("self sufficient activities", activity.duration)
-            if is_add_debug_buckets:
-                _add_debug_event(
-                    debug_dict=debug_dict,
-                    bucket_id=debug_bucket_prefix,
-                    timestamp=activity.start_time,
-                    duration=activity.end_time - activity.start_time,  # Use end-start time, not duration by events.
-                    description=activity.description,
-                    events_count=len(activity.events),
-                )
-    # Check that at least something was added to the result tree. Otherwise no debug events were added.
-    if len(result_tree) > 0:
-        debug_buckets_cnt += 1
+    # # 3. Add into result activities from `out_self_sufficient=True` strategies. Check for overlappings.
+    # LOG.info('Adding "out_self_sufficient" strategies activities.')
+    # debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}{debug_buckets_cnt:03}_self_sufficient"
+    # result_tree = intervaltree.IntervalTree()
+    # for strategy_result in activities_by_strategy:
+    #     if not strategy_result.strategy.out_self_sufficient:
+    #         continue
+    #     metrics.incr("self sufficient strategies")
+    #     for activity in strategy_result.activities:
+    #         overlap: List[intervaltree.Interval] = result_tree.overlap(activity.start_time, activity.end_time)
+    #         if overlap:
+    #             raise ValueError(
+    #                 f"Overlapping activities from {strategy_result.strategy}: "
+    #                 f"{activity} is overlapping with " + ", ".join(x.data for x in overlap)
+    #             )
+    #         result_tree.addi(activity.start_time, activity.end_time, activity)
+    #         LOG.info("Found 'self-sufficient' activity: %s", activity)
+    #         metrics.incr("self sufficient activities", activity.duration)
+    #         if is_add_debug_buckets:
+    #             _add_debug_event(
+    #                 debug_dict=debug_dict,
+    #                 bucket_id=debug_bucket_prefix,
+    #                 timestamp=activity.start_time,
+    #                 duration=activity.end_time - activity.start_time,  # Use end-start time, not duration by events.
+    #                 description=activity.description,
+    #                 events_count=len(activity.events),
+    #             )
+    # # Check that at least something was added to the result tree. Otherwise no debug events were added.
+    # if len(result_tree) > 0:
+    #     debug_buckets_cnt += 1
 
-    # 4. Make tree from remained activities. Chop them by existing `result` activities if there are such.
-    candidates_tree = intervaltree.IntervalTree()
-    if len(result_tree) > 0:
-        LOG.info('Building "candidate" activities by chopping remaining activities by activities added so far.')
-        for strategy_result in activities_by_strategy:
-            strategy = strategy_result.strategy
-            bucket_prefix = strategy.bucket_prefix
-            # Skip already handled/contributed strategies.
-            if bucket_prefix.startswith(BUCKET_AFK_PREFIX) or strategy.out_self_sufficient:
-                continue
-            # Cut activities from strategy by result tree. Do it strictly, i.e. boundaries=whole.
-            remained_activities = _exclude_tree_intervals(
-                strategy_result.activities, result_tree, metrics, "activities built from self sufficient strategies"
-            )
-            # Iterate remained activities and put them into common candidates tree and into per-strategy tree if need.
-            # Note that activities here are not in order!
-            for activity in remained_activities:
-                candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
-            # Add debug events and buckets if need.
-            if is_add_debug_buckets:
-                debug_buckets_cnt = _add_debug_events_to_not_overlap(
-                    remained_activities, debug_dict, strategy.bucket_prefix, debug_buckets_cnt, metrics
-                )
-    else:
-        LOG.info(
-            'Skipping chopping of remained activities because there were no "out_self_sufficient"'
-            " strategies activities found this day."
-        )
-        for strategy_result in activities_by_strategy:
-            # Don't use AFK activities to build resulting activities on.
-            if strategy_result.strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX):
-                continue
-            for activity in strategy_result.activities:
-                candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
+    # # 4. Make tree from remained activities. Chop them by existing `result` activities if there are such.
+    # candidates_tree = intervaltree.IntervalTree()
+    # if len(result_tree) > 0:
+    #     LOG.info('Building "candidate" activities by chopping remaining activities by activities added so far.')
+    #     for strategy_result in activities_by_strategy:
+    #         strategy = strategy_result.strategy
+    #         bucket_prefix = strategy.bucket_prefix
+    #         # Skip already handled/contributed strategies.
+    #         if bucket_prefix.startswith(BUCKET_AFK_PREFIX) or strategy.out_self_sufficient:
+    #             continue
+    #         # Cut activities from strategy by result tree. Do it strictly, i.e. boundaries=whole.
+    #         remained_activities = _exclude_tree_intervals(
+    #             strategy_result.activities, result_tree, metrics, "activities built from self sufficient strategies"
+    #         )
+    #         # Iterate remained activities and put them into common candidates tree and into per-strategy tree if need.
+    #         # Note that activities here are not in order!
+    #         for activity in remained_activities:
+    #             candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
+    #         # Add debug events and buckets if need.
+    #         if is_add_debug_buckets:
+    #             debug_buckets_cnt = _add_debug_events_to_not_overlap(
+    #                 remained_activities, debug_dict, strategy.bucket_prefix, debug_buckets_cnt, metrics
+    #             )
+    # else:
+    #     LOG.info(
+    #         'Skipping chopping of remained activities because there were no "out_self_sufficient"'
+    #         " strategies activities found this day."
+    #     )
+    #     for strategy_result in activities_by_strategy:
+    #         # Don't use AFK activities to build resulting activities on.
+    #         if strategy_result.strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX):
+    #             continue
+    #         for activity in strategy_result.activities:
+    #             candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
 
-    # 5. Iterate remained activities to fill `result` remained gaps.
-    LOG.info("Assemble activities-by-strategies into result activities.")
-    current_start_point: datetime.datetime = candidates_tree.begin()  # Start from leftest/oldest activity.
-    debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
+    # # 5. Iterate remained activities to fill `result` remained gaps.
+    # LOG.info("Assemble activities-by-strategies into result activities.")
+    # current_start_point: datetime.datetime = candidates_tree.begin()  # Start from leftest/oldest activity.
+    # debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
 
-    # Limit number of iterations to avoid infinite loops on bugs or wrong input.
-    while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
-        metrics.incr("iterations to assemble remaining activities")
-        # Find "basic activity" to base "result" activity on interval of it.
-        ba_interval = _find_basic_activity_interval(candidates_tree, current_start_point, metrics)
-        if ba_interval is None:
-            break  # No more activities.
-        # Find all overlapping activities and make new `result` activity (RA).
-        ra = _build_result_activity(ba_interval, candidates_tree, is_only_good_strategies_for_description, metrics)
-        # Check RA doesn't overlaps with existing result activities at the end.
-        result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
-        # If we had interval in `result_tree` when added RA then we need to search next gap.
-        # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
-        for existing_interval in result_tree_overlapped_with_ra_end:
-            if existing_interval.begin < ra.end_time:
-                # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
-                ra.end_time = existing_interval.begin
-                ra.events = [x for x in ra.events if x.timestamp < ra.end_time]
-                metrics.incr(
-                    "result activities shrinked because it overlaps by end with alredy existing",
-                    (ra.end_time - existing_interval.begin).total_seconds(),
-                )
-        # Add RA into the result tree.
-        result_tree.addi(ra.start_time, ra.end_time, ra)
-        # Add RA to debug bucket if need.
-        if is_add_debug_buckets:
-            # Use the only debug bucket here because events should be consequtive.
-            _add_debug_event(
-                debug_dict=debug_dict,
-                bucket_id=debug_bucket_prefix,
-                timestamp=ra.start_time,
-                duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
-                description=ra.description,
-                events_count=len(ra.events),
-            )
-        # Configure next iteration.
-        current_start_point = ra.end_time
-    return AnalyzerResult(
-        sorted([x.data for x in result_tree], key=lambda x: x.start_time),
-        None,
-        metrics,
-        debug_dict,
-    )
+    # # Limit number of iterations to avoid infinite loops on bugs or wrong input.
+    # while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
+    #     metrics.incr("iterations to assemble remaining activities")
+    #     # Find "basic activity" to base "result" activity on interval of it.
+    #     ba_interval = _find_basic_activity_interval(candidates_tree, current_start_point, metrics)
+    #     if ba_interval is None:
+    #         break  # No more activities.
+    #     # Find all overlapping activities and make new `result` activity (RA).
+    #     ra = _build_result_activity(ba_interval, candidates_tree, is_only_good_strategies_for_description, metrics)
+    #     # Check RA doesn't overlaps with existing result activities at the end.
+    #     result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
+    #     # If we had interval in `result_tree` when added RA then we need to search next gap.
+    #     # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
+    #     for existing_interval in result_tree_overlapped_with_ra_end:
+    #         if existing_interval.begin < ra.end_time:
+    #             # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
+    #             ra.end_time = existing_interval.begin
+    #             ra.events = [x for x in ra.events if x.timestamp < ra.end_time]
+    #             metrics.incr(
+    #                 "result activities shrinked because it overlaps by end with alredy existing",
+    #                 (ra.end_time - existing_interval.begin).total_seconds(),
+    #             )
+    #     # Add RA into the result tree.
+    #     result_tree.addi(ra.start_time, ra.end_time, ra)
+    #     # Add RA to debug bucket if need.
+    #     if is_add_debug_buckets:
+    #         # Use the only debug bucket here because events should be consequtive.
+    #         _add_debug_event(
+    #             debug_dict=debug_dict,
+    #             bucket_id=debug_bucket_prefix,
+    #             timestamp=ra.start_time,
+    #             duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
+    #             description=ra.description,
+    #             events_count=len(ra.events),
+    #         )
+    #     # Configure next iteration.
+    #     current_start_point = ra.end_time
+    # return AnalyzerResult(
+    #     sorted([x.data for x in result_tree], key=lambda x: x.start_time),
+    #     None,
+    #     metrics,
+    #     debug_dict,
+    # )
+    return None
