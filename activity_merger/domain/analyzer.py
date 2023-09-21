@@ -202,6 +202,11 @@ def _include_tree_intervals(
             )
             result.append(activity)
             continue
+        else:
+            metrics.incr(
+                f"activities not completely covered by {name_of_tree} and need to be chopped",
+                (activity.suggested_end_time - activity.suggested_start_time).total_seconds(),
+            )
 
         # Check remained ActivityBoundaries cases.
         if boundaries == ActivityBoundaries.START:
@@ -423,7 +428,7 @@ def _build_result_activity(
             ra_events.extend(activity.events)
             overlapping_activities.append(activity)
             candidates_tree.remove(interval)
-            metrics.incr("activities absorbed by basic activity completely", interval.length().total_seconds())
+            metrics.incr("activities placed completely inside basic activities", interval.length().total_seconds())
             continue
         boundaries = activity.strategy.out_activity_boundaries
         # Check BA overlaps the start of the activity.
@@ -507,6 +512,19 @@ def _build_result_activity(
 def _build_activity_name(
     activities: List[ActivityByStrategy], metrics: Metrics, duration_sec: float, is_use_all_strategies: bool
 ) -> str:
+    """
+    Builds name of the resulting activity from list of `ActivityByStrategy`-s.
+    In details all activities are grouped by strategy, sorted by "out_produces_good_activity_name"
+    to get "good" names first or the only (depending on the settings), next processed to call
+    "out_activity_name_sentence_builder" with key-value pairs received from related `GroupingDescriptor`-s.
+    Handles "out_activity_name_sentence_builder" absence with default key-value pairs stringifier and
+    with adding nothing if "out_activity_name_sentence_builder" returns empty value.
+    :param activities: list of `ActivityByStrategy` making resulting activity.
+    :param metrics: Metrics object to report details into.
+    :param duration_sec: Duration of the resulting activity.
+    :param is_use_all_strategies: Flag to build activity description from all strategies, not only from "good" ones.
+    :return: Resulting activity description.
+    """
     # Group activities by Strategy. Keep map of strategies to name. Name is a key in both dictionaries.
     strategy_to_name: Dict[str, Strategy] = {}
     grouped_activities: Dict[str, List[ActivitiesByStrategy]] = collections.defaultdict(list)
@@ -584,21 +602,30 @@ def analyze_activities_per_strategy(
     #   It may be named by JIRA ticket aroung it. "Window" should show Zoom or Slack.
     #   AFK should be "not-afk" here due to active movements.
     # 3) If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
-    #   If it is the same tab in browser then it is probably some web app.
-    # Need to make links between rules of different buckets.
-    # Extra ideas:
-    # - We may make clusters with fields of 'data'. Like the same "jira_id" for JIRA or 'project' for IDEA.
-    # Strategies:
-    # 1. Find "long" events and make "windows" basing on them. Even intersecting.
-    # 2. Find many nearby events of the "same application". Make "windows" basing on them. Even intersecting.
-    # 3. Separate buckets on "strategies":
-    #   - Trustworthy, event=activity, sequential - like watchdog.
-    #   - Reliable whole event, event=activity, sequential, need approve - like Outlook. Need approve from window (slack, zoom).
-    #   - Reliable whole event, few events=activity, may mix activities, need name of activity - like VS code, window
-    #   - Reliable only event start, may mix activities - like IDEA. Need approve from other buckets.
-    #   - Reliable only event end, may mix activities - like JIRA. Need approve from window or browser.
-    #   - Dependant, sequential - like AFK. Very bad source of activities.
-    # Looks like ML problem....
+    #   If it is the same tab in browser then it is probably the same web app.
+    """
+    20230921 investigation about 20230120 data:
+    1. Outlook activity "Java Exam" matches good.
+       It includes PPT-6447, Slack, libreoffice-writer, zoom, Firefox "by density" activities. 'pipeline-tools' project(s) in IDEA.
+       IDEA - wrongly! (it was after the meeting but there is small overlap)
+    2. Outlook "Plan Team Standup" disappeared - swallowed by more wide (started earlier and finished later)
+       "Code, Gnome-terminal, Slack, firefox, flameshot, jetbrains-idea, thunderbird, zoom application(s).
+       'pipeline-tools' project(s) in IDEA."
+    3. Outlook "Pre-story meeting" disappeared in right way.
+       But here was Slack call with Segii Iurchenko and it disappeared. Even not found by "Window" bucket.
+    4. Preparation to Java exam (10:03-10:30) is not separated from other events because Window watcher "title" field is not used?
+    5. Jira events are chopped too hard by AFK. Sometimes they even disappear (11:21-12:03).
+    6. Jira events for the same jira_id need to merge, like near 9:35.
+    7. Use IDEA events only if there is window event for this.
+    8. Use Firefox events only if there is window event for this.
+
+    Ways to improve:
+    - [questionable] Don't count few seconds events as activity (like ignore all shorter than 1 minute).
+    - [imprtant] Add "out_only_if_window_app" to strategies (similar to out_only_not_afk).
+    - Don't cut Jira events by AFK but cut by out_only_if_window_app (configuration).
+    - Don't cut Jira events (configuration).
+    - [optional] Investigate why Jira events disappear.
+    """
 
     ##### Exact logic:
     # Take all remained intervals and using `out_activity_boundaries` value make activites with logic:

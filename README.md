@@ -157,7 +157,9 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Add to Strategy 'in_skip_events_with_key_value' or 'in_key_value_skip' property to skip "app=unknown" events.
 - [x] Restore 'ignore_hints' in 'get_activities.py'.
 - [x] Separate "strategy activity" and "result activity".
-- [ ] Add ability for activities within `out_activity_boundaries` not "whole" strategies keep track "max cut from left/right".
+- [x] Add ability for activities within `out_activity_boundaries` not "whole" strategies keep track "max cut from left/right".
+- [ ] Add ability to change strategies in `analyze_activities_per_strategy`.
+- [ ] Add "out_only_if_window_app" to strategies (similar to out_only_not_afk).
 - [ ] Keep exact events in result activities.
 - [ ] Complete get_activities.py
 - [ ] Try it for myself. Adjust `STRATEGIES` and code if need.

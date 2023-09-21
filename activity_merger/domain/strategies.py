@@ -103,7 +103,7 @@ class ActivitiesByStrategy:
         # Note that Metrics.to_strings append 2 spaces indent.
         metrics_strings = list(self.metrics.to_strings(ignore_with_substrings=ignore_metrics_by_substrings))
         metrics = "\n  ".join(metrics_strings)
-        activities = "\n    ".join(str(x) for x in self.activities)
+        activities = "\n    ".join(str(x) for x in sorted(self.activities, key=lambda x: x.suggested_start_time))
         return (
             f"{self.strategy}\n  Metrics ({len(metrics_strings)}):\n  {metrics}"
             f"\n  ActivityByStrategy-es ({len(self.activities)}):\n    {activities}"
@@ -115,7 +115,7 @@ class ActivitiesByStrategy:
 
 def handle_events(strategy: Strategy, events: List[Event], metrics: Metrics) -> ActivitiesByStrategy:
     """
-    Handles events for the specified `Strategy` to provide `ActivitiesByStrategy` instance.
+    Handles list of events for the specified `Strategy` to provide `ActivitiesByStrategy` instance.
     """
 
     if strategy.in_each_event_is_activity:  # Watchdog, Outlook.
@@ -136,8 +136,8 @@ def handle_events(strategy: Strategy, events: List[Event], metrics: Metrics) -> 
 
 
 def _check_skip_event(event: Event, strategy: Strategy, metrics: Metrics) -> bool:
-    if strategy.in_skip_key_value:
-        for k, v in strategy.in_skip_key_value.items():
+    if strategy.in_skip_key_values:
+        for k, v in strategy.in_skip_key_values.items():
             if event.data.get(k) == v:
                 metrics.increment(f"events skipped because have {k}={v}")
                 return True
