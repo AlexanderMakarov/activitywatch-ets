@@ -4,16 +4,11 @@ from typing import Dict, List, Optional, Set
 
 import intervaltree
 
-from ..config.config import (CURRENT_TIMEZONE, DEBUG_BUCKET_PREFIX,
-                             LIMIT_OF_RESULTING_ACTIVITIES, LOG,
-                             MIN_DURATION_SEC)
-from .input_entities import ActivityBoundaries, Event, Strategy
+from ..config.config import CURRENT_TIMEZONE, DEBUG_BUCKET_PREFIX, LIMIT_OF_RESULTING_ACTIVITIES, LOG, MIN_DURATION_SEC
+from .input_entities import IntervalBoundaries, Event, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
-from .strategies import ActivitiesByStrategy, ActivityByStrategy
-
-BUCKET_AFK_PREFIX = "aw-watcher-afk"
-BUCKET_STOPWATCH_PREFIX = "aw-stopwatch"
+from .strategies import BUCKET_AFK_PREFIX, ActivitiesByStrategy, ActivityByStrategy
 
 
 def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
@@ -142,7 +137,7 @@ def _exclude_tree_intervals(
 
 def _include_tree_intervals(
     activities: List[ActivityByStrategy],
-    boundaries: ActivityBoundaries,
+    boundaries: IntervalBoundaries,
     tree: intervaltree.IntervalTree,
     metrics: Metrics,
     name_of_tree: str,
@@ -205,7 +200,7 @@ def _include_tree_intervals(
             )
 
         # Check remained ActivityBoundaries cases.
-        if boundaries == ActivityBoundaries.START:
+        if boundaries == IntervalBoundaries.START:
             if not start_covered:
                 metrics.incr(
                     f"activities removed with {boundaries} started before {name_of_tree}",
@@ -225,7 +220,7 @@ def _include_tree_intervals(
                 f"activities with tail cut by {name_of_tree}",
                 (prev_end_time - activity.suggested_end_time).total_seconds(),
             )
-        elif boundaries == ActivityBoundaries.END:
+        elif boundaries == IntervalBoundaries.END:
             if not end_covered:
                 metrics.incr(
                     f"activities removed with {boundaries} ended before {name_of_tree}",
@@ -246,7 +241,7 @@ def _include_tree_intervals(
                 (activity.suggested_start_time - prev_start_time).total_seconds(),
             )
             continue
-        elif boundaries == ActivityBoundaries.DIM:
+        elif boundaries == IntervalBoundaries.DIM:
             for segment in segments:
                 # Chop some segment from the activity. Doesn't check min and max time points of activity.
                 prev_duration = activity.suggested_end_time - activity.suggested_start_time
@@ -377,7 +372,7 @@ def _find_basic_activity_interval(
     # TODO enhance with max_start_time and min_end_time properties of ActivityByStrategy.
     # Try find BA as:
     # - started on the `current_start_point`,
-    # - with `out_activity_boundaries` "whole" or "start",
+    # - with `in_trustable_boundaries` "whole" or "start",
     # - length is equal or more than `MIN_DURATION_SEC` (choose minimal).
     # For this first sort them by the start, next by length (shorter - first).
     candidates_for_ba = sorted(candidates_for_ba, key=lambda x: (x.begin, x.end - x.begin))
@@ -387,7 +382,7 @@ def _find_basic_activity_interval(
             for x in candidates_for_ba
             if x.begin == current_start_point
             and x.length() >= min_duraiton_timedelta
-            and x.data.strategy.out_activity_boundaries in ["whole", "start"]
+            and x.data.strategy.in_trustable_boundaries in [IntervalBoundaries.STRICT, IntervalBoundaries.START]
         ),
         None,
     )
@@ -396,7 +391,7 @@ def _find_basic_activity_interval(
     if ba_interval is None:
         ba_interval = max(candidates_for_ba, key=intervaltree.Interval.length)
         LOG.info(
-            "Can't find 'perfect' basic activity after %s and longer than %s. Using as basic longest - %s.",
+            "Can't find 'perfect' basic activity after %s and longer than %s. Using as basic longest - %s",
             current_start_point.astimezone(CURRENT_TIMEZONE).strftime("%H:%M:%S"),
             min_duraiton_timedelta,
             ba_interval.data,
@@ -434,17 +429,17 @@ def _build_result_activity(
             candidates_tree.remove(interval)
             metrics.incr("activities placed completely inside basic activities", interval.length().total_seconds())
             continue
-        boundaries = activity.strategy.out_activity_boundaries
+        boundaries = activity.strategy.in_trustable_boundaries
         # Check BA overlaps the start of the activity.
         if ba_interval.contains_point(interval.begin):
-            if boundaries == ActivityBoundaries.START:
-                # If activity is `out_activity_boundaries=start` then concatenate data from it into BA.
+            if boundaries == IntervalBoundaries.START:
+                # If activity is `in_trustable_boundaries=start` then concatenate data from it into BA.
                 ra_events.extend(activity.events)
                 overlapping_activities.append(activity)
                 candidates_tree.remove(interval)
                 metrics.incr("activities absorbed by basic activity at the start", interval.length().total_seconds())
-            elif boundaries == ActivityBoundaries.DIM:
-                # If activity is `out_activity_boundaries=whole` then split activity,
+            elif boundaries == IntervalBoundaries.DIM:
+                # If activity is `in_trustable_boundaries=whole` then split activity,
                 # and concatenate last part with BA. First part is not needed anyway.
                 split_activity = _cut_activity_end(activity, ba_interval.end)
                 ra_events.extend(split_activity.events)
@@ -454,21 +449,21 @@ def _build_result_activity(
                 candidates_tree.addi(ba_interval.end, split_activity.suggested_end_time, split_activity)
                 metrics.incr("activities enhancing basic activity by the start", split_activity.duration)
             else:
-                # If activity is `out_activity_boundaries=end` then skip it.
+                # If activity is `in_trustable_boundaries=end` then skip it.
                 metrics.incr(
                     "activities unable to enhance basic activity by the start", interval.length().total_seconds()
                 )
             continue
         # Check BA overlaps the end of activity.
         if ba_interval.contains_point(interval.end):
-            if boundaries == ActivityBoundaries.END:
-                # If activity is `out_activity_boundaries=end` then concatenate data from it into BA.
+            if boundaries == IntervalBoundaries.END:
+                # If activity is `in_trustable_boundaries=end` then concatenate data from it into BA.
                 ra_events.extend(activity.events)
                 overlapping_activities.append(activity)
                 candidates_tree.remove(interval)
                 metrics.incr("activities absorbed by basic activity at the end", interval.length().total_seconds())
-            elif boundaries == ActivityBoundaries.DIM:
-                # If activity is `out_activity_boundaries=whole` then split activity,
+            elif boundaries == IntervalBoundaries.DIM:
+                # If activity is `in_trustable_boundaries=whole` then split activity,
                 # and concatenate first part with BA.
                 split_activity = _cut_activity_start(activity, ba_interval.begin)
                 ra_events.extend(split_activity.events)
@@ -476,14 +471,14 @@ def _build_result_activity(
                 candidates_tree.remove(interval)
                 metrics.incr("activities enhancing basic activity by the end", split_activity.duration)
             else:
-                # If activity is `out_activity_boundaries=start` then skip it.
+                # If activity is `in_trustable_boundaries=start` then skip it.
                 metrics.incr(
                     "activities unable to enhance basic activity by the end", interval.length().total_seconds()
                 )
             continue
         # If BA itself is placed inside actvity then concatenate middle of it
-        # and only if it is `out_activity_boundaries=whole`.
-        if boundaries == ActivityBoundaries.DIM:
+        # and only if it is `in_trustable_boundaries=whole`.
+        if boundaries == IntervalBoundaries.DIM:
             tmp = _cut_activity_start(activity, ba_interval.begin)
             tmp = _cut_activity_end(tmp, ba_interval.end)
             ra_events.extend(tmp.events)
@@ -589,7 +584,7 @@ class AnalyzerStep:
         """
         raise NotImplementedError("Not implemented 'get_description'.")
 
-    def check_context(self, context: Dict[str, any]) -> None:  # TODO: consider to use contextvars package.
+    def check_context(self, context: Dict[str, any]) -> None:  # TODO consider to use contextvars package.
         """
         Checks that all required items are present in the context.
         Raises an exception if the context is invalid. Expected to be executed before `run` method.
@@ -603,86 +598,6 @@ class AnalyzerStep:
         Should return True if passed.
         """
         return False
-
-
-class MakeNotAfkTreeStep(AnalyzerStep):
-    """
-    Makes "not_afk_tree" `IntervalTree` from "activities_by_strategy".
-    """
-
-    def get_description(self) -> str:
-        return "Making 'not_afk_tree' intervals list."
-
-    def check_context(self, context: Dict[str, any]) -> None:
-        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
-
-    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
-        not_afk_tree = intervaltree.IntervalTree()
-        strategy_result: ActivitiesByStrategy
-        for strategy_result in context["activities_by_strategy"]:
-            bucket_prefix = strategy_result.strategy.bucket_prefix
-            if not bucket_prefix.startswith(BUCKET_AFK_PREFIX):
-                continue
-            metrics.incr("AFK strategies")
-            if strategy_result.strategy.in_activities_may_overlap:
-                LOG.warning(
-                    "Unsupported setup for %s* strategy - in_activities_may_overlap=True."
-                    "Skipping any AFK-related logic populated by this strategy.",
-                    bucket_prefix,
-                )
-                continue
-            # Add to not_afk_tree only not-AFK activities. Expect that they are not intersect.
-            for activity in strategy_result.activities:
-                status = activity.events[0].data["status"]
-                if status == "not-afk":
-                    not_afk_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
-                    metrics.incr("not-afk intervals", activity.duration)
-                else:
-                    metrics.incr("afk intervals", activity.duration)
-        context["not_afk_tree"] = not_afk_tree
-        return True
-
-
-class ChopActivitiesByNotAfkTreeStep(AnalyzerStep):
-    """
-    Cuts activities by "not_afk_tree" `IntervalTree`.
-    """
-
-    def __init__(self, is_add_debug_buckets: bool = False):
-        super(ChopActivitiesByNotAfkTreeStep, self).__init__()
-        self.is_add_debug_buckets = is_add_debug_buckets
-
-    def get_description(self) -> str:
-        return "Chopping activities by 'not_afk_tree' intervals."
-
-    def check_context(self, context: Dict[str, any]) -> None:
-        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
-        assert "not_afk_tree" in context, "Need in 'not_afk_tree' property"
-        if self.is_add_debug_buckets:
-            if "debug_buckets_handler" not in context:
-                context["debug_buckets_handler"] = DebugBucketsHandler()
-
-    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
-        strategy_result: ActivitiesByStrategy
-        debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
-        for strategy_result in context["activities_by_strategy"]:
-            if not strategy_result.strategy.out_only_not_afk:
-                continue
-            metrics.incr("strategies to cut by AFK")
-            strategy_result.activities = _include_tree_intervals(
-                strategy_result.activities,
-                strategy_result.strategy.out_activity_boundaries,
-                context["not_afk_tree"],
-                metrics,
-                "not-AFK",
-            )
-            if self.is_add_debug_buckets:
-                debug_buckets_handler.add_debug_events_to_not_overlap(
-                    activites=strategy_result.activities,
-                    bucket_suffix=strategy_result.strategy.bucket_prefix + "_not_afk",
-                    metrics=metrics,
-                )
-        return True
 
 
 class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
@@ -725,8 +640,9 @@ class ChopActivitiesByResultTreeStep(AnalyzerStep):
     Cuts activites by "result_tree" `IntervalTree` intervals.
     """
 
-    def __init__(self, is_skip_self_sufficient_strategies: bool = True):
+    def __init__(self, is_skip_afk: bool = False, is_skip_self_sufficient_strategies: bool = True):
         super(ChopActivitiesByResultTreeStep, self).__init__()
+        self.is_skip_afk = is_skip_afk
         self.is_skip_self_sufficient_strategies = is_skip_self_sufficient_strategies
 
     def get_description(self) -> str:
@@ -743,7 +659,7 @@ class ChopActivitiesByResultTreeStep(AnalyzerStep):
             for strategy_result in context["activities_by_strategy"]:
                 bucket_prefix = strategy_result.strategy.bucket_prefix
                 # Skip AFK activities and self sufficient if need.
-                if bucket_prefix.startswith(BUCKET_AFK_PREFIX) or (
+                if (self.is_skip_afk and bucket_prefix.startswith(BUCKET_AFK_PREFIX)) or (
                     self.is_skip_self_sufficient_strategies and strategy_result.strategy.out_self_sufficient
                 ):
                     continue
@@ -760,7 +676,7 @@ class MakeCandidatesTreeStep(AnalyzerStep):
     """
 
     def __init__(
-        self, is_add_afk: bool = False, is_add_self_sufficient: bool = False, is_add_debug_buckets: bool = False
+        self, is_add_debug_buckets: bool = False, is_add_afk: bool = False, is_add_self_sufficient: bool = False
     ):
         super(MakeCandidatesTreeStep, self).__init__()
         self.is_add_afk = is_add_afk
@@ -803,7 +719,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
     Makes "candidates_tree" `IntervalTree`.
     """
 
-    def __init__(self, is_only_good_strategies_for_description: bool = True, is_add_debug_buckets: bool = False):
+    def __init__(self, is_add_debug_buckets: bool = False, is_only_good_strategies_for_description: bool = True):
         super(MergeCandidatesTreeIntoResultTreeStep, self).__init__()
         self.is_only_good_strategies_for_description = is_only_good_strategies_for_description
         self.is_add_debug_buckets = is_add_debug_buckets
@@ -916,16 +832,6 @@ def analyze_activities_per_strategy(
     """
     """
     Investigation results and thoughts:
-    - Don't decide activity for each interval - it means loosing information about next inetervals.
-    - Need to analyze neighbors.
-    1) If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
-       If it matches Outlook event then it is a name for the meeting. "Window" should show Zoom or Slack.
-       AFK is probably "afk" here due to idle.
-    2) If a lot of IDEA activity during some interval then it is an active coding.
-       It may be named by JIRA ticket aroung it. "Window" should show Zoom or Slack.
-       AFK should be "not-afk" here due to active movements.
-    3) If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
-       If it is the same tab in browser then it is probably the same web app.
     20230921 investigation about 20230120 data:
     1. Outlook activity "Java Exam" matches good.
        It includes PPT-6447, Slack, libreoffice-writer, zoom, Firefox "by density" activities. 'pipeline-tools' project(s) in IDEA.
@@ -934,7 +840,7 @@ def analyze_activities_per_strategy(
        "Code, Gnome-terminal, Slack, firefox, flameshot, jetbrains-idea, thunderbird, zoom application(s).
        'pipeline-tools' project(s) in IDEA."
     3. Outlook "Pre-story meeting" disappeared in right way.
-       But here was Slack call with Segii Iurchenko and it disappeared. Even not found by "Window" bucket.
+       But here was (?) Slack call with Sergii Iurchenko and it disappeared. Even not found by "Window" bucket.
     4. Preparation to Java exam (10:03-10:30) is not separated from other events because Window watcher "title" field is not used?
     5. Jira events are chopped too hard by AFK. Sometimes they even disappear (11:21-12:03).
     6. Jira events for the same jira_id need to merge, like near 9:35.
@@ -943,26 +849,43 @@ def analyze_activities_per_strategy(
 
     Ways to improve:
     - [questionable] Don't count few seconds events as activity (like ignore all shorter than 1 minute).
+      WON'T work because even small activities (from Window) may add information into activity description.
     - [imprtant] Add "out_only_if_window_app" to strategies (similar to out_only_not_afk).
     - Don't cut Jira events by AFK but cut by out_only_if_window_app (configuration).
-    - Don't cut Jira events (configuration).
+      WON'T work because it is even stricter than AFK.
+      In result 11:21-12:03 is fixed but there are no activities after 16:01 BUT should.
+    - Don't cut IDEA events (configuration).
     - [optional] Investigate why Jira events disappear.
 
+    20230921 investigation about 20230120 data:
+    1. Result activities are bad - only 1 on 5+ hours.
+    2. IDEA activities become better but don't end in a time, often are cut but 1-2 minutes.
+    3. Window activity on 5+ hours becomes "ba" for bad results and wasn't cut to 2 hours - bug!
+    4. If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
+       If it is the same tab in browser then it is probably the same web app.
+    5. Preparation to Java exam (10:03-10:30) is not separated from other events
+       because Window watcher "title" field is not used.
+    6. If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
+       If it matches Outlook event then it is a name for the meeting. "Window" should show Zoom or Slack.
+       AFK is probably "afk" here due to idle.
+    7. If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
+       If it is the same tab in browser then it is probably the same web app.
+
     Exact logic:
-    # Take all remained intervals and using `out_activity_boundaries` value make activites with logic:
+    # Take all remained intervals and using `in_trustable_boundaries` value make activites with logic:
     #   - Make tree of remained intervals by cutting out all activities overlapping `result_tree` intervals.
     #   - Iterate this tree to find activities with at least MIN_DURATION_SEC duration and try to make them minimal.
     #     In details at start and at the middle of the gap:
-    #       - choose shortest activity with `out_activity_boundaries` "whole" or "start"
+    #       - choose shortest activity with `in_trustable_boundaries` "whole" or "start"
     #         and duration >= MIN_DURATION_SEC, name it "basic activity" (BA)
     #       - find overlapping activities (OA-s)
     #           - if OA-s is smaller than BA then merge it into BA as is;
-    #           - if OA is bigger than BA then check if `out_activity_boundaries` value allows to cut it
-    #               - if `out_activity_boundaries` value allows then cut and merge overlapping part into BA;
-    #               - if `out_activity_boundaries` value is against then cut until BA end
+    #           - if OA is bigger than BA then check if `in_trustable_boundaries` value allows to cut it
+    #               - if `in_trustable_boundaries` value allows then cut and merge overlapping part into BA;
+    #               - if `in_trustable_boundaries` value is against then cut until BA end
     #       - Sort longest actvities by `out_activity_name` and make name
     #     At the end of the gap (when length of all activities is <= MIN_DURATION_SEC):
-    #       - take first longest activity with `out_activity_boundaries` "whole" or "start", name it BA
+    #       - take first longest activity with `in_trustable_boundaries` "whole" or "start", name it BA
     #       - find OA-s and merge with the same logic
     #       - Sort longest actvities by `out_activity_name` and make name
     """
@@ -1007,7 +930,7 @@ def analyze_activities_per_strategy(
     #     metrics.incr("strategies to cut by AFK")
     #     strategy_result.activities = _include_tree_intervals(
     #         strategy_result.activities,
-    #         strategy_result.strategy.out_activity_boundaries,
+    #         strategy_result.strategy.in_trustable_boundaries,
     #         not_afk_tree,
     #         metrics,
     #         "not-AFK",

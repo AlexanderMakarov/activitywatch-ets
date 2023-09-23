@@ -157,9 +157,9 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Add to Strategy 'in_skip_events_with_key_value' or 'in_key_value_skip' property to skip "app=unknown" events.
 - [x] Restore 'ignore_hints' in 'get_activities.py'.
 - [x] Separate "strategy activity" and "result activity".
-- [x] Add ability for activities within `out_activity_boundaries` not "whole" strategies keep track "max cut from left/right".
+- [x] Add ability for activities within `in_trustable_boundaries` not "whole" strategies keep track "max cut from left/right".
 - [x] Add ability to change strategies in `analyze_activities_per_strategy`.
-- [ ] Add "out_only_if_window_app" to strategies (similar to out_only_not_afk).
+- [x] Add "in_only_if_window_app" to strategies (similar to out_only_not_afk).
 - [ ] Keep exact events in result activities.
 - [ ] Complete get_activities.py
 - [ ] Try it for myself. Adjust `STRATEGIES` and code if need.
@@ -174,6 +174,7 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 ### Questionable:
 
 - [ ] Add support for TODO cases in test_merger.
+- [ ] Extend `in_only_if_window_app` to match "title" as well, depending on the some target event "data".
 - [ ] Think about way to make configuration file not to be "too deep in sources".
 - [ ] Separate `aw_export_one_day.py` into use standalone. The same is useful with exporters as well.
   [ ] Improve "windows to activities" (`analyzer._window_to_activity`) with parallel sliding windows.

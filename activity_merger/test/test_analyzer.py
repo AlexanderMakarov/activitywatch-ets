@@ -8,7 +8,7 @@ from activity_merger.domain.analyzer import _exclude_tree_intervals, _include_tr
 
 from . import build_datetime, build_timedelta
 from ..domain.metrics import Metric, Metrics
-from ..domain.input_entities import ActivityBoundaries, Event, Strategy
+from ..domain.input_entities import IntervalBoundaries, Event, Strategy
 from ..domain.output_entities import Activity
 from ..domain.strategies import ActivityByStrategy
 
@@ -68,7 +68,7 @@ EVENT1600_1700 = Event("b1", HOUR16_00, datetime.timedelta(hours=1), "16:00..17:
 EVENT1700_1800 = Event("b1", HOUR17_00, datetime.timedelta(hours=1), "17:00..18:00")
 EVENT1900_2000 = Event("b1", HOUR19_00, datetime.timedelta(hours=1), "19:00..20:00")
 
-STRATEGY = Strategy("ts", "ts", False, False, False, [], [], False, False, ActivityBoundaries.DIM, False, None)
+STRATEGY = Strategy("ts", "ts", False, False, False, [], [], False, False, IntervalBoundaries.DIM, False, None)
 ACTIVITIES = [
     ActivityByStrategy(
         suggested_start_time=HOUR5_00,
@@ -217,7 +217,7 @@ class TestAnalyzer(unittest.TestCase):
         (
             'strict_boundaries',
             ACTIVITIES,
-            ActivityBoundaries.STRICT,
+            IntervalBoundaries.STRICT,
             TREE,
             [
                 ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, 3600, [EVENT500_600], 'a5-6', STRATEGY),
@@ -231,7 +231,7 @@ class TestAnalyzer(unittest.TestCase):
         (
             'start_boundaries',
             ACTIVITIES,
-            ActivityBoundaries.START,
+            IntervalBoundaries.START,
             TREE,
             [
                 ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, 3600, [EVENT500_600], 'a5-6', STRATEGY),
@@ -248,7 +248,7 @@ class TestAnalyzer(unittest.TestCase):
         (
             'end_boundaries',
             ACTIVITIES,
-            ActivityBoundaries.END,
+            IntervalBoundaries.END,
             TREE,
             [
                 ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, 3600, [EVENT500_600], 'a5-6', STRATEGY),
@@ -264,7 +264,7 @@ class TestAnalyzer(unittest.TestCase):
         (
             'dim_boundaries',
             ACTIVITIES,
-            ActivityBoundaries.DIM,
+            IntervalBoundaries.DIM,
             TREE,
             [
                 ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, 3600, [EVENT500_600], 'a5-6', STRATEGY),
@@ -296,7 +296,7 @@ class TestAnalyzer(unittest.TestCase):
                     strategy=STRATEGY,
                 ),
             ],
-            ActivityBoundaries.DIM,
+            IntervalBoundaries.DIM,
             TREE,
             [
                 ActivityByStrategy(HOUR5_00, HOUR7_00, HOUR5_00, HOUR7_00, 3600, [EVENT500_600], 'a5-18', STRATEGY),
@@ -313,7 +313,7 @@ class TestAnalyzer(unittest.TestCase):
         ),
     ])
     def test_include_tree_intervals(
-        self, test_name: str, activities: List[ActivityByStrategy], boundaries: ActivityBoundaries,
+        self, test_name: str, activities: List[ActivityByStrategy], boundaries: IntervalBoundaries,
         tree: intervaltree.IntervalTree, expected_activities: List[ActivityByStrategy],
         expected_metrics: Dict[str, Metric]
     ):

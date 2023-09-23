@@ -9,15 +9,16 @@ from ..helpers.helpers import event_to_str
 from .input_entities import Event, Strategy
 from .interval import Interval
 from .metrics import Metrics
-from .strategies import ActivitiesByStrategy, handle_events
+from .strategies import BUCKET_STOPWATCH_PREFIX, ActivitiesByStrategy, InStrategyPropertiesHandler
 
 
-def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timedelta, is_make_intervals: bool)\
-        -> Interval:
+def _span_event_down(
+    event: Event, interval: Interval, tolerance: datetime.timedelta, is_make_intervals: bool
+) -> Interval:
     """
     Recursively applies event down on `Interval`'s linked list starting after given interval.
     In other words it appends specified event to all `Intervals` later when event covers them and slaces last
-    `Interval` on 2 if event ends inside it. 
+    `Interval` on 2 if event ends inside it.
     :param event: Event to apply.
     :param interval: Interval to start apply after.
     :param tolerance: Tolerance to match events boundaries to intervals.
@@ -46,8 +47,13 @@ def _span_event_down(event: Event, interval: Interval, tolerance: datetime.timed
     return interval
 
 
-def apply_events(events: List[Event], interval: Interval, tolerance: datetime.timedelta,
-        is_make_intervals: bool = False, is_fail_on_overlap: bool = False) -> Tuple[Interval, Dict[str, int]]:
+def apply_events(
+    events: List[Event],
+    interval: Interval,
+    tolerance: datetime.timedelta,
+    is_make_intervals: bool = False,
+    is_fail_on_overlap: bool = False,
+) -> Tuple[Interval, Dict[str, int]]:
     """
     Applies events to the specified linked list of intervals with appending events to `Interval`-s and splitting
     them on parts if need.
@@ -64,20 +70,20 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
     """
     # Metrics to measure each bucket importance.
     metrics = {
-        'cnt_new_interval': 0,
-        'cnt_skipped_too_short': 0,
-        'cnt_skipped_before_afk': 0,
-        'cnt_skipped_after_afk': 0,
-        'cnt_handled_events': 0,
-        'cnt_match_interval': 0,
-        'cnt_inside_interval': 0,
-        'cnt_split_one_interval': 0,
-        'cnt_split_few_intervals': 0,
+        "cnt_new_interval": 0,
+        "cnt_skipped_too_short": 0,
+        "cnt_skipped_before_afk": 0,
+        "cnt_skipped_after_afk": 0,
+        "cnt_handled_events": 0,
+        "cnt_match_interval": 0,
+        "cnt_inside_interval": 0,
+        "cnt_split_one_interval": 0,
+        "cnt_split_few_intervals": 0,
     }
     for event in events:
         # Skip too short events.
         if event.duration < tolerance:
-            metrics['cnt_skipped_too_short'] += 1
+            metrics["cnt_skipped_too_short"] += 1
             continue
         # Basing on `Interval.find_closest` behavior - it returns interval with the given time inside or on the start.
         # Compare closest interval boundaries with event boundaries and update intervals linked list.
@@ -102,8 +108,8 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
         if is_make_intervals and interval is None:
             interval = Interval(event.timestamp, event.timestamp + event.duration)
             interval.events.append(event)
-            metrics['cnt_new_interval'] += 1
-            metrics['cnt_handled_events'] += 1
+            metrics["cnt_new_interval"] += 1
+            metrics["cnt_handled_events"] += 1
             continue
         # Find closest interval started before event start time.
         interval = interval.find_closest(event.timestamp, tolerance)
@@ -116,12 +122,14 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
                 tmp = Interval(event.timestamp, event.timestamp + event.duration, None, interval)
                 tmp.events.append(event)
                 interval = tmp
-                metrics['cnt_new_interval'] += 1
-                metrics['cnt_handled_events'] += 1
+                metrics["cnt_new_interval"] += 1
+                metrics["cnt_handled_events"] += 1
             else:
-                LOG.debug("  Skipping %s event happened before all 'AFK' events "
-                            "- user didn't work that time.", event_to_str(event))
-                metrics['cnt_skipped_before_afk'] += 1
+                LOG.debug(
+                    "  Skipping %s event happened before all 'AFK' events " "- user didn't work that time.",
+                    event_to_str(event),
+                )
+                metrics["cnt_skipped_before_afk"] += 1
             continue
         # 11, 12) If event is completely after closest interval then it is "out of AFK" - skip it or make new.
         if interval_end_minus_event_start >= 0:
@@ -129,72 +137,81 @@ def apply_events(events: List[Event], interval: Interval, tolerance: datetime.ti
                 tmp = Interval(event.timestamp, event.timestamp + event.duration, interval, None)
                 tmp.events.append(event)
                 interval = tmp
-                metrics['cnt_new_interval'] += 1
-                metrics['cnt_handled_events'] += 1
+                metrics["cnt_new_interval"] += 1
+                metrics["cnt_handled_events"] += 1
             else:
-                LOG.debug("  Skipping %s event happened after/out of 'AFK' events "
-                            "- user didn't work that time.", event_to_str(event))
-                metrics['cnt_skipped_after_afk'] += 1
+                LOG.debug(
+                    "  Skipping %s event happened after/out of 'AFK' events " "- user didn't work that time.",
+                    event_to_str(event),
+                )
+                metrics["cnt_skipped_after_afk"] += 1
             continue
         starts_diff = interval.compare_with_time(event.timestamp, tolerance, True)
         ends_diff = interval.compare_with_time(event_end, tolerance, False)
         if starts_diff == 0:
             if is_fail_on_overlap:
-                raise ValueError(f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
-                                 " It is not supported for the current bucket type.")
+                raise ValueError(
+                    f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
+                    " It is not supported for the current bucket type."
+                )
             if ends_diff == 0:
                 # 6) Event matches interval.
                 interval.events.append(event)
-                metrics['cnt_match_interval'] += 1
+                metrics["cnt_match_interval"] += 1
             elif ends_diff < 0:
                 # 5) Event start matches interval and event ends inside it.
                 interval = interval.separate_new_at_start(event, tolerance)
-                metrics['cnt_split_one_interval'] += 1
+                metrics["cnt_split_one_interval"] += 1
             else:
                 # 7) Event start matches interval and event ends after it.
                 interval.events.append(event)
                 interval = _span_event_down(event, interval, tolerance, is_make_intervals)
-                metrics['cnt_split_few_intervals'] += 1
+                metrics["cnt_split_few_intervals"] += 1
         elif starts_diff > 0:
             if is_fail_on_overlap:
-                raise ValueError(f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
-                                 " It is not supported for the current bucket type.")
+                raise ValueError(
+                    f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
+                    " It is not supported for the current bucket type."
+                )
             if ends_diff == 0:
                 # 9) Event starts inside interval and ends matches.
                 interval = interval.separate_new_at_end(event, tolerance)
-                metrics['cnt_split_one_interval'] += 1
+                metrics["cnt_split_one_interval"] += 1
             elif ends_diff < 0:
                 # 8) Event starts and ends inside interval.
                 interval = interval.separate_new_at_middle(event, tolerance)
-                metrics['cnt_inside_interval'] += 1
+                metrics["cnt_inside_interval"] += 1
             else:
                 # 10) Event starts inside interval and ends after it.
                 interval = interval.separate_new_at_end(event, tolerance)
                 interval = _span_event_down(event, interval, tolerance, is_make_intervals)
-                metrics['cnt_split_few_intervals'] += 1
+                metrics["cnt_split_few_intervals"] += 1
         else:
             if is_fail_on_overlap:
-                raise ValueError(f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
-                                 " It is not supported for the current bucket type.")
+                raise ValueError(
+                    f"After '{event_to_str(event)}' overlaps with {interval.to_str(debug=True)}."
+                    " It is not supported for the current bucket type."
+                )
             if ends_diff == 0:
                 # 3) Event started before "AFK" and ends exactly on first interval end.
                 interval.events.append(event)
-                metrics['cnt_match_interval'] += 1
+                metrics["cnt_match_interval"] += 1
             elif ends_diff < 0:
                 # 2) Event started before "AFK" and ends inside first interval.
                 interval = interval.separate_new_at_start(event, tolerance)
-                metrics['cnt_split_one_interval'] += 1
+                metrics["cnt_split_one_interval"] += 1
             else:
                 # 4) Event started before "AFK" and ends after first interval.
                 interval.events.append(event)
                 interval = _span_event_down(event, interval, tolerance, is_make_intervals)
-                metrics['cnt_split_few_intervals'] += 1
-        metrics['cnt_handled_events'] += 1
+                metrics["cnt_split_few_intervals"] += 1
+        metrics["cnt_handled_events"] += 1
     return (interval, metrics)
 
 
-def check_and_print_intervals(interval: Interval, max_events_per_interval: int, last_bucket_name: str,
-                              level: int = logging.INFO) -> None:
+def check_and_print_intervals(
+    interval: Interval, max_events_per_interval: int, last_bucket_name: str, level: int = logging.INFO
+) -> None:
     """
     Performs checks for validity of resulting intervals and prints results for manual checks.
     :param interval: Interval to check linked list from.
@@ -209,14 +226,14 @@ def check_and_print_intervals(interval: Interval, max_events_per_interval: int, 
     def check_and_print(interval: Interval) -> bool:
         if len(interval.events) > max_events_per_interval:
             raise ValueError(
-                f"After '{last_bucket_name}' bucket events applied greater than {max_events_per_interval} events "\
+                f"After '{last_bucket_name}' bucket events applied greater than {max_events_per_interval} events "
                 f"number appeared in {interval}. Surroundings: {interval.intervals_to_string(-2, 4, False)}"
             )
         last_bucket_id = None
         for event in interval.events:
             if event.bucket_id == last_bucket_id:
                 raise ValueError(
-                    f"After '{last_bucket_name}' bucket events applied few events from the same '{last_bucket_id}' "\
+                    f"After '{last_bucket_name}' bucket events applied few events from the same '{last_bucket_id}' "
                     f"bucket appeared in {interval}. Surroundings: {interval.intervals_to_string(-2, 4, False)}"
                 )
             last_bucket_id = event.bucket_id
@@ -258,8 +275,12 @@ def _sort_and_merge_events(events: List[Event]) -> List[Event]:
             # and for Stopwatch 'status' is expected to be different anyway.
             prev_event_end = prev_event.timestamp + prev_event.duration
             if event.timestamp <= prev_event_end and str(event.data) == str(prev_event.data):
-                prev_event = Event(event.bucket_id, prev_event.timestamp,
-                             max(event.timestamp + event.duration, prev_event_end) - prev_event.timestamp, event.data)
+                prev_event = Event(
+                    event.bucket_id,
+                    prev_event.timestamp,
+                    max(event.timestamp + event.duration, prev_event_end) - prev_event.timestamp,
+                    event.data,
+                )
             else:
                 result.append(prev_event)
                 prev_event = event
@@ -270,8 +291,13 @@ def _sort_and_merge_events(events: List[Event]) -> List[Event]:
     return result
 
 
-def report_from_buckets(activity_watch_client, start_time: datetime.datetime, end_time: datetime.datetime,
-                        buckets: List[str], tolerance: datetime.timedelta) -> Interval:
+def report_from_buckets(
+    activity_watch_client,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    buckets: List[str],
+    tolerance: datetime.timedelta,
+) -> Interval:
     """
     Gets events from specified buckets, prints report by them and returns time-ordered linked list of `Interval`-s.
     :param awc: ActivityWatch client to use.
@@ -296,7 +322,7 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
     # "aw-stopwatch" - active watcher, it is managed by user directly.
     # Make sense measuring duration per unique label from "running=true" to "running=false".
     # data={label: str, running: bool}
-    stopwatch_buckets = [x for x in bucket_ids_to_handle if x.startswith("aw-stopwatch")]
+    stopwatch_buckets = [x for x in bucket_ids_to_handle if x.startswith(BUCKET_STOPWATCH_PREFIX)]
     if stopwatch_buckets:
         for bucket_id in stopwatch_buckets:
             bucket_events: List[object] = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
@@ -379,14 +405,18 @@ def report_from_buckets(activity_watch_client, start_time: datetime.datetime, en
 def _add_raw_event(raw_event: AWEvent, list_to_add: List[Event], bucket_id: str, metrics: Metrics):
     resulting_event = Event(bucket_id, raw_event.timestamp, raw_event.duration, raw_event.data)
     list_to_add.append(resulting_event)
-    metrics.incr('events to handle', resulting_event.duration.seconds)
+    # Note that total duration of "events to handle" may be bigger than total duration of
+    # "raw events" for Window and other buckets because of `sort_merge_convert_raw_events` logic - 
+    # if between 2 similar events there is a gat then "merged" event becomes bigger on this gap.
+    metrics.incr("events to handle", resulting_event.duration.seconds)
 
 
-def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tolerance: datetime.timedelta,
-                                  metrics: Metrics) -> List[Event]:
+def sort_merge_convert_raw_events(
+    raw_events: List[AWEvent], bucket_id: str, tolerance: datetime.timedelta, metrics: Metrics
+) -> List[Event]:
     """
-    Sorts raw events in time order, merges events with the same data, cuts "overlapping by tail" events,
-    converts them into "domain, with bucket ID" events.
+    Sorts raw `AWEvent`-s in time order, merges events with the same data, cuts "overlapping by tail" events,
+    converts them into `Event`-s.
     :param raw_events: Events from ActivityWatcher.
     :param bucket_id: Event's source bucket ID.
     :param tolerance: tolerance for comparing and merging events.
@@ -397,13 +427,15 @@ def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tol
     raw_events.sort(key=lambda e: (e.timestamp, e.duration))
     result = []
 
+    # TODO bug with Window events duration "normalized" > "raw" on 16 seconds.
+
     # 2. Iterate events with postponing each previous event.
     prev_event: AWEvent = None
     for event in raw_events:
-        metrics.incr('raw events', event.duration.seconds)
+        metrics.incr("raw events", event.duration.seconds)
         # Filter out too short events.
         if event.duration < tolerance:
-            metrics.incr(f'{bucket_id} too short events', event.duration.seconds)
+            metrics.incr(f"{bucket_id} too short events", event.duration.seconds)
             continue
         # If it is first event then just postpone.
         if not prev_event:
@@ -432,7 +464,7 @@ def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tol
         same_data = str(event.data) == str(prev_event.data)
         if same_data and same_start and same_end:
             # same data, same start and end => remove previous as the same
-            metrics.incr(f'{bucket_id} skipped duplicated by interval events', prev_event.duration.seconds)
+            metrics.incr(f"{bucket_id} skipped duplicated by interval events", prev_event.duration.seconds)
             prev_event = event
             continue
         start_later_than_prev_end = event.timestamp - prev_end > tolerance
@@ -440,11 +472,11 @@ def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tol
             # same data, start not later than previous end => merge
             prev_event_duration_before_merge = prev_event.duration
             prev_event.duration = max(current_end, prev_end) - prev_event.timestamp
-            metrics.incr(f'{bucket_id} merged the same data events', prev_event_duration_before_merge.seconds)
+            metrics.incr(f"{bucket_id} merged the same data events", prev_event_duration_before_merge.seconds)
             continue
         if same_start:
             # other data, same start => remove previous as overlapped
-            metrics.incr(f'{bucket_id} skipped shorter and overlapped by interval events', prev_event.duration.seconds)
+            metrics.incr(f"{bucket_id} skipped shorter and overlapped by interval events", prev_event.duration.seconds)
             prev_event = event
             continue
         if not start_later_than_prev_end:
@@ -453,8 +485,9 @@ def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tol
             prev_event.duration = event.timestamp - prev_event.timestamp
             diff_prev_event_duration = prev_event_duration_before_cut - prev_event.duration
             if diff_prev_event_duration > tolerance:
-                metrics.incr(f'{bucket_id} cut duration of different overlapping events',
-                             diff_prev_event_duration.seconds)
+                metrics.incr(
+                    f"{bucket_id} cut duration of different overlapping events", diff_prev_event_duration.seconds
+                )
             _add_raw_event(prev_event, result, bucket_id, metrics)
             prev_event = event
             continue
@@ -471,11 +504,16 @@ def sort_merge_convert_raw_events(raw_events: List[AWEvent], bucket_id: str, tol
     return result
 
 
-def analyze_buckets(activity_watch_client, start_time: datetime.datetime, end_time: datetime.datetime,
-                    buckets: List[str], strategies: List[Strategy], tolerance: datetime.timedelta)\
-                    -> Tuple[List[ActivitiesByStrategy], Metrics]:
+def analyze_buckets(
+    activity_watch_client,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    buckets: List[str],
+    strategies: List[Strategy],
+    tolerance: datetime.timedelta,
+) -> Tuple[List[ActivitiesByStrategy], Metrics]:
     """
-    Analyzes given list of buckets and for each of them which is covered by provided strategy makes
+    Analyzes given list of event's buckets and for each of them which is covered by provided strategy makes
     `ActivitiesByStrategy` objects. Also gets metrics for this process.
     :param activity_watch_client: ActivityWatch client to use for fetching events.
     :param start_time: Analyzing interval start.
@@ -484,51 +522,57 @@ def analyze_buckets(activity_watch_client, start_time: datetime.datetime, end_ti
     :param strategies: List of strategies to analyze with.
     :param tolerance: Tolerance for comparing and merging events.
     :returns: List of `ActivitiesByStrategy` objects per strategy.
-    Note that one strategy may span few buckets if data taken from few machines.
+    Note that one strategy may span few buckets if data taken from the few machines.
     """
     metrics = Metrics({})
     bucket_ids_to_handle = list(buckets.keys())
-    metrics.override('total buckets', len(buckets), 0)
+    metrics.override("total buckets", len(buckets), 0)
+    strategies_handler = InStrategyPropertiesHandler()
     result: List[ActivitiesByStrategy] = []
     for strategy in strategies:
-        metrics.incr('total strategies')
+        metrics.incr("total strategies")
         strategy_buckets = [x for x in bucket_ids_to_handle if x.startswith(strategy.bucket_prefix)]
         # Check there is something to handle by this strategy.
         if not strategy_buckets:
-            metrics.incr('strategies without buckets')
+            metrics.incr("strategies without buckets")
             LOG.info("%s* strategy: there are no buckets.", strategy.bucket_prefix)
             continue
         # Create containers for the strategy result.
         events: List[Event] = []
         strat_metrics = Metrics({})  # These Metrics are per strategy, not per bucket!
         total_raw_events = 0
-        # Normilize events.
+        # Fetch and normilize events.
+        # TODO (performance) do in parallel, AFK and Window before all.
         for bucket_id in strategy_buckets:
-            metrics.incr('handled buckets')
-            strat_metrics.incr('total buckets')
+            metrics.incr("handled buckets")
+            strat_metrics.incr("total buckets")
             bucket_events: List[AWEvent] = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
             total_raw_events += len(bucket_events)
             if bucket_events:
                 normilized_events = sort_merge_convert_raw_events(bucket_events, bucket_id, tolerance, strat_metrics)
-                metrics.incr('not-empty buckets handled')
-                strat_metrics.incr('not-empty buckets')
+                metrics.incr("not-empty buckets handled")
+                strat_metrics.incr("not-empty buckets")
                 events.extend(normilized_events)
             bucket_ids_to_handle.remove(bucket_id)
         # Handle case when there are no events for the strategy.
         if not events:
-            metrics.incr('strategies without events')
+            metrics.incr("strategies without events")
             if total_raw_events:
                 # Log strategy handling metrics here because it won't pass it further.
                 strat_metrics_str = "\n  ".join(x for x in strat_metrics.to_strings(is_exclude_empty=False))
-                LOG.warning("%s* strategy: After normilizing %d events nothing left:\n  %s", strategy.bucket_prefix,
-                            total_raw_events, strat_metrics_str)
+                LOG.warning(
+                    "%s* strategy: After normalizing %d events nothing left:\n  %s",
+                    strategy.bucket_prefix,
+                    total_raw_events,
+                    strat_metrics_str,
+                )
             else:
                 LOG.info("%s* strategy: No events found.", strategy.bucket_prefix)
             continue  # Stop handling this strategy.
-        # Handle events with strategy.
-        strategy_activities = handle_events(strategy, events, strat_metrics)
+        # Handle events within the strategy using stateful handler.
+        strategy_activities = strategies_handler.handle_events(strategy, events, strat_metrics)
         result.append(strategy_activities)
-        # Calculate common sum of activities.
+        # Calculate common sum of activities. Note that to have count of activities need to add them by one.
         for activity in strategy_activities.activities:
-            metrics.incr('total activities', activity.duration)
+            metrics.incr("total activities", activity.duration)
     return result, metrics
