@@ -4,7 +4,7 @@ from typing import Dict, List, Set, Tuple
 
 import intervaltree
 
-from ..config.config import MIN_DURATION_SEC
+from ..config.config import MIN_ACTIVITY_DURATION_SEC
 from ..helpers.helpers import event_to_str, from_start_to_end_to_str, seconds_to_timedelta
 from .input_entities import IntervalBoundaries, Event, Strategy
 from .metrics import Metrics
@@ -534,7 +534,7 @@ class InStrategyPropertiesHandler:
             last_activity_event_index = 0
             for gap in gaps:
                 # If gap bigger than minimal activity duration then it is a separate activity.
-                if gap[1] >= MIN_DURATION_SEC:
+                if gap[1] >= MIN_ACTIVITY_DURATION_SEC:
                     self._make_activity_between_events(
                         window_events[last_activity_event_index : gap[0]],
                         key,

@@ -4,7 +4,13 @@ from typing import Dict, List, Optional, Set
 
 import intervaltree
 
-from ..config.config import CURRENT_TIMEZONE, DEBUG_BUCKET_PREFIX, LIMIT_OF_RESULTING_ACTIVITIES, LOG, MIN_DURATION_SEC
+from ..config.config import (
+    DEBUG_BUCKET_PREFIX,
+    LIMIT_OF_RESULTING_ACTIVITIES,
+    LOG,
+    MAX_ACTIVITY_DURATION_SEC,
+    MIN_ACTIVITY_DURATION_SEC,
+)
 from .input_entities import IntervalBoundaries, Event, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
@@ -346,65 +352,6 @@ class DebugBucketsHandler:
                 metrics.incr("debug events in " + debug_bucket_prefix, activity.duration())
 
 
-def _find_basic_activity_interval(
-    candidates_tree: intervaltree.IntervalTree, current_start_point: datetime.datetime, metrics: Metrics
-) -> Optional[intervaltree.Interval]:
-    """
-    Tries to find good "basic activity" in the given candidates tree. Intervals in this tree expected to be:
-    - Chopped to don't overlap with "result activities" added so far.
-    - Chopped by AFK activities (probably small).
-    - Random.
-    :returns: Best possible "basic activity" or `None` if there are no more candidates.
-    """
-    min_duraiton_timedelta = datetime.timedelta(seconds=MIN_DURATION_SEC)
-    # Get accumulator of all activities started in interval [current_start_point, min_duraiton].
-    # Note that candidates_tree in most cases contains intervals chopped by AFK and already existing
-    # results activities.
-    # But if there is a big gap, then here may be intervals started on the previous RA and lasting still.
-    candidates_for_ba: Set[intervaltree.Interval] = candidates_tree.overlap(
-        current_start_point, current_start_point + min_duraiton_timedelta
-    )
-    if not candidates_for_ba:
-        # If nothing at right then stop iterating - no more actvities remained, we are done.
-        return None
-    # TODO enhance with max_start_time and min_end_time properties of ActivityByStrategy.
-    # Try find BA as:
-    # - started on the `current_start_point`,
-    # - with `in_trustable_boundaries` "whole" or "start",
-    # - length is equal or more than `MIN_DURATION_SEC` (choose minimal).
-    # For this first sort them by the start, next by length (shorter - first).
-    candidates_for_ba = sorted(candidates_for_ba, key=lambda x: (x.begin, x.end - x.begin))
-    ba_interval = next(
-        (
-            x
-            for x in candidates_for_ba
-            if x.begin == current_start_point
-            and x.length() >= min_duraiton_timedelta
-            and x.data.strategy.in_trustable_boundaries in [IntervalBoundaries.STRICT, IntervalBoundaries.START]
-        ),
-        None,
-    )
-    # If there are no such activity then just make BA from the longest activity.
-    # Note that all "remained" activities are cut by existing "result" activities and shouldn't overlap with them.
-    if ba_interval is None:
-        ba_interval = max(candidates_for_ba, key=intervaltree.Interval.length)
-        LOG.info(
-            "Can't find 'perfect' basic activity after %s and longer than %s. Using as basic longest - %s",
-            current_start_point.astimezone(CURRENT_TIMEZONE).strftime("%H:%M:%S"),
-            min_duraiton_timedelta,
-            ba_interval.data,
-        )
-        metrics.incr("basic activities assembled from remainings", ba_interval.length().total_seconds())
-    else:
-        LOG.info(
-            "Found 'perfect' basic activity after %s - %s.",
-            current_start_point.astimezone(CURRENT_TIMEZONE).strftime("%H:%M:%S"),
-            ba_interval.data,
-        )
-        metrics.incr("basic activities from solid interval", ba_interval.length().total_seconds())
-    return ba_interval
-
-
 def _build_result_activity(
     ba_interval: intervaltree.Interval,
     candidates_tree: intervaltree.IntervalTree,
@@ -627,7 +574,7 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
                         f"{activity} is overlapping with " + ", ".join(x.data for x in overlap)
                     )
                 result_tree.addi(activity.start_time, activity.end_time, activity)
-                LOG.info("Found 'self-sufficient' activity: %s", activity)
+                LOG.info("Found and added into 'result tree' 'self-sufficient' activity: %s", activity)
                 metrics.incr("self sufficient activities", activity.duration())
         context["result_tree"] = result_tree
         return True
@@ -732,19 +679,75 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             if "debug_buckets_handler" not in context:
                 context["debug_buckets_handler"] = DebugBucketsHandler()
 
+    def _find_basic_activity_interval(
+        self,
+        candidates_tree: intervaltree.IntervalTree,
+        current_start_point: datetime.datetime,
+        max_end: datetime.datetime,
+        metrics: Metrics,
+    ) -> Optional[intervaltree.Interval]:
+        candidates: Set[intervaltree.Interval] = candidates_tree.at(current_start_point)
+        if not candidates:
+            # If nothing overlaps start point then check until the end of the candidates tree - probably we have a gap.
+            candidates = candidates_tree.overlap(current_start_point, candidates_tree.end())
+            if candidates:
+                metrics.incr("basic activities started with a gap after previous")
+        else:
+            metrics.incr("basic activities started right after previous")
+        if not candidates:
+            # We've reached the end of the candidates tree, i.e. no more activities are possible.
+            return None
+        # Sort list of candidates with following rules in the order:
+        # - start time (to take first available),
+        # - inverted duration (to take longest available),
+        # - boundaries (to take with strictest borders possible),
+        # - inverted out_produces_good_activity_name (to take good activity name providers first)
+        candidates = sorted(
+            candidates,
+            key=lambda x: (
+                x.begin,
+                x.begin - x.end,
+                x.data.strategy.in_trustable_boundaries,
+                x.data.strategy.out_produces_good_activity_name,
+            ),
+        )
+        # Try to filter out candidates which are between MIN_ACTIVITY_DURATION_SEC and `max_end`.
+        min_duraiton_timedelta = datetime.timedelta(seconds=MIN_ACTIVITY_DURATION_SEC)
+        max_duraiton_timedelta = datetime.timedelta(seconds=max_end)
+        filtered_candidates = [x for x in candidates if min_duraiton_timedelta <= x.length() <= max_duraiton_timedelta]
+        # Check if we have something after the filtering and set `ba_interval`.
+        ba_interval: intervaltree.Interval
+        if filtered_candidates:
+            ba_interval = filtered_candidates[0]
+            metrics.incr("basic activities with perfect duration")
+        else:
+            # If after filtering remains nothing then just take first without filters.
+            ba_interval = candidates[0]
+            metrics.incr("basic activities with imperfect duration")
+        return ba_interval
+
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
         result_tree: intervaltree.IntervalTree = context["result_tree"]
         candidates_tree: intervaltree.IntervalTree = context["candidates_tree"]
         debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
 
+        # Logic is following:
+        # - Take start point.
+        # - Find "basic activity" (ba) with the following rules in order (if all fail some rule then follow through):
+        #   - starts on the "start point"
+        #   - duration between MIN_ACTIVITY_DURATION_SEC and MAX_ACTIVITY_DURATION_SEC
+        #   - in_trustable_boundaries in [IntervalBoundaries.STRICT, IntervalBoundaries.START]
+        #   - longest
         current_start_point: datetime.datetime = candidates_tree.begin()  # Start from leftest/oldest activity.
         while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
             metrics.incr("iterations to assemble remaining activities")
             # Find "basic activity" to base "result" activity on interval of it.
-            ba_interval = _find_basic_activity_interval(candidates_tree, current_start_point, metrics)
+            ba_interval = self._find_basic_activity_interval(
+                candidates_tree, current_start_point, MAX_ACTIVITY_DURATION_SEC, metrics
+            )
             if ba_interval is None:
-                break  # No more activities.
+                break  # No more activities are possible.
             # Find all overlapping activities and make new `result` activity (RA).
             ra = _build_result_activity(
                 ba_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics
@@ -764,6 +767,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
                     )
             # Add RA into the result tree.
             result_tree.addi(ra.start_time, ra.end_time, ra)
+            LOG.info("Found and added into 'result tree' activity: %s", ra)
             # Add RA to debug bucket if need.
             if self.is_add_debug_buckets:
                 # Use the only debug bucket here because events should be consequtive.
