@@ -836,19 +836,19 @@ def analyze_activities_per_strategy(
     """
     Investigation results and thoughts:
     20230921 investigation about 20230120 data:
-    1. Outlook activity "Java Exam" matches good.
+    +1. Outlook activity "Java Exam" matches good.
        It includes PPT-6447, Slack, libreoffice-writer, zoom, Firefox "by density" activities. 'pipeline-tools' project(s) in IDEA.
        IDEA - wrongly! (it was after the meeting but there is small overlap)
-    2. Outlook "Plan Team Standup" disappeared - swallowed by more wide (started earlier and finished later)
+    +2. Outlook "Plan Team Standup" disappeared - swallowed by more wide (started earlier and finished later)
        "Code, Gnome-terminal, Slack, firefox, flameshot, jetbrains-idea, thunderbird, zoom application(s).
        'pipeline-tools' project(s) in IDEA."
     3. Outlook "Pre-story meeting" disappeared in right way.
        But here was (?) Slack call with Sergii Iurchenko and it disappeared. Even not found by "Window" bucket.
     4. Preparation to Java exam (10:03-10:30) is not separated from other events because Window watcher "title" field is not used?
-    5. Jira events are chopped too hard by AFK. Sometimes they even disappear (11:21-12:03).
-    6. Jira events for the same jira_id need to merge, like near 9:35.
-    7. Use IDEA events only if there is window event for this.
-    8. Use Firefox events only if there is window event for this.
+    +5. Jira events are chopped too hard by AFK. Sometimes they even disappear (11:21-12:03).
+    +6. Jira events for the same jira_id need to merge, like near 9:35.
+    +7. Use IDEA events only if there is window event for this.
+    +8. Use Firefox events only if there is window event for this.
 
     Ways to improve:
     - [questionable] Don't count few seconds events as activity (like ignore all shorter than 1 minute).
@@ -860,10 +860,10 @@ def analyze_activities_per_strategy(
     - Don't cut IDEA events (configuration).
     - [optional] Investigate why Jira events disappear.
 
-    20230921 investigation about 20230120 data:
-    1. Result activities are bad - only 1 on 5+ hours.
-    2. IDEA activities become better but don't end in a time, often are cut but 1-2 minutes.
-    3. Window activity on 5+ hours becomes "ba" for bad results and wasn't cut to 2 hours - bug!
+    20230922 investigation about 20230120 data:
+    +1. Result activities are bad - only 1 on 5+ hours.
+    2. IDEA activities become better but don't end in a time, often are cut by 1-2 minutes.
+    +3. Window activity on 5+ hours becomes "ba" for bad results and wasn't cut to 2 hours - bug!
     4. If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
        If it is the same tab in browser then it is probably the same web app.
     5. Preparation to Java exam (10:03-10:30) is not separated from other events
@@ -873,6 +873,17 @@ def analyze_activities_per_strategy(
        AFK is probably "afk" here due to idle.
     7. If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
        If it is the same tab in browser then it is probably the same web app.
+
+    20230925 investigation about 20230120 data:
+    1. Result activities intervals are quite good.
+    2. Canceled "Pricing scrum meeting" appeared as resulting activity.
+    3. Jira events better to be chopped by AFK but don't be breaked by them. I.e. better to make activities
+       without chopping by AFK events but next chop activities by AFK on a few.
+    4. Slack activities are not extracted from "Window" events. And they should not be cut by AFK.
+       Probably it means that "Window" events should not be cut by AFK but activities - should, while
+       it is not a "Meeting" activity.
+    5. Duplicated JIRA activities. Need to revive deduplicated logic in `_separate_events_per_windows`.
+    6. IDEA-generated description may be too chatty. Need to cut them somehow.
 
     Exact logic:
     # Take all remained intervals and using `in_trustable_boundaries` value make activites with logic:

@@ -163,6 +163,9 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Add "in_only_if_window_app" to strategies (similar to out_only_not_afk).
 - [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab
       with relevant ID in the title.
+- [ ] Add ability to cut by AFK both events and activities.
+- [ ] Add ability to extract Slack meetings as separate activities and be not affected by AFK. Extract name of interlocutor.
+- [ ] Make ability to extract 
 - [ ] Keep exact events in result activities.
 - [ ] Complete get_activities.py
 - [ ] Try it for myself. Adjust `STRATEGIES` and code if need.
