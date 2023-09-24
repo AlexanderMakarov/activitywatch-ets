@@ -54,7 +54,7 @@ class ListOfPairsDescriptor(GroupingDescriptior):
         return self.pairs
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class ActivityByStrategy:
     """
     Group of events aggregated for the specific strategy.
@@ -68,11 +68,6 @@ class ActivityByStrategy:
     """Maximum start time of the activity possible. Equal or later then 'start time'."""
     min_end_time: datetime.datetime
     """Minimum end time of the activity possible. Equal or earlier then 'end time'."""
-    duration: float
-    """
-    Total duration of the activity in seconds measured by events.
-    Note that events may be placed with gaps between.
-    """
     events: List[Event]
     """List of (dominant) events the activity consists of."""
     grouping_data: GroupingDescriptior
@@ -80,9 +75,13 @@ class ActivityByStrategy:
     strategy: Strategy
     """ Strategy used to create this activity."""
 
+    def duration(self) -> float:
+        """Returns duration from suggest start to suggest end in seconds."""
+        return (self.suggested_end_time - self.suggested_start_time).total_seconds()
+
     def __repr__(self) -> str:
         return (
-            f"{seconds_to_timedelta(self.duration)},"
+            f"{seconds_to_timedelta(self.duration())},"
             f" {from_start_to_end_to_str(self.suggested_start_time, self.suggested_end_time)}"
             f" (min {from_start_to_end_to_str(self.max_start_time, self.min_end_time)}),"
             f" {len(self.events):>3} {self.strategy.name} events grouped by {self.grouping_data}."
@@ -223,6 +222,10 @@ class InStrategyPropertiesHandler:
         return tree
 
     def _transform_event(self, event: Event) -> Event:
+        """
+        Both checks that event may be used for building `ActivityByStrategy` and cuts it accordingly to
+        "in_only_not_afk" and "in_only_if_window_app" parameters of the strategy.
+        """
         # Check if need to skip event because data kv.
         metrics = self.current_metrics
         for k, v in self.current_strategy_skip_kv:
@@ -320,7 +323,6 @@ class InStrategyPropertiesHandler:
                 suggested_end_time=end_time,
                 max_start_time=event.timestamp,
                 min_end_time=end_time,
-                duration=event.duration.seconds,
                 events=[event],
                 grouping_data=ListOfPairsDescriptor([(k, str(v)) for k, v in event.data.items()]),
                 strategy=self.current_strategy,
@@ -339,7 +341,6 @@ class InStrategyPropertiesHandler:
         Makes activity starting on start of first event and ending at the end of last event.
         Next adds it to provided list and updates `Metrics` with it.
         """
-        duration = sum(x.duration.seconds for x in events)
         # Use start of first event and end of last event as "suggested" bounds of the activity.
         start_time = events[0].timestamp
         end_time = events[-1].timestamp + events[-1].duration
@@ -358,13 +359,12 @@ class InStrategyPropertiesHandler:
             suggested_end_time=end_time,
             max_start_time=max_start_time,
             min_end_time=min_end_time,
-            duration=duration,
             events=events,
             grouping_data=grouping_data,
             strategy=self.current_strategy,
         )
         activities.append(activity)
-        self.current_metrics.incr("activities", duration)
+        self.current_metrics.incr("activities", activity.duration())
 
     def _aggregate_events_with_one_sliding_window(self) -> ActivitiesByStrategy:
         # Produces Activity for all consequint events with the same data.

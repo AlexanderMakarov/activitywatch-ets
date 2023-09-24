@@ -574,5 +574,5 @@ def analyze_buckets(
         result.append(strategy_activities)
         # Calculate common sum of activities. Note that to have count of activities need to add them by one.
         for activity in strategy_activities.activities:
-            metrics.incr("total activities", activity.duration)
+            metrics.incr("total activities", activity.duration())
     return result, metrics

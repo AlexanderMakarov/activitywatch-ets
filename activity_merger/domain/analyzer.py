@@ -21,7 +21,6 @@ def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) 
         suggested_end_time=activity.suggested_end_time,
         max_start_time=max(point, activity.max_start_time),
         min_end_time=activity.min_end_time,
-        duration=sum(x.duration.seconds for x in events),
         events=events,
         grouping_data=activity.grouping_data,
         strategy=activity.strategy,
@@ -38,7 +37,6 @@ def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime) ->
         suggested_end_time=point,
         max_start_time=activity.max_start_time,
         min_end_time=min(point, activity.min_end_time),
-        duration=sum(x.duration.seconds for x in events),
         events=events,
         grouping_data=activity.grouping_data,
         strategy=activity.strategy,
@@ -345,7 +343,7 @@ class DebugBucketsHandler:
                     description=", ".join(f"{k}={v}" for k, v in activity.grouping_data.get_kv_pairs()),
                     events_count=len(activity.events),
                 )
-                metrics.incr("debug events in " + debug_bucket_prefix, activity.duration)
+                metrics.incr("debug events in " + debug_bucket_prefix, activity.duration())
 
 
 def _find_basic_activity_interval(
@@ -447,7 +445,7 @@ def _build_result_activity(
                 candidates_tree.remove(interval)
                 # Note that tail of the activity may be used for the next basic/candidate activity.
                 candidates_tree.addi(ba_interval.end, split_activity.suggested_end_time, split_activity)
-                metrics.incr("activities enhancing basic activity by the start", split_activity.duration)
+                metrics.incr("activities enhancing basic activity by the start", split_activity.duration())
             else:
                 # If activity is `in_trustable_boundaries=end` then skip it.
                 metrics.incr(
@@ -469,7 +467,7 @@ def _build_result_activity(
                 ra_events.extend(split_activity.events)
                 overlapping_activities.append(split_activity)
                 candidates_tree.remove(interval)
-                metrics.incr("activities enhancing basic activity by the end", split_activity.duration)
+                metrics.incr("activities enhancing basic activity by the end", split_activity.duration())
             else:
                 # If activity is `in_trustable_boundaries=start` then skip it.
                 metrics.incr(
@@ -630,7 +628,7 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
                     )
                 result_tree.addi(activity.start_time, activity.end_time, activity)
                 LOG.info("Found 'self-sufficient' activity: %s", activity)
-                metrics.incr("self sufficient activities", activity.duration)
+                metrics.incr("self sufficient activities", activity.duration())
         context["result_tree"] = result_tree
         return True
 
