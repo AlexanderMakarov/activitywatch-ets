@@ -88,7 +88,8 @@ class Strategy:
     But some events producers may set different sets of keys.
     If provide list of possible key sets (as Python tuples) then only those keys would be checked and default
     behavior would be applied only not all keys are presented in the event.
-    Note that order of key sets/tuples is important - if first set of keys was matched then all remained are ignored.
+    Note that order of key sets/tuples is important - if first set of keys was matched then all remained are ignored
+    for "only consecutive activities" case (for "parallel activities" case would be used all).
     """
 
     in_skip_key_values: Dict[str, any] = None

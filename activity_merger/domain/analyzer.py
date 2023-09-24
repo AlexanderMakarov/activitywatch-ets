@@ -360,7 +360,7 @@ def _build_result_activity(
 ) -> Activity:
     # Find all overlapping activities.
     overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)  # Includes BA.
-    LOG.info("Basic activity is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
+    LOG.debug("Basic activity is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
     ra_events = ba_interval.data.events
     overlapping_activities: List[ActivityByStrategy] = [ba_interval.data]
     for interval in overlapping_intervals:
@@ -748,6 +748,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             )
             if ba_interval is None:
                 break  # No more activities are possible.
+            LOG.info("Using as 'basic' activity: %s", ba_interval.data)
             # Find all overlapping activities and make new `result` activity (RA).
             ra = _build_result_activity(
                 ba_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics
@@ -767,7 +768,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
                     )
             # Add RA into the result tree.
             result_tree.addi(ra.start_time, ra.end_time, ra)
-            LOG.info("Found and added into 'result tree' activity: %s", ra)
+            LOG.info("Added into 'result tree' activity: %s", ra)
             # Add RA to debug bucket if need.
             if self.is_add_debug_buckets:
                 # Use the only debug bucket here because events should be consequtive.

@@ -240,6 +240,7 @@ class InStrategyPropertiesHandler:
             event = cut_event(
                 event, self.afk_tree, strategy.in_trustable_boundaries, "AFK", self.current_metrics, strategy.name, True
             )
+            assert event.duration <= initial_duration, f"Issue with chopping by 'AFK' event: {event_to_str(event)}"
             metrics.incr("events chopped by AFK", (initial_duration - event.duration).total_seconds())
         # If need then cut event by windows watcher "app=" events.
         if strategy.in_only_if_window_app:
@@ -254,6 +255,9 @@ class InStrategyPropertiesHandler:
                 strategy.name,
                 True,
             )
+            assert (
+                event.duration <= initial_duration
+            ), f"Issue with chopping by 'relevant app active' event: {event_to_str(event)}"
             metrics.incr("events chopped by 'relevant app active'", (initial_duration - event.duration).total_seconds())
         return event
 
@@ -455,16 +459,17 @@ class InStrategyPropertiesHandler:
                 if event is None:
                     continue
                 # If way to make windows is specified they make window per each group of keys.
-                is_added = False
+                added_times = 0
                 for key_tuple in strategy.in_group_by_keys:
                     if all(key in event.data for key in key_tuple):
                         window_key = ListOfPairsDescriptor([(key, str(event.data[key])) for key in key_tuple])
                         self._add_event_to_window(event, window_key, windows)
-                        is_added = True
-                        break
+                        added_times += 1
                 # If wasn't added then it is either warning about misconfiguration or warning about bad event data.
-                if not is_added:
-                    metrics.incr("events without data containing any in_group_by_keys", event.duration.total_seconds())
+                if added_times > 0:
+                    metrics.incr(
+                        f"events without data containing {added_times} in_group_by_keys", event.duration.total_seconds()
+                    )
         else:
             # If way to make windows is not specified then build window key as tuple of data key-value pairs.
             for event in events:
