@@ -180,7 +180,7 @@ def cut_event(
                 )
             else:
                 return None
-        event_end = last_overlap.end
+        event_end = min(first_overlap.end, event_end)
     elif boundaries == IntervalBoundaries.END:
         if last_overlap.end < event_end:
             if is_fail_incompatible:
@@ -190,7 +190,7 @@ def cut_event(
                 )
             else:
                 return None
-        event_start = first_overlap.begin
+        event_start = max(first_overlap.begin, event_start)
     elif boundaries == IntervalBoundaries.DIM:
         # Just use the first overlap to cut event by.
         event_start = max(first_overlap.begin, event_start)
@@ -481,29 +481,30 @@ class InStrategyPropertiesHandler:
         # Next check windows for the "same events" entries which may appear if group_by_keys contains few entries
         # and some set of events have the same value for both keys.
         # Step 1: build "inverted windows" dict with all "same events" windows keys grouped.
-        inverted_windows: Dict[int, List[Tuple]] = {}
-        keys_to_remove = set()
-        for key, window_events in windows.items():
-            events_hash = hash(tuple(str(x) for x in window_events))
-            same_events_window_keys = inverted_windows.setdefault(events_hash, [])
-            if same_events_window_keys:
-                # If the window with the same events exists then add to keys_to_remove all these keys.
-                if len(same_events_window_keys) < 2:
-                    keys_to_remove.add(same_events_window_keys[0])
-                    metrics.incr("windows with similar events")
-                keys_to_remove.add(key)
-                metrics.incr("windows with similar events")
-            same_events_window_keys.append(key)
-        # Step 2: iterate over inverted_windows and create new windows with "merged" keys for duplicates.
-        for same_events_window_keys in inverted_windows.values():
-            if len(same_events_window_keys) > 1:
-                new_window_key = tuple(x for key in same_events_window_keys for x in key)
-                window_events = windows[same_events_window_keys[0]]
-                windows[new_window_key] = window_events
-                metrics.incr("windows with combined keys due to similar events in different groups")
-        # Step 3: remove duplicated windows with old keys.
-        for key in keys_to_remove:
-            del windows[key]
+        # inverted_windows: Dict[int, List[Tuple]] = {}
+        # keys_to_remove = set()
+        # for key, window_events in windows.items():
+        #     events_hash = hash(tuple(str(x) for x in window_events))
+        #     same_events_window_keys = inverted_windows.setdefault(events_hash, [])
+        #     if same_events_window_keys:
+        #         # If the window with the same events exists then add to keys_to_remove all these keys.
+        #         if len(same_events_window_keys) < 2:
+        #             keys_to_remove.add(same_events_window_keys[0])
+        #             metrics.incr("windows with similar events")
+        #         keys_to_remove.add(key)
+        #         metrics.incr("windows with similar events")
+        #     same_events_window_keys.append(key)
+        # # Step 2: iterate over inverted_windows and create new windows with "merged" keys for duplicates.
+        # for same_events_window_keys in inverted_windows.values():
+        #     if len(same_events_window_keys) > 1:
+        #         key: GroupingDescriptior
+        #         new_window_key = tuple(x for key in same_events_window_keys for x in key.get_kv_pairs())
+        #         window_events = windows[same_events_window_keys[0]]
+        #         windows[new_window_key] = window_events
+        #         metrics.incr("windows with combined keys due to similar events in different groups")
+        # # Step 3: remove duplicated windows with old keys.
+        # for key in keys_to_remove:
+        #     del windows[key]
         return windows
 
     def _aggregate_events_with_few_sliding_windows(self) -> ActivitiesByStrategy:
