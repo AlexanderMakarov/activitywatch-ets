@@ -1,21 +1,37 @@
-MIT License
+Custom Non-Commercial Use License
 
-Copyright (c) 2022 AlexanderMakarov
+Copyright (c) 2023, Aleksandr Makarov (https://github.com/AlexanderMakarov).
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+All rights reserved.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Definitions:
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+- "Software" refers to the code, assets, and associated files contained in this repository.
+- "Individual User" refers to a singular person who is using the Software for personal, educational,
+  or non-commercial purposes.
+- "Commercial Entity" refers to any organization, company, or group, regardless of size, that operates for profit.
+
+License Grant:
+
+- For Individual Users:
+  - Permission is hereby granted, free of charge, to any Individual User obtaining a copy of this Software to use,
+    modify, and distribute the Software for non-commercial purposes, subject to the following conditions:
+      - Redistributions of the Software must retain the above copyright notice, this list of conditions, and the
+        following disclaimer.
+      - The Software is not to be used for any commercial purpose or monetary gain.
+
+- For Commercial Entities:
+  - Commercial Entities are expressly forbidden from using, modifying, distributing, or incorporating this Software
+    in any commercial products, services, or operations.
+
+- Reserved Rights:
+  - I, Aleksandr Makarov, retain the exclusive right to commercialize the Software or to grant commercial licenses
+    to any party.
+
+Disclaimer:
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+IN NO EVENT SHALL I, ALEKSANDR MAKAROV, BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
