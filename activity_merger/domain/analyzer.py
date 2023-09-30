@@ -12,7 +12,7 @@ from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
 from .strategies import (BUCKET_AFK_PREFIX, ActivitiesByStrategy,
-                         ActivityByStrategy)
+                         ActivityByStrategy, calculate_activity_density)
 
 
 def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
@@ -20,12 +20,14 @@ def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) 
     Cuts start from activity (suggested and 'max_start_time' if need) and returns only tail after specified point.
     """
     events = [x for x in activity.events if (x.timestamp + x.duration) > point]  # Keep "border" event.
+    density_zero = activity.density == 0  # If density was zero before cutoff then it will remain same.
     return ActivityByStrategy(
         suggested_start_time=point,
         suggested_end_time=activity.suggested_end_time,
         max_start_time=max(point, activity.max_start_time),
         min_end_time=activity.min_end_time,
         events=events,
+        density=0 if density_zero else calculate_activity_density(events, point, activity.suggested_end_time),
         grouping_data=activity.grouping_data,
         strategy=activity.strategy,
     )
@@ -36,12 +38,14 @@ def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime) ->
     Cuts end from activity (suggested and 'min_end_time' if need) and returns only head before specified point.
     """
     events = [x for x in activity.events if x.timestamp < point]  # Keep "border" event.
+    density_zero = activity.density == 0  # If density was zero before cutoff then it will remain same.
     return ActivityByStrategy(
         suggested_start_time=activity.suggested_start_time,
         suggested_end_time=point,
         max_start_time=activity.max_start_time,
         min_end_time=min(point, activity.min_end_time),
         events=events,
+        density=0 if density_zero else calculate_activity_density(events, activity.suggested_start_time, point),
         grouping_data=activity.grouping_data,
         strategy=activity.strategy,
     )
@@ -695,16 +699,17 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
         if not candidates:
             # We've reached the end of the candidates tree, i.e. no more activities are possible.
             return None
+
         # Sort list of candidates with following rules in the order:
         # - start time (to take first available),
-        # - inverted duration (to take longest available),
+        # - inverted duration multiplied on density (to take profed longest available),
         # - boundaries (to take with strictest borders possible),
         # - inverted out_produces_good_activity_name (to take good activity name providers first)
         candidates = sorted(
             candidates,
             key=lambda x: (
                 x.begin,
-                x.begin - x.end,
+                (x.begin - x.end) * x.data.density,
                 x.data.strategy.in_trustable_boundaries,
                 x.data.strategy.out_produces_good_activity_name,
             ),
@@ -796,7 +801,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
 - If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
     If it matches Outlook event then it is a name for the meeting. "Window" should show Zoom or Slack.
 - Cancelled "Pricing scrum meeting" was separated into activity in wrong way.
-- IDEA-generated description may be too chatty. Need to cut them somehow.
+- IDEA-generated description may be too chatty. Need to cut it somehow.
 """
 
 

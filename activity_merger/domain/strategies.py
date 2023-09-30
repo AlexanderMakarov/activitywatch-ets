@@ -70,6 +70,11 @@ class ActivityByStrategy:
     """Minimum end time of the activity possible. Equal or earlier then 'end time'."""
     events: List[Event]
     """List of (dominant) events the activity consists of."""
+    density: float
+    """
+    Density of the activity in [0..1] measured by duration of the events inside and taking into account boundaries
+    of the parent strategy. I.e. if strategy's 'in_trustable_boundaries' is "START" or "END" then value will be zero.
+    """
     grouping_data: GroupingDescriptior
     """Object describing why enclosed events are aggregated into activity."""
     strategy: Strategy
@@ -81,7 +86,7 @@ class ActivityByStrategy:
 
     def __repr__(self) -> str:
         return (
-            f"{seconds_to_timedelta(self.duration())},"
+            f"{seconds_to_timedelta(self.duration())} x{self.density:.2f},"
             f" {from_start_to_end_to_str(self.suggested_start_time, self.suggested_end_time)}"
             f" (min {from_start_to_end_to_str(self.max_start_time, self.min_end_time)}),"
             f" {len(self.events):>3} {self.strategy.name} events grouped by {self.grouping_data}."
@@ -116,18 +121,6 @@ class ActivitiesByStrategy:
 
     def __repr__(self) -> str:
         return self.to_string()
-
-
-# def cut_event(event: Event, interval: intervaltree.Interval) -> Event:
-#     """
-#     Makes new event with part which is overlapped by the given interval.
-#     """
-#     return Event(
-#         event.bucket_id,
-#         max(event.timestamp, interval.begin),
-#         min(event.timestamp + event.duration, interval.end),
-#         event.data
-#     )
 
 
 def cut_event(
@@ -197,6 +190,22 @@ def cut_event(
         event_end = min(first_overlap.end, event_end)
 
     return Event(bucket_id=event.bucket_id, timestamp=event_start, duration=event_end - event_start, data=event.data)
+
+
+def calculate_activity_density(
+    events: List[Event], start_time: datetime.datetime, end_time: datetime.datetime
+) -> float:
+    """
+    Calculates density of activity by the given events and bounds.
+    Assumes that start_time and end_time are placed in the range of some events, probably on the first and last
+    accordingly. Also events are sorted in time order. And start_time less than end_time.
+    """
+    duration: float = 0
+    for event in events:
+        event_end = event.timestamp + event.duration
+        if event_end > start_time and event.timestamp < end_time:
+            duration += (min(event_end, end_time) - max(event.timestamp, start_time)).total_seconds()
+    return duration/(end_time - start_time).total_seconds()
 
 
 class InStrategyPropertiesHandler:
@@ -317,6 +326,11 @@ class InStrategyPropertiesHandler:
     def _convert_each_event_into_activity(self) -> ActivitiesByStrategy:
         # Produces Activity per each event.
         activities: List[ActivityByStrategy] = []
+        density = (
+            0
+            if self.current_strategy.in_trustable_boundaries in [IntervalBoundaries.START, IntervalBoundaries.END]
+            else 1
+        )
         for event in self.current_events:
             event = self._transform_event(event)
             if event is None:
@@ -328,6 +342,7 @@ class InStrategyPropertiesHandler:
                 max_start_time=event.timestamp,
                 min_end_time=end_time,
                 events=[event],
+                density=density,
                 grouping_data=ListOfPairsDescriptor([(k, str(v)) for k, v in event.data.items()]),
                 strategy=self.current_strategy,
             )
@@ -354,16 +369,20 @@ class InStrategyPropertiesHandler:
         max_start_time = start_time
         min_end_time = end_time
         in_trustable_boundaries = self.current_strategy.in_trustable_boundaries
+        density_zero = False
         if in_trustable_boundaries is IntervalBoundaries.END:
             max_start_time += events[0].duration
+            density_zero = True
         elif in_trustable_boundaries is IntervalBoundaries.START:
             min_end_time = events[-1].timestamp
+            density_zero = True
         activity = ActivityByStrategy(
             suggested_start_time=start_time,
             suggested_end_time=end_time,
             max_start_time=max_start_time,
             min_end_time=min_end_time,
             events=events,
+            density=0 if density_zero else calculate_activity_density(events, start_time, end_time),
             grouping_data=grouping_data,
             strategy=self.current_strategy,
         )
