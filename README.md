@@ -145,13 +145,12 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 ### Must:
 
 - [x] Dry run for importers.
-- [x] Why get_outlook_events.py default "today" don't implemented? It doesn't work with back_days=0.
+- [x] Why get_outlook_events.py default "today" is not implemented? It doesn't work with back_days=0.
 - [x] Fix get_outlook_events.py: removes plugins.
 - [x] Fix get_outlook_events.py: skips 'free' events.
 - [x] Debug: write a script to export all buckets data for a specific date.
 - [x] Add debugging buckets to produce insights about rules work into ActivityWatch UI "Timeline" page.
 - [x] Write tests for merger with Stopwatch events involvement.
-- [x] Prepare script to run all event importers and get_activities.py for the specific date.
 - [x] For `Strategy.in_group_by_keys` need an ability specify "if key doesn't exist then use this", not both. IDEA case.
 - [x] Add "git exporter".
 - [x] Add to Strategy 'in_skip_events_with_key_value' or 'in_key_value_skip' property to skip "app=unknown" events.
@@ -161,19 +160,21 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
       from left/right".
 - [x] Add ability to change strategies in `analyze_activities_per_strategy`.
 - [x] Add "in_only_if_window_app" to strategies (similar to out_only_not_afk).
+- [x] Change licence.
 - [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab
       with relevant ID in the title.
-- [ ] Add ability to cut by AFK both events and activities.
-- [ ] Add ability to extract Slack meetings as separate activities and be not affected by AFK. Extract name of interlocutor.
-- [ ] Make ability to extract 
-- [ ] Keep exact events in result activities.
-- [ ] Complete get_activities.py
-- [ ] Try it for myself. Adjust `STRATEGIES` and code if need.
-- [ ] Change licence.
-- [ ] Use for ETS for a few days. Adjust `STRATEGIES`.
+- [ ] Add ability to separate distinct activity by name, like 'ETS' or 'Slack meeting' in Window events.
+      For Slack meetings need to extract name of interlocutor.
+- [ ] Add "density" characteristic for the `ActivityByStrategy` to choose "basic activity".
+- [ ] Add ability to cut by AFK both events and activities (example?).
+- [ ] Keep exact events in result activities (example?).
+- [ ] Add Google Calendar importer.
+- [ ] Add CI with tests coverage.
+- [ ] Prepare script to run all event importers and get_activities.py for the specific date.
+- [ ] Try it for myself. Adjust `Config` and code if need.
+- [ ] Use for ETS for a few days. Adjust `Config`.
 - [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
 - [ ] Prepare for distribution (decide how it would look like).
-- [ ] Support intersecting AFK events in analyzer.analyze_activities_per_strategy
 - [ ] Importers - support parsing few days at once.
 - [ ] OWA importer - adopt Chrome as well.
 
