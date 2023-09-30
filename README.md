@@ -179,6 +179,7 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 
 ### Questionable:
 
+- [ ] 'in_group_by_keys' need to work both on "and" and "or" ways.
 - [ ] Add support for TODO cases in test_merger.
 - [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in config.py.
 - [ ] Extend `in_only_if_window_app` to match "title" as well, depending on the some target event "data".

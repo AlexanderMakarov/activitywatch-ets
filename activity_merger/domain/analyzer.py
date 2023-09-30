@@ -4,17 +4,15 @@ from typing import Dict, List, Optional, Set
 
 import intervaltree
 
-from ..config.config import (
-    DEBUG_BUCKET_PREFIX,
-    LIMIT_OF_RESULTING_ACTIVITIES,
-    LOG,
-    MAX_ACTIVITY_DURATION_SEC,
-    MIN_ACTIVITY_DURATION_SEC,
-)
-from .input_entities import IntervalBoundaries, Event, Strategy
+from ..config.config import (DEBUG_BUCKET_PREFIX,
+                             LIMIT_OF_RESULTING_ACTIVITIES, LOG,
+                             MAX_ACTIVITY_DURATION_SEC,
+                             MIN_ACTIVITY_DURATION_SEC)
+from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
-from .strategies import BUCKET_AFK_PREFIX, ActivitiesByStrategy, ActivityByStrategy
+from .strategies import (BUCKET_AFK_PREFIX, ActivitiesByStrategy,
+                         ActivityByStrategy)
 
 
 def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
@@ -790,286 +788,44 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
         return True
 
 
+"""
+20230930 sum of issues which may happen:
+- Preparation to Java exam (10:03-10:30) is not separated from other events.
+- Few seconds events are counted as activity (like ignore all shorter than 1 minute).
+- (?) IDEA activities with both "project" and "filename" fields are counted as separate activities.
+- If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
+    If it matches Outlook event then it is a name for the meeting. "Window" should show Zoom or Slack.
+- Cancelled "Pricing scrum meeting" was separated into activity in wrong way.
+- IDEA-generated description may be too chatty. Need to cut them somehow.
+"""
+
+
 def merge_activities(
     activities_by_strategy: List[ActivitiesByStrategy],
     steps: List[AnalyzerStep],
     ignore_substrings: List[str],
 ) -> AnalyzerResult:
+    """
+    Merges activities into `AnalyzerResult` with the given steps.
+    """
+
     context = {"activities_by_strategy": activities_by_strategy}
     for step in steps:
         metrics = Metrics({})
         step.check_context(context)
         step_description = step.get_description()
-        time_tmp = datetime.datetime.now()
         LOG.info("STEP START: %s", step_description)
+        time = datetime.datetime.now()
         step_result = step.run(context, metrics)
-        time_tmp = datetime.datetime.now() - time_tmp
+        time = datetime.datetime.now() - time
         if step_result:
             metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
-            LOG.info("STEP FINISH: %s\n%s\n", time_tmp, "\n".join(metrics_strings))
+            if metrics_strings:
+                LOG.info("STEP FINISH: %s\n%s\n", time, "\n".join(metrics_strings))
+            else:
+                LOG.info("STEP FINISH: %s", time)
         else:
             metrics_strings = list(metrics.to_strings())
-            LOG.error("STEP FAILED: %s\n%s", time_tmp, "\n".join(metrics_strings))
+            LOG.error("STEP FAILED: %s\n%s", time, "\n".join(metrics_strings))
             return None
     return context["analyzer_result"]
-
-
-def analyze_activities_per_strategy(
-    activities_by_strategy: List[ActivitiesByStrategy],
-    is_only_good_strategies_for_description: bool,
-    is_add_debug_buckets: bool = True,
-) -> AnalyzerResult:
-    """
-    Analyzes activities-by-strategy to produce a result.
-    Actually it handles all "out" parameters in `Strategy` entity.
-    It extensively uses `IntervalTree` structure and works in the following steps:
-    1. Creates table of not-AFK events for `out_only_not_afk=True` support.
-    2. Cuts activities from `out_only_not_afk=True` strategies by not-AFK intervals.
-    3. Builds "results" tree from `out_self_sufficient=True` activities. Checks for overlapping.
-    4. Builds one more "candidates" tree from `out_only_not_afk=True` activities.
-    5. Fills "results" tree gaps with "candidates" tree intervals.
-       For each gap or just "interval start" it tries to find "base activity" for the some interval
-       and adds everything overlapping into it with chopping activities if need.
-       Name of such "result activity" is assembled from the all activities inside.
-       TODO improve this last step
-    """
-    """
-    Investigation results and thoughts:
-    20230921 investigation about 20230120 data:
-    +1. Outlook activity "Java Exam" matches good.
-       It includes PPT-6447, Slack, libreoffice-writer, zoom, Firefox "by density" activities. 'pipeline-tools' project(s) in IDEA.
-       IDEA - wrongly! (it was after the meeting but there is small overlap)
-    +2. Outlook "Plan Team Standup" disappeared - swallowed by more wide (started earlier and finished later)
-       "Code, Gnome-terminal, Slack, firefox, flameshot, jetbrains-idea, thunderbird, zoom application(s).
-       'pipeline-tools' project(s) in IDEA."
-    3. Outlook "Pre-story meeting" disappeared in right way.
-       But here was (?) Slack call with Sergii Iurchenko and it disappeared. Even not found by "Window" bucket.
-    4. Preparation to Java exam (10:03-10:30) is not separated from other events because Window watcher "title" field is not used?
-    +5. Jira events are chopped too hard by AFK. Sometimes they even disappear (11:21-12:03).
-    +6. Jira events for the same jira_id need to merge, like near 9:35.
-    +7. Use IDEA events only if there is window event for this.
-    +8. Use Firefox events only if there is window event for this.
-
-    Ways to improve:
-    - [questionable] Don't count few seconds events as activity (like ignore all shorter than 1 minute).
-      WON'T work because even small activities (from Window) may add information into activity description.
-    - [imprtant] Add "out_only_if_window_app" to strategies (similar to out_only_not_afk).
-    - Don't cut Jira events by AFK but cut by out_only_if_window_app (configuration).
-      WON'T work because it is even stricter than AFK.
-      In result 11:21-12:03 is fixed but there are no activities after 16:01 BUT should.
-    - Don't cut IDEA events (configuration).
-    - [optional] Investigate why Jira events disappear.
-
-    20230922 investigation about 20230120 data:
-    +1. Result activities are bad - only 1 on 5+ hours.
-    2. IDEA activities become better but don't end in a time, often are cut by 1-2 minutes.
-    +3. Window activity on 5+ hours becomes "ba" for bad results and wasn't cut to 2 hours - bug!
-    4. If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
-       If it is the same tab in browser then it is probably the same web app.
-    5. Preparation to Java exam (10:03-10:30) is not separated from other events
-       because Window watcher "title" field is not used.
-    6. If there was Zoom meeting 15 minutes and no meetings before and after then it probably was a meeting.
-       If it matches Outlook event then it is a name for the meeting. "Window" should show Zoom or Slack.
-       AFK is probably "afk" here due to idle.
-    7. If "window" shows "browser" and "browser" switches tabs then it is active work in browser.
-       If it is the same tab in browser then it is probably the same web app.
-
-    20230925 investigation about 20230120 data:
-    1. Result activities intervals are quite good.
-    2. Canceled "Pricing scrum meeting" appeared as resulting activity.
-    3. Jira events better to be chopped by AFK but don't be breaked by them. I.e. better to make activities
-       without chopping by AFK events but next chop activities by AFK on a few.
-    4. Slack activities are not extracted from "Window" events. And they should not be cut by AFK.
-       Probably it means that "Window" events should not be cut by AFK but activities - should, while
-       it is not a "Meeting" activity.
-    5. Duplicated JIRA activities. Need to revive deduplicated logic in `_separate_events_per_windows`.
-    6. IDEA-generated description may be too chatty. Need to cut them somehow.
-
-    Exact logic:
-    # Take all remained intervals and using `in_trustable_boundaries` value make activites with logic:
-    #   - Make tree of remained intervals by cutting out all activities overlapping `result_tree` intervals.
-    #   - Iterate this tree to find activities with at least MIN_DURATION_SEC duration and try to make them minimal.
-    #     In details at start and at the middle of the gap:
-    #       - choose shortest activity with `in_trustable_boundaries` "whole" or "start"
-    #         and duration >= MIN_DURATION_SEC, name it "basic activity" (BA)
-    #       - find overlapping activities (OA-s)
-    #           - if OA-s is smaller than BA then merge it into BA as is;
-    #           - if OA is bigger than BA then check if `in_trustable_boundaries` value allows to cut it
-    #               - if `in_trustable_boundaries` value allows then cut and merge overlapping part into BA;
-    #               - if `in_trustable_boundaries` value is against then cut until BA end
-    #       - Sort longest actvities by `out_activity_name` and make name
-    #     At the end of the gap (when length of all activities is <= MIN_DURATION_SEC):
-    #       - take first longest activity with `in_trustable_boundaries` "whole" or "start", name it BA
-    #       - find OA-s and merge with the same logic
-    #       - Sort longest actvities by `out_activity_name` and make name
-    """
-
-    # # Make activities in "sure that activity" order.
-    # # In this way "remained gaps" will shape activities for which data is unclear.
-    # metrics = Metrics({})
-    # debug_dict: Dict[str, List[Event]] = {}
-    # debug_buckets_cnt = 1
-
-    # # 1. Find AFK strategy. It is required for `out_only_not_afk` handling.
-    # LOG.info("Searching not-AFK intervals.")
-    # not_afk_tree = intervaltree.IntervalTree()
-    # for strategy_result in activities_by_strategy:
-    #     bucket_prefix = strategy_result.strategy.bucket_prefix
-    #     if not bucket_prefix.startswith(BUCKET_AFK_PREFIX):
-    #         continue
-    #     metrics.incr("AFK strategies")
-    #     if strategy_result.strategy.in_activities_may_overlap:
-    #         LOG.warning(
-    #             "Unsupported setup for %s* strategy - in_activities_may_overlap=True."
-    #             "Skipping any AFK-related logic populated by this strategy.",
-    #             bucket_prefix,
-    #         )
-    #         continue
-    #     # Add to not_afk_tree only not-AFK activities. Expect that they are not intersect.
-    #     for activity in strategy_result.activities:
-    #         status = activity.events[0].data["status"]
-    #         if status == "not-afk":
-    #             not_afk_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
-    #             metrics.incr("not-afk intervals", activity.duration)
-    #         else:
-    #             metrics.incr("afk intervals", activity.duration)
-
-    # # 2. Cut activities from `out_only_not_afk=True` strategies.
-    # # Note that some "should be in not-afk" events may be produced as started before AFK watcher started
-    # # (for example IDEA events when computer in hibernate mode).
-    # LOG.info("Chopping activities by AFK intervals.")
-    # for strategy_result in activities_by_strategy:
-    #     if not strategy_result.strategy.out_only_not_afk:
-    #         continue
-    #     metrics.incr("strategies to cut by AFK")
-    #     strategy_result.activities = _include_tree_intervals(
-    #         strategy_result.activities,
-    #         strategy_result.strategy.in_trustable_boundaries,
-    #         not_afk_tree,
-    #         metrics,
-    #         "not-AFK",
-    #     )
-    #     if is_add_debug_buckets:
-    #         debug_buckets_cnt = _add_debug_events_to_not_overlap(
-    #             activites=strategy_result.activities,
-    #             debug_dict=debug_dict,
-    #             bucket_name=strategy_result.strategy.bucket_prefix,
-    #             metrics=metrics,
-    #             debug_buckets_cnt=debug_buckets_cnt,
-    #         )
-
-    # # 3. Add into result activities from `out_self_sufficient=True` strategies. Check for overlappings.
-    # LOG.info('Adding "out_self_sufficient" strategies activities.')
-    # debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}{debug_buckets_cnt:03}_self_sufficient"
-    # result_tree = intervaltree.IntervalTree()
-    # for strategy_result in activities_by_strategy:
-    #     if not strategy_result.strategy.out_self_sufficient:
-    #         continue
-    #     metrics.incr("self sufficient strategies")
-    #     for activity in strategy_result.activities:
-    #         overlap: List[intervaltree.Interval] = result_tree.overlap(activity.start_time, activity.end_time)
-    #         if overlap:
-    #             raise ValueError(
-    #                 f"Overlapping activities from {strategy_result.strategy}: "
-    #                 f"{activity} is overlapping with " + ", ".join(x.data for x in overlap)
-    #             )
-    #         result_tree.addi(activity.start_time, activity.end_time, activity)
-    #         LOG.info("Found 'self-sufficient' activity: %s", activity)
-    #         metrics.incr("self sufficient activities", activity.duration)
-    #         if is_add_debug_buckets:
-    #             _add_debug_event(
-    #                 debug_dict=debug_dict,
-    #                 bucket_id=debug_bucket_prefix,
-    #                 timestamp=activity.start_time,
-    #                 duration=activity.end_time - activity.start_time,  # Use end-start time, not duration by events.
-    #                 description=activity.description,
-    #                 events_count=len(activity.events),
-    #             )
-    # # Check that at least something was added to the result tree. Otherwise no debug events were added.
-    # if len(result_tree) > 0:
-    #     debug_buckets_cnt += 1
-
-    # # 4. Make tree from remained activities. Chop them by existing `result` activities if there are such.
-    # candidates_tree = intervaltree.IntervalTree()
-    # if len(result_tree) > 0:
-    #     LOG.info('Building "candidate" activities by chopping remaining activities by activities added so far.')
-    #     for strategy_result in activities_by_strategy:
-    #         strategy = strategy_result.strategy
-    #         bucket_prefix = strategy.bucket_prefix
-    #         # Skip already handled/contributed strategies.
-    #         if bucket_prefix.startswith(BUCKET_AFK_PREFIX) or strategy.out_self_sufficient:
-    #             continue
-    #         # Cut activities from strategy by result tree. Do it strictly, i.e. boundaries=whole.
-    #         remained_activities = _exclude_tree_intervals(
-    #             strategy_result.activities, result_tree, metrics, "activities built from self sufficient strategies"
-    #         )
-    #         # Iterate remained activities and put them into common candidates tree and into per-strategy tree if need.
-    #         # Note that activities here are not in order!
-    #         for activity in remained_activities:
-    #             candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
-    #         # Add debug events and buckets if need.
-    #         if is_add_debug_buckets:
-    #             debug_buckets_cnt = _add_debug_events_to_not_overlap(
-    #                 remained_activities, debug_dict, strategy.bucket_prefix, debug_buckets_cnt, metrics
-    #             )
-    # else:
-    #     LOG.info(
-    #         'Skipping chopping of remained activities because there were no "out_self_sufficient"'
-    #         " strategies activities found this day."
-    #     )
-    #     for strategy_result in activities_by_strategy:
-    #         # Don't use AFK activities to build resulting activities on.
-    #         if strategy_result.strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX):
-    #             continue
-    #         for activity in strategy_result.activities:
-    #             candidates_tree.addi(activity.suggested_start_time, activity.suggested_end_time, activity)
-
-    # # 5. Iterate remained activities to fill `result` remained gaps.
-    # LOG.info("Assemble activities-by-strategies into result activities.")
-    # current_start_point: datetime.datetime = candidates_tree.begin()  # Start from leftest/oldest activity.
-    # debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
-
-    # # Limit number of iterations to avoid infinite loops on bugs or wrong input.
-    # while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
-    #     metrics.incr("iterations to assemble remaining activities")
-    #     # Find "basic activity" to base "result" activity on interval of it.
-    #     ba_interval = _find_basic_activity_interval(candidates_tree, current_start_point, metrics)
-    #     if ba_interval is None:
-    #         break  # No more activities.
-    #     # Find all overlapping activities and make new `result` activity (RA).
-    #     ra = _build_result_activity(ba_interval, candidates_tree, is_only_good_strategies_for_description, metrics)
-    #     # Check RA doesn't overlaps with existing result activities at the end.
-    #     result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
-    #     # If we had interval in `result_tree` when added RA then we need to search next gap.
-    #     # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
-    #     for existing_interval in result_tree_overlapped_with_ra_end:
-    #         if existing_interval.begin < ra.end_time:
-    #             # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
-    #             ra.end_time = existing_interval.begin
-    #             ra.events = [x for x in ra.events if x.timestamp < ra.end_time]
-    #             metrics.incr(
-    #                 "result activities shrinked because it overlaps by end with alredy existing",
-    #                 (ra.end_time - existing_interval.begin).total_seconds(),
-    #             )
-    #     # Add RA into the result tree.
-    #     result_tree.addi(ra.start_time, ra.end_time, ra)
-    #     # Add RA to debug bucket if need.
-    #     if is_add_debug_buckets:
-    #         # Use the only debug bucket here because events should be consequtive.
-    #         _add_debug_event(
-    #             debug_dict=debug_dict,
-    #             bucket_id=debug_bucket_prefix,
-    #             timestamp=ra.start_time,
-    #             duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
-    #             description=ra.description,
-    #             events_count=len(ra.events),
-    #         )
-    #     # Configure next iteration.
-    #     current_start_point = ra.end_time
-    # return AnalyzerResult(
-    #     sorted([x.data for x in result_tree], key=lambda x: x.start_time),
-    #     None,
-    #     metrics,
-    #     debug_dict,
-    # )
-    return None

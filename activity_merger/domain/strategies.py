@@ -4,7 +4,7 @@ from typing import Dict, List, Set, Tuple
 
 import intervaltree
 
-from ..config.config import MIN_ACTIVITY_DURATION_SEC
+from ..config.config import LOG, MIN_ACTIVITY_DURATION_SEC
 from ..helpers.helpers import event_to_str, from_start_to_end_to_str, seconds_to_timedelta
 from .input_entities import IntervalBoundaries, Event, Strategy
 from .metrics import Metrics
@@ -449,7 +449,7 @@ class InStrategyPropertiesHandler:
         :return: Resulting windows with keys equal to event's "data" field values chosen as window identifiers
         and values as correspondings lists of event's.
         """
-        # First collect all possible windows.
+        # Collect all possible windows.
         windows: Dict[GroupingDescriptior, List[Event]] = {}
         strategy = self.current_strategy
         metrics = self.current_metrics
@@ -459,16 +459,19 @@ class InStrategyPropertiesHandler:
                 if event is None:
                     continue
                 # If way to make windows is specified they make window per each group of keys.
+                event_data = event.data
                 added_times = 0
                 for key_tuple in strategy.in_group_by_keys:
-                    if all(key in event.data for key in key_tuple):
-                        window_key = ListOfPairsDescriptor([(key, str(event.data[key])) for key in key_tuple])
+                    try:
+                        window_key = ListOfPairsDescriptor([(key, str(event_data[key])) for key in key_tuple])
                         self._add_event_to_window(event, window_key, windows)
                         added_times += 1
+                    except KeyError:
+                        continue  # There is no such key.
                 # If wasn't added then it is either warning about misconfiguration or warning about bad event data.
                 if added_times > 0:
                     metrics.incr(
-                        f"events without data containing {added_times} in_group_by_keys", event.duration.total_seconds()
+                        f"events with data containing {added_times} in_group_by_keys", event.duration.total_seconds()
                     )
         else:
             # If way to make windows is not specified then build window key as tuple of data key-value pairs.
@@ -476,35 +479,52 @@ class InStrategyPropertiesHandler:
                 event = self._transform_event(event)
                 if event is None:
                     continue
-                window_key = ListOfPairsDescriptor([(k, str(v)) for k, v in event.data])
+                event_data = event.data
+                window_key = ListOfPairsDescriptor([(k, str(v)) for k, v in event_data])
                 self._add_event_to_window(event, window_key, windows)
-        # Next check windows for the "same events" entries which may appear if group_by_keys contains few entries
-        # and some set of events have the same value for both keys.
-        # Step 1: build "inverted windows" dict with all "same events" windows keys grouped.
-        # inverted_windows: Dict[int, List[Tuple]] = {}
-        # keys_to_remove = set()
-        # for key, window_events in windows.items():
-        #     events_hash = hash(tuple(str(x) for x in window_events))
-        #     same_events_window_keys = inverted_windows.setdefault(events_hash, [])
-        #     if same_events_window_keys:
-        #         # If the window with the same events exists then add to keys_to_remove all these keys.
-        #         if len(same_events_window_keys) < 2:
-        #             keys_to_remove.add(same_events_window_keys[0])
-        #             metrics.incr("windows with similar events")
-        #         keys_to_remove.add(key)
-        #         metrics.incr("windows with similar events")
-        #     same_events_window_keys.append(key)
-        # # Step 2: iterate over inverted_windows and create new windows with "merged" keys for duplicates.
-        # for same_events_window_keys in inverted_windows.values():
-        #     if len(same_events_window_keys) > 1:
-        #         key: GroupingDescriptior
-        #         new_window_key = tuple(x for key in same_events_window_keys for x in key.get_kv_pairs())
-        #         window_events = windows[same_events_window_keys[0]]
-        #         windows[new_window_key] = window_events
-        #         metrics.incr("windows with combined keys due to similar events in different groups")
-        # # Step 3: remove duplicated windows with old keys.
-        # for key in keys_to_remove:
-        #     del windows[key]
+
+        # Some windows may have the same interval/events because differnt "descriptor"-s build from the same events.
+        # Need to remove such duplicates with leaving windows with maximum keys in "descriptor".
+        # If length of keys is the same then it is some misconfiguration in "in_group_by_keys".
+        windows_with_interval: Dict[Tuple[datetime.datetime, datetime.timedelta], GroupingDescriptior] = {}
+        window_events: List[Event]
+        for descriptor, window_events in windows.items():
+            last_event = window_events[-1]
+            window_start = window_events[0].timestamp
+            window_end = last_event.timestamp + last_event.duration
+            key = (
+                window_start,
+                window_end,
+            )
+            existing_descriptior = windows_with_interval.get(key, None)
+            if existing_descriptior is not None:
+                length_diff = len(descriptor.get_kv_pairs()) - len(existing_descriptior.get_kv_pairs())
+                if length_diff > 0:
+                    # Current descriptor is longer, replace.
+                    windows_with_interval[key] = descriptor
+                    metrics.incr(
+                        "removed activities with same intervals but less keys",
+                        (window_end - window_start).total_seconds(),
+                    )
+                elif length_diff < 0:
+                    # Current descriptor is shorter, do nothing.
+                    continue
+                else:
+                    LOG.warning(
+                        "Wrong configuration for %s strategy: "
+                        + "got the same interval/events grouped by 'same length' %s and %s",
+                        self.current_strategy.name,
+                        existing_descriptior,
+                        descriptor,
+                    )
+            else:
+                windows_with_interval[key] = descriptor
+        # Check that duplicates were found. If yes, then rebuild `windows`.
+        if len(windows_with_interval) < len(windows):
+            tmp = {}
+            for descriptor in windows_with_interval.values():
+                tmp[descriptor] = windows[descriptor]
+            windows = tmp
         return windows
 
     def _aggregate_events_with_few_sliding_windows(self) -> ActivitiesByStrategy:

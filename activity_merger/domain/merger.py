@@ -435,6 +435,7 @@ def sort_merge_convert_raw_events(
         metrics.incr("raw events", event.duration.seconds)
         # Filter out too short events.
         if event.duration < tolerance:
+            # Note that even with default settings duration is always 0 it may count with custom settings.
             metrics.incr(f"{bucket_id} too short events", event.duration.seconds)
             continue
         # If it is first event then just postpone.
