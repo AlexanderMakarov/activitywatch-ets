@@ -302,10 +302,14 @@ class DebugBucketsHandler:
         timestamp: datetime.datetime,
         duration: datetime.timedelta,
         description: str,
+        density: float,
         events_count: int,
     ):
         # Note that ActivityWatch UI shows only strings.
-        data = {"desc": description, "events_count": str(events_count)}
+        if density:
+            data = {"desc": description, "events_count": str(events_count), "density": f"{density:.2f}"}
+        else:
+            data = {"desc": description, "events_count": str(events_count)}
         self.events.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
 
     def add_debug_events_to_not_overlap(
@@ -353,6 +357,7 @@ class DebugBucketsHandler:
                     duration=activity.suggested_end_time - activity.suggested_start_time,
                     # Build description in easiest way.
                     description=", ".join(f"{k}={v}" for k, v in activity.grouping_data.get_kv_pairs()),
+                    density=activity.density,
                     events_count=len(activity.events),
                 )
                 metrics.incr("debug events in " + debug_bucket_prefix, activity.duration())
@@ -373,14 +378,20 @@ def _build_result_activity(
         if interval == ba_interval:
             continue
         activity = interval.data
-        # If BA overlaps activity then just concatenate data from it into BA.
+        boundaries = activity.strategy.in_trustable_boundaries
+        # If BA overlaps activity completely then just concatenate data from it into BA.
         if ba_interval.overlaps(interval):
             ra_events.extend(activity.events)
             overlapping_activities.append(activity)
             candidates_tree.remove(interval)
             metrics.incr("activities placed completely inside basic activities", interval.length().total_seconds())
             continue
-        boundaries = activity.strategy.in_trustable_boundaries
+        elif boundaries == IntervalBoundaries.STRICT:
+            metrics.incr(
+                f"activities with {IntervalBoundaries.STRICT} boundaries skipped completely from basic activities",
+                interval.length().total_seconds(),
+            )
+            continue
         # Check BA overlaps the start of the activity.
         if ba_interval.contains_point(interval.begin):
             if boundaries == IntervalBoundaries.START:
@@ -390,8 +401,7 @@ def _build_result_activity(
                 candidates_tree.remove(interval)
                 metrics.incr("activities absorbed by basic activity at the start", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
-                # If activity is `in_trustable_boundaries=whole` then split activity,
-                # and concatenate last part with BA. First part is not needed anyway.
+                # Split activity and concatenate last part with BA. First part is not needed anyway.
                 split_activity = _cut_activity_end(activity, ba_interval.end)
                 ra_events.extend(split_activity.events)
                 overlapping_activities.append(split_activity)
@@ -477,13 +487,20 @@ def _build_activity_name(
     """
     # Group activities by Strategy. Keep map of strategies to name. Name is a key in both dictionaries.
     strategy_to_name: Dict[str, Strategy] = {}
-    grouped_activities: Dict[str, List[ActivitiesByStrategy]] = collections.defaultdict(list)
+    grouped_activities: Dict[str, List[ActivityByStrategy]] = collections.defaultdict(list)
     for activity in activities:
         strategy_name = activity.strategy.name
         grouped_activities[strategy_name].append(activity)
         strategy_to_name[strategy_name] = activity.strategy
-    # Sort groups to get "out_produces_good_activity_name" strategy activities first.
-    sorted_strategies = sorted(strategy_to_name.values(), key=lambda x: x.out_produces_good_activity_name, reverse=True)
+    # Sort groups to get "out_produces_good_activity_name" strategy and longest activities first.
+    sorted_strategies = sorted(
+        strategy_to_name.values(),
+        key=lambda x: (
+            x.out_produces_good_activity_name,
+            sum(a.duration() * a.density for a in grouped_activities[x.name])
+        ),
+        reverse=True,
+    )
     sorted_grouped_activities = [grouped_activities[x.name] for x in sorted_strategies]
 
     # Determine whether need to include all strategies in the result.
@@ -801,6 +818,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
                     timestamp=ra.start_time,
                     duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
                     description=ra.description,
+                    density=0,  # Don't set density for "resulting" activities.
                     events_count=len(ra.events),
                 )
             # Configure next iteration.
