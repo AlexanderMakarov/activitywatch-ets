@@ -376,38 +376,42 @@ def _build_result_activity(
     overlapping_activities: List[ActivityByStrategy] = [ba_interval.data]
     for interval in overlapping_intervals:
         if interval == ba_interval:
+            candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
             continue
         activity = interval.data
         boundaries = activity.strategy.in_trustable_boundaries
-        # If BA overlaps activity completely then just concatenate data from it into BA.
-        if ba_interval.overlaps(interval):
+        # 1. If BA overlaps activity completely then just concatenate data from it into BA.
+        if ba_interval.contains_interval(interval):
             ra_events.extend(activity.events)
             overlapping_activities.append(activity)
-            candidates_tree.remove(interval)
+            candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
             metrics.incr("activities placed completely inside basic activities", interval.length().total_seconds())
             continue
         elif boundaries == IntervalBoundaries.STRICT:
+            # We can't use part of STRICT activity so just report attempt and skip.
+            LOG.warning(
+                "Activity with %s boundaries appeared in the border of resulting activity: %s",
+                IntervalBoundaries.STRICT,
+                activity,
+            )
             metrics.incr(
                 f"activities with {IntervalBoundaries.STRICT} boundaries skipped completely from basic activities",
                 interval.length().total_seconds(),
             )
             continue
-        # Check BA overlaps the start of the activity.
+        # 2. Handle case when BA overlaps the start of the activity.
         if ba_interval.contains_point(interval.begin):
             if boundaries == IntervalBoundaries.START:
                 # If activity is `in_trustable_boundaries=start` then concatenate data from it into BA.
                 ra_events.extend(activity.events)
                 overlapping_activities.append(activity)
-                candidates_tree.remove(interval)
+                candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
                 metrics.incr("activities absorbed by basic activity at the start", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
                 # Split activity and concatenate last part with BA. First part is not needed anyway.
                 split_activity = _cut_activity_end(activity, ba_interval.end)
                 ra_events.extend(split_activity.events)
                 overlapping_activities.append(split_activity)
-                candidates_tree.remove(interval)
-                # Note that tail of the activity may be used for the next basic/candidate activity.
-                candidates_tree.addi(ba_interval.end, split_activity.suggested_end_time, split_activity)
                 metrics.incr("activities enhancing basic activity by the start", split_activity.duration())
             else:
                 # If activity is `in_trustable_boundaries=end` then skip it.
@@ -415,13 +419,13 @@ def _build_result_activity(
                     "activities unable to enhance basic activity by the start", interval.length().total_seconds()
                 )
             continue
-        # Check BA overlaps the end of activity.
+        # 3. Handle case when BA overlaps the end of activity.
         if ba_interval.contains_point(interval.end):
             if boundaries == IntervalBoundaries.END:
                 # If activity is `in_trustable_boundaries=end` then concatenate data from it into BA.
                 ra_events.extend(activity.events)
                 overlapping_activities.append(activity)
-                candidates_tree.remove(interval)
+                candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
                 metrics.incr("activities absorbed by basic activity at the end", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
                 # If activity is `in_trustable_boundaries=whole` then split activity,
@@ -429,7 +433,6 @@ def _build_result_activity(
                 split_activity = _cut_activity_start(activity, ba_interval.begin)
                 ra_events.extend(split_activity.events)
                 overlapping_activities.append(split_activity)
-                candidates_tree.remove(interval)
                 metrics.incr("activities enhancing basic activity by the end", split_activity.duration())
             else:
                 # If activity is `in_trustable_boundaries=start` then skip it.
@@ -437,23 +440,17 @@ def _build_result_activity(
                     "activities unable to enhance basic activity by the end", interval.length().total_seconds()
                 )
             continue
-        # If BA itself is placed inside actvity then concatenate middle of it
-        # and only if it is `in_trustable_boundaries=whole`.
+        # 4 Handle case when BA itself is placed inside actvity.
         if boundaries == IntervalBoundaries.DIM:
             tmp = _cut_activity_start(activity, ba_interval.begin)
             tmp = _cut_activity_end(tmp, ba_interval.end)
             ra_events.extend(tmp.events)
             overlapping_activities.append(tmp)
-            candidates_tree.remove(interval)
-            # Note that tail of the activity may be used for the next basic/candidate activity.
-            candidates_tree.addi(ba_interval.end, tmp.suggested_end_time, tmp)
             metrics.incr("activities enhancing basic activity by the middle", ba_interval.length().total_seconds())
             continue
-        # Skip all other cases.
-        raise NotImplementedError(
-            f"Inner error when {activity} marked as overlapping with basic activity"
-            f"{ba_interval} but in reality it is not."
-        )
+        else:
+            # Otherwise BA is in the middle of activity with START or END boundaries.
+            continue
 
     # Build raw RA, i.e. with "not sure end". Fill it with all the events from the "enhancing" activities.
     ra_duration = ba_interval.length().seconds
@@ -497,7 +494,7 @@ def _build_activity_name(
         strategy_to_name.values(),
         key=lambda x: (
             x.out_produces_good_activity_name,
-            sum(a.duration() * a.density for a in grouped_activities[x.name])
+            sum(a.duration() * a.density for a in grouped_activities[x.name]),
         ),
         reverse=True,
     )
@@ -702,71 +699,105 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             if "debug_buckets_handler" not in context:
                 context["debug_buckets_handler"] = DebugBucketsHandler()
 
+    def _check_and_report_basic_activity_interval(
+        self,
+        ba_interval: intervaltree.Interval,
+        found_among: int,
+        start_point: datetime.datetime,
+        metric_name: str,
+        metrics: Metrics,
+    ) -> intervaltree.Interval:
+        assert ba_interval.end > ba_interval.begin, f"Inner error with choosing as basic: {ba_interval.data}"
+        metrics.incr(metric_name, (ba_interval.end - ba_interval.begin).total_seconds())
+        LOG.info(
+            "Sorted out 'basic' activity at %s..%s from %d candidates: %s",
+            datetime_to_time_str(start_point),
+            datetime_to_time_str(ba_interval.end),
+            found_among,
+            ba_interval.data,
+        )
+        return ba_interval
+
     def _find_basic_activity_interval(
         self,
         candidates_tree: intervaltree.IntervalTree,
         start_point: datetime.datetime,
-        max_end: datetime.datetime,
+        max_duration_seconds: float,
         metrics: Metrics,
     ) -> Optional[intervaltree.Interval]:
-        candidates = candidates_tree.overlap(start_point, candidates_tree.end())
-        if not candidates:
-            # We've reached the end of the candidates tree, i.e. no more activities are possible.
-            return None
+        # We need to find "basic activity" as close as possible to the `start_point`.
+        # Activities may both start later than `start_point` and start before `start_point`.
+        # BA should better start on `start_point` but in case if no such activities this time or it is some
+        # START/END boundaries activity then it cannot be BA.
+        # So filter out what would be the appropriate:
+        # - Best case when BA starts exaclty on `start_point`
+        #   and ends later then `start_point` + MIN_ACTIVITY_DURATION_SEC.
+        # - If BA starts earlier than `start_point` it should end later then `start_point` + MIN_ACTIVITY_DURATION_SEC.
+        # - If no such activities left then BA starts later.
 
-        # Sort candidates by begin (next by inverted end) - it is required for all other steps.
+        # Search for "Best case when BA starts exaclty on `start_point`".
+        candidates = candidates_tree.at(start_point)
+        # Sort candidates by "begin" and by duration (to get shortest first).
         candidates: List[intervaltree.Interval] = sorted(candidates, key=lambda x: (x.begin, x.end - x.begin))
+        min_duraion = datetime.timedelta(seconds=MIN_ACTIVITY_DURATION_SEC)
+        end_point = start_point + min_duraion
+        for candidate in candidates:
+            if candidate.begin == start_point and candidate.end >= end_point:
+                ba_interval = intervaltree.Interval(candidate.begin, candidate.end, candidate.data)
+                return self._check_and_report_basic_activity_interval(
+                    ba_interval, len(candidates), start_point, "basic activities started right after previous", metrics
+                )
 
-        # Find point where closest activity starts (activities may have gap with `start_point`),
-        # add MIN_ACTIVITY_DURATION_SEC to it and consider only activities started in this interval.
-        # Because we need to have "basic activity" as close as possible to last `start_point`.
-        real_start_point: datetime.datetime = candidates[0].begin
-        end_point = real_start_point + datetime.timedelta(seconds=MIN_ACTIVITY_DURATION_SEC)
-        candidates = [x for x in candidates if x.begin <= end_point]
-
-        # Try to filter out candidates which are between MIN_ACTIVITY_DURATION_SEC and `max_end`.
-        min_duraiton_timedelta = datetime.timedelta(seconds=MIN_ACTIVITY_DURATION_SEC)
-        max_duraiton_timedelta = datetime.timedelta(seconds=max_end)
-        filtered_candidates = [x for x in candidates if min_duraiton_timedelta <= x.length() <= max_duraiton_timedelta]
-        if filtered_candidates:
-            candidates = filtered_candidates
-            metrics.incr("basic activities with perfect duration")
-        else:
-            metrics.incr("basic activities with imperfect duration")
-        metrics.incr(f"basic activities with {len(candidates)} candidates after time filters")
-
-        # Sort list of candidates with following rules in the order:
-        # - density
-        # - inverted duration (to take longest available) taking into account real start date,
-        # - boundaries (to take with strictest borders possible),
-        # - inverted out_produces_good_activity_name (to take good activity name providers first).
-        candidates = sorted(
-            candidates,
-            key=lambda x: (
-                x.data.density,
-                max(real_start_point.timestamp(), (x.begin - x.end).total_seconds()),
-                x.data.strategy.in_trustable_boundaries,
-                not x.data.strategy.out_produces_good_activity_name,
-            ),
-        )
-
-        # Take first candidate after sorting. Remember to keep real_start_point as a start of the interval.
-        ba_interval = intervaltree.Interval(real_start_point, candidates[0].end, candidates[0].data)
-
-        # Put metric and logs.
-        if start_point < candidates[0].begin:
-            metrics.incr(
-                "basic activities started with a gap after previous",
-                (candidates[0].begin - start_point).total_seconds(),
-            )
-        LOG.info(
-            "Sorted out 'basic' activity at %s..%s from %d candidates: %s",
-            datetime_to_time_str(real_start_point),
-            datetime_to_time_str(end_point),
-            len(candidates),
-            ba_interval.data,
-        )
-        return ba_interval
+        # Check remained cases in one loop.
+        # Note that event we will choose activity started earlier it still should overlap `start_point`.
+        max_duration = datetime.timedelta(seconds=max_duration_seconds)
+        start_point_in_past = start_point - max_duration
+        end_point = start_point + min_duraion
+        real_start_point = None
+        real_start_point_candidates_cnt = 0
+        no_hope_end_point = candidates_tree.end()
+        last_hope_candidate = None
+        candidates: List[intervaltree.Interval] = sorted(candidates_tree, key=lambda x: (x.begin, x.end - x.begin))
+        for i, candidate in enumerate(candidates):
+            # Search for activities started earlier than `start_point`.
+            if real_start_point is None and candidate.begin >= start_point_in_past and candidate.end >= end_point:
+                ba_interval = intervaltree.Interval(
+                    start_point, min(candidate.end, start_point + max_duration), candidate.data
+                )
+                return self._check_and_report_basic_activity_interval(
+                    ba_interval, i + 1, start_point, "basic activities started started earlier then previous", metrics
+                )
+            if candidate.begin > start_point:
+                if real_start_point is None:
+                    # Once we've found activity after `start_point` then update some variables for search.
+                    real_start_point = candidate.begin
+                    end_point = candidate.begin + min_duraion
+                    no_hope_end_point = candidate.begin + max_duration
+                real_start_point_candidates_cnt += 1
+                if candidate.end >= end_point:
+                    # Start BA from real start point anyway.
+                    ba_interval = intervaltree.Interval(real_start_point, candidate.end, candidate.data)
+                    return self._check_and_report_basic_activity_interval(
+                        ba_interval,
+                        real_start_point_candidates_cnt,
+                        start_point,
+                        "basic activities started later then previous",
+                        metrics,
+                    )
+                elif candidate.begin == real_start_point:
+                    last_hope_candidate = candidate
+            elif candidate.begin >= no_hope_end_point:
+                # Looks like we haven't found a candidate with good duration. Take "last hope" in this case.
+                if last_hope_candidate is None:
+                    last_hope_candidate = candidate
+                ba_interval = intervaltree.Interval(real_start_point, candidate.end, candidate.data)
+                return self._check_and_report_basic_activity_interval(
+                    ba_interval,
+                    real_start_point_candidates_cnt,
+                    start_point,
+                    "basic activities taken from remainings",
+                    metrics,
+                )
 
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
@@ -786,7 +817,11 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             metrics.incr("iterations to assemble remaining activities")
             # Find "basic activity" to base "result" activity on interval of it.
             ba_interval = self._find_basic_activity_interval(
-                candidates_tree, current_start_point, MAX_ACTIVITY_DURATION_SEC, metrics
+                # TODO handle stopwatch resulting activities! Provide "current_end_point"!
+                candidates_tree,
+                current_start_point,
+                MAX_ACTIVITY_DURATION_SEC,
+                metrics,
             )
             if ba_interval is None:
                 break  # No more activities are possible.
