@@ -130,9 +130,11 @@ def convert_aw_events_to_activities(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Calls AcivityWatch for all available events on specified date, "
-        "merges all events by specified rules into linked list of 'intervals' and"
-        "then separates this list into 'ready to import' actvities."
+        description="Calls local ActivityWatch for all available events on specified date,"
+        " analyzes all events to build list of activities per importer, merges them"
+        " into list of actvities."
+        "\nTo see debug logs need to set environment variable 'LOGLEVEL=debug',"
+        " but they are mosly for ActivityWatch client communication debugging."
     )
     parser.add_argument(
         "date",

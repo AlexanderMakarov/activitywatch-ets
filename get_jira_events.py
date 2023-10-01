@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
-import datetime
-from typing import List, Set, Tuple
 import argparse
+import datetime
 import difflib
-import jira
 import logging
+from typing import List, Set, Tuple
+
+import jira
 
 from activity_merger.config.config import (
-    LOG,
-    JIRA_SCRAPER_NAME,
-    JIRA_BUCKET_ID,
-    JIRA_URL,
-    JIRA_LOGIN_EMAIL,
-    JIRA_LOGIN_API_TOKEN,
-    JIRA_PROJECTS,
-    JIRA_ISSUES_MAX,
     EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
-)
-from activity_merger.helpers.helpers import (
-    setup_logging,
-    valid_date,
-    ensure_datetime,
-    upload_events,
-    event_to_str,
-    CURRENT_TIMEZONE,
+    JIRA_BUCKET_ID,
+    JIRA_ISSUES_MAX,
+    JIRA_LOGIN_API_TOKEN,
+    JIRA_LOGIN_EMAIL,
+    JIRA_PROJECTS,
+    JIRA_SCRAPER_NAME,
+    JIRA_URL,
+    LOG,
 )
 from activity_merger.domain.input_entities import Event
-
+from activity_merger.helpers.helpers import (
+    datetime_to_time_str,
+    ensure_datetime,
+    event_to_str,
+    setup_logging,
+    upload_events,
+    valid_date,
+)
 
 JIRA_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"
 JIRA_TICKET_FIELDS_VARIABLE_UPDATE_COMPLEXITY = {"description", "summary", "labels", "Component"}
@@ -134,7 +134,7 @@ def _format_jira_event_for_log(event: Event) -> str:
     change_desc = f"{data['symbols_count']} changes in '{field}'"
     if field not in JIRA_TICKET_FIELDS_VARIABLE_UPDATE_COMPLEXITY:
         change_desc += ": " + data["change_desc"]
-    return f"{{{event.timestamp.astimezone(CURRENT_TIMEZONE):%H:%M:%S} {data['jira_id']} {change_desc}}}"
+    return f"{{{datetime_to_time_str(event.timestamp)} {data['jira_id']} {change_desc}}}"
 
 
 def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_date: datetime.datetime) -> List[Event]:

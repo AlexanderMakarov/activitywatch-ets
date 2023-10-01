@@ -30,16 +30,21 @@ def event_data_to_str(event: Event) -> str:
     return str(event.data)
 
 
+def datetime_to_time_str(date: datetime.datetime) -> str:
+    date = date if date.tzinfo == CURRENT_TIMEZONE else date.astimezone(CURRENT_TIMEZONE)
+    return f"{date:%H:%M:%S}"
+
+
 def event_to_str(event: Event) -> str:
     return (
-        f"{event.timestamp.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"
-        f"..{(event.timestamp + event.duration).astimezone(CURRENT_TIMEZONE):%H:%M:%S}("
+        f"{datetime_to_time_str(event.timestamp)}"
+        f"..{datetime_to_time_str(event.timestamp + event.duration)}("
         f"{event_data_to_str(event)})"
     )
 
 
 def from_start_to_end_to_str(start: datetime.datetime, end: datetime.datetime) -> str:
-    return f"{start.astimezone(CURRENT_TIMEZONE):%H:%M:%S}..{end.astimezone(CURRENT_TIMEZONE):%H:%M:%S}"
+    return f"{datetime_to_time_str(start)}..{datetime_to_time_str(end)}"
 
 
 def seconds_to_timedelta(seconds: float) -> datetime.timedelta:

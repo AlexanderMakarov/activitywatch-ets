@@ -4,15 +4,19 @@ from typing import Dict, List, Optional, Set
 
 import intervaltree
 
-from ..config.config import (DEBUG_BUCKET_PREFIX,
-                             LIMIT_OF_RESULTING_ACTIVITIES, LOG,
-                             MAX_ACTIVITY_DURATION_SEC,
-                             MIN_ACTIVITY_DURATION_SEC)
+from activity_merger.helpers.helpers import datetime_to_time_str
+
+from ..config.config import (
+    DEBUG_BUCKET_PREFIX,
+    LIMIT_OF_RESULTING_ACTIVITIES,
+    LOG,
+    MAX_ACTIVITY_DURATION_SEC,
+    MIN_ACTIVITY_DURATION_SEC,
+)
 from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
-from .strategies import (BUCKET_AFK_PREFIX, ActivitiesByStrategy,
-                         ActivityByStrategy, calculate_activity_density)
+from .strategies import BUCKET_AFK_PREFIX, ActivitiesByStrategy, ActivityByStrategy, calculate_activity_density
 
 
 def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
@@ -362,7 +366,7 @@ def _build_result_activity(
 ) -> Activity:
     # Find all overlapping activities.
     overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)  # Includes BA.
-    LOG.debug("Basic activity is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
+    LOG.info("Basic activity is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
     ra_events = ba_interval.data.events
     overlapping_activities: List[ActivityByStrategy] = [ba_interval.data]
     for interval in overlapping_intervals:
@@ -684,49 +688,67 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
     def _find_basic_activity_interval(
         self,
         candidates_tree: intervaltree.IntervalTree,
-        current_start_point: datetime.datetime,
+        start_point: datetime.datetime,
         max_end: datetime.datetime,
         metrics: Metrics,
     ) -> Optional[intervaltree.Interval]:
-        candidates: Set[intervaltree.Interval] = candidates_tree.at(current_start_point)
-        if not candidates:
-            # If nothing overlaps start point then check until the end of the candidates tree - probably we have a gap.
-            candidates = candidates_tree.overlap(current_start_point, candidates_tree.end())
-            if candidates:
-                metrics.incr("basic activities started with a gap after previous")
-        else:
-            metrics.incr("basic activities started right after previous")
+        candidates = candidates_tree.overlap(start_point, candidates_tree.end())
         if not candidates:
             # We've reached the end of the candidates tree, i.e. no more activities are possible.
             return None
 
-        # Sort list of candidates with following rules in the order:
-        # - start time (to take first available),
-        # - inverted duration multiplied on density (to take profed longest available),
-        # - boundaries (to take with strictest borders possible),
-        # - inverted out_produces_good_activity_name (to take good activity name providers first)
-        candidates = sorted(
-            candidates,
-            key=lambda x: (
-                x.begin,
-                (x.begin - x.end) * x.data.density,
-                x.data.strategy.in_trustable_boundaries,
-                x.data.strategy.out_produces_good_activity_name,
-            ),
-        )
+        # Sort candidates by begin (next by inverted end) - it is required for all other steps.
+        candidates: List[intervaltree.Interval] = sorted(candidates, key=lambda x: (x.begin, x.end - x.begin))
+
+        # Find point where closest activity starts (activities may have gap with `start_point`),
+        # add MIN_ACTIVITY_DURATION_SEC to it and consider only activities started in this interval.
+        # Because we need to have "basic activity" as close as possible to last `start_point`.
+        real_start_point: datetime.datetime = candidates[0].begin
+        end_point = real_start_point + datetime.timedelta(seconds=MIN_ACTIVITY_DURATION_SEC)
+        candidates = [x for x in candidates if x.begin <= end_point]
+
         # Try to filter out candidates which are between MIN_ACTIVITY_DURATION_SEC and `max_end`.
         min_duraiton_timedelta = datetime.timedelta(seconds=MIN_ACTIVITY_DURATION_SEC)
         max_duraiton_timedelta = datetime.timedelta(seconds=max_end)
         filtered_candidates = [x for x in candidates if min_duraiton_timedelta <= x.length() <= max_duraiton_timedelta]
-        # Check if we have something after the filtering and set `ba_interval`.
-        ba_interval: intervaltree.Interval
         if filtered_candidates:
-            ba_interval = filtered_candidates[0]
+            candidates = filtered_candidates
             metrics.incr("basic activities with perfect duration")
         else:
-            # If after filtering remains nothing then just take first without filters.
-            ba_interval = candidates[0]
             metrics.incr("basic activities with imperfect duration")
+        metrics.incr(f"basic activities with {len(candidates)} candidates after time filters")
+
+        # Sort list of candidates with following rules in the order:
+        # - density
+        # - inverted duration (to take longest available) taking into account real start date,
+        # - boundaries (to take with strictest borders possible),
+        # - inverted out_produces_good_activity_name (to take good activity name providers first).
+        candidates = sorted(
+            candidates,
+            key=lambda x: (
+                x.data.density,
+                max(real_start_point.timestamp(), (x.begin - x.end).total_seconds()),
+                x.data.strategy.in_trustable_boundaries,
+                not x.data.strategy.out_produces_good_activity_name,
+            ),
+        )
+
+        # Take first candidate after sorting. Remember to keep real_start_point as a start of the interval.
+        ba_interval = intervaltree.Interval(real_start_point, candidates[0].end, candidates[0].data)
+
+        # Put metric and logs.
+        if start_point < candidates[0].begin:
+            metrics.incr(
+                "basic activities started with a gap after previous",
+                (candidates[0].begin - start_point).total_seconds(),
+            )
+        LOG.info(
+            "Sorted out 'basic' activity at %s..%s from %d candidates: %s",
+            datetime_to_time_str(real_start_point),
+            datetime_to_time_str(end_point),
+            len(candidates),
+            ba_interval.data,
+        )
         return ba_interval
 
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
@@ -751,7 +773,6 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             )
             if ba_interval is None:
                 break  # No more activities are possible.
-            LOG.info("Using as 'basic' activity: %s", ba_interval.data)
             # Find all overlapping activities and make new `result` activity (RA).
             ra = _build_result_activity(
                 ba_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics
