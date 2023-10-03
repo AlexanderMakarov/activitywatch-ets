@@ -115,7 +115,7 @@ def convert_aw_events_to_activities(
     analyzer_result = merge_activities(
         activities_by_strategy=activities_by_strategy,
         steps=[
-            MakeResultTreeFromSelfSufficientActivitiesStep(),
+            MakeResultTreeFromSelfSufficientActivitiesStep(True),
             ChopActivitiesByResultTreeStep(True, True),
             MakeCandidatesTreeStep(is_import_debug_buckets),
             MergeCandidatesTreeIntoResultTreeStep(is_import_debug_buckets, is_only_good_strategies_for_description),
