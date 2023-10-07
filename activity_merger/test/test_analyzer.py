@@ -1,10 +1,16 @@
+import dataclasses
+import logging
 import unittest
 import datetime
 from typing import List, Dict, Tuple
 from parameterized import parameterized
 import intervaltree
 
-from activity_merger.domain.analyzer import _exclude_tree_intervals, _include_tree_intervals
+from activity_merger.domain.analyzer import (
+    MergeCandidatesTreeIntoResultTreeStep,
+    _exclude_tree_intervals,
+    _include_tree_intervals,
+)
 
 from . import build_datetime, build_timedelta
 from ..domain.metrics import Metric, Metrics
@@ -69,6 +75,24 @@ EVENT1700_1800 = Event("b1", HOUR17_00, datetime.timedelta(hours=1), "17:00..18:
 EVENT1900_2000 = Event("b1", HOUR19_00, datetime.timedelta(hours=1), "19:00..20:00")
 
 STRATEGY = Strategy(name="ts", bucket_prefix="ts")
+ACTIVITY = ActivityByStrategy(
+    suggested_start_time=HOUR4_00,
+    suggested_end_time=HOUR4_00,
+    max_start_time=HOUR4_00,
+    min_end_time=HOUR4_00,
+    events=[],
+    density=1,
+    grouping_data="gd",
+    strategy=STRATEGY,
+)
+STRATEGY_STRICT = Strategy(name="ts", bucket_prefix="ts", in_trustable_boundaries=IntervalBoundaries.STRICT)
+ACTIVITY_STRICT = dataclasses.replace(ACTIVITY, strategy=STRATEGY_STRICT)
+STRATEGY_START = Strategy(name="ts", bucket_prefix="ts", in_trustable_boundaries=IntervalBoundaries.START)
+ACTIVITY_START = dataclasses.replace(ACTIVITY, strategy=STRATEGY_START)
+STRATEGY_END = Strategy(name="ts", bucket_prefix="ts", in_trustable_boundaries=IntervalBoundaries.END)
+ACTIVITY_END = dataclasses.replace(ACTIVITY, strategy=STRATEGY_END)
+STRATEGY_DIM = Strategy(name="ts", bucket_prefix="ts", in_trustable_boundaries=IntervalBoundaries.DIM)
+ACTIVITY_DIM = dataclasses.replace(ACTIVITY, strategy=STRATEGY_DIM)
 ACTIVITIES = [
     ActivityByStrategy(
         suggested_start_time=HOUR5_00,
@@ -76,6 +100,7 @@ ACTIVITIES = [
         max_start_time=HOUR5_00,
         min_end_time=HOUR6_00,
         events=[EVENT500_600],
+        density=0,
         grouping_data="a5-6",
         strategy=STRATEGY,
     ),
@@ -85,6 +110,7 @@ ACTIVITIES = [
         max_start_time=HOUR7_00,
         min_end_time=HOUR9_00,
         events=[EVENT700_730, EVENT730_800, EVENT830_900],
+        density=0,
         grouping_data="a7-9",
         strategy=STRATEGY,
     ),
@@ -94,6 +120,7 @@ ACTIVITIES = [
         max_start_time=HOUR10_00,
         min_end_time=HOUR13_00,
         events=[EVENT1000_1030, EVENT1030_1130, EVENT1130_1300],
+        density=0,
         grouping_data="a10-13",
         strategy=STRATEGY,
     ),
@@ -103,6 +130,7 @@ ACTIVITIES = [
         max_start_time=HOUR14_00,
         min_end_time=HOUR16_00,
         events=[EVENT1400_1600],
+        density=0,
         grouping_data="a14-16",
         strategy=STRATEGY,
     ),
@@ -112,6 +140,7 @@ ACTIVITIES = [
         max_start_time=HOUR17_00,
         min_end_time=HOUR18_00,
         events=[EVENT1700_1800],
+        density=0,
         grouping_data="a17-18",
         strategy=STRATEGY,
     ),
@@ -139,19 +168,26 @@ class TestAnalyzer(unittest.TestCase):
                 TREE,
                 [
                     ActivityByStrategy(
-                        HOUR7_00, HOUR8_00, HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], "a7-9", STRATEGY
+                        HOUR7_00, HOUR8_00, HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 0, "a7-9", STRATEGY
                     ),
                     ActivityByStrategy(
-                        HOUR10_00, HOUR11_00, HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], "a10-13", STRATEGY
+                        HOUR10_00,
+                        HOUR11_00,
+                        HOUR10_00,
+                        HOUR11_00,
+                        [EVENT1000_1030, EVENT1030_1130],
+                        0,
+                        "a10-13",
+                        STRATEGY,
                     ),
                     ActivityByStrategy(
-                        HOUR12_00, HOUR13_00, HOUR12_00, HOUR13_00, [EVENT1130_1300], "a10-13", STRATEGY
+                        HOUR12_00, HOUR13_00, HOUR12_00, HOUR13_00, [EVENT1130_1300], 0, "a10-13", STRATEGY
                     ),
                     ActivityByStrategy(
-                        HOUR15_00, HOUR16_00, HOUR15_00, HOUR16_00, [EVENT1400_1600], "a14-16", STRATEGY
+                        HOUR15_00, HOUR16_00, HOUR15_00, HOUR16_00, [EVENT1400_1600], 0, "a14-16", STRATEGY
                     ),
                     ActivityByStrategy(
-                        HOUR17_00, HOUR18_00, HOUR17_00, HOUR18_00, [EVENT1700_1800], "a17-18", STRATEGY
+                        HOUR17_00, HOUR18_00, HOUR17_00, HOUR18_00, [EVENT1700_1800], 0, "a17-18", STRATEGY
                     ),
                 ],
                 {
@@ -183,6 +219,7 @@ class TestAnalyzer(unittest.TestCase):
                             EVENT1600_1700,
                             EVENT1700_1800,
                         ],
+                        density=0,
                         grouping_data="a7-18",
                         strategy=STRATEGY,
                     ),
@@ -190,18 +227,28 @@ class TestAnalyzer(unittest.TestCase):
                 TREE,
                 [
                     ActivityByStrategy(
-                        HOUR7_00, HOUR8_00, HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], "a7-18", STRATEGY
+                        HOUR7_00, HOUR8_00, HOUR7_00, HOUR8_00, [EVENT700_730, EVENT730_800], 0, "a7-18", STRATEGY
                     ),
                     ActivityByStrategy(
-                        HOUR10_00, HOUR11_00, HOUR10_00, HOUR11_00, [EVENT1000_1030, EVENT1030_1130], "a7-18", STRATEGY
+                        HOUR10_00,
+                        HOUR11_00,
+                        HOUR10_00,
+                        HOUR11_00,
+                        [EVENT1000_1030, EVENT1030_1130],
+                        0,
+                        "a7-18",
+                        STRATEGY,
                     ),
-                    ActivityByStrategy(HOUR12_00, HOUR13_00, HOUR12_00, HOUR13_00, [EVENT1130_1300], "a7-18", STRATEGY),
+                    ActivityByStrategy(
+                        HOUR12_00, HOUR13_00, HOUR12_00, HOUR13_00, [EVENT1130_1300], 0, "a7-18", STRATEGY
+                    ),
                     ActivityByStrategy(
                         HOUR15_00,
                         HOUR18_00,
                         HOUR15_00,
                         HOUR18_00,
                         [EVENT1400_1600, EVENT1600_1700, EVENT1700_1800],
+                        0,
                         "a7-18",
                         STRATEGY,
                     ),
@@ -248,12 +295,13 @@ class TestAnalyzer(unittest.TestCase):
                 IntervalBoundaries.STRICT,
                 TREE,
                 [
-                    ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, [EVENT500_600], "a5-6", STRATEGY),
+                    ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, [EVENT500_600], 0, "a5-6", STRATEGY),
                 ],
                 {
                     "activities completely covered by tt": Metric(1, float(3600)),  # a5-6
+                    "activities not completely covered by tt": Metric(3, float(25200)),  # all remaining
                     "activities removed because are out of tt": Metric(1, float(3600)),  # a17-18
-                    "activities with ActivityBoundaries.STRICT removed by tt": Metric(3, float(25200)),
+                    "activities with IntervalBoundaries.STRICT removed by tt": Metric(3, float(25200)),
                 },
             ),
             (
@@ -262,15 +310,16 @@ class TestAnalyzer(unittest.TestCase):
                 IntervalBoundaries.START,
                 TREE,
                 [
-                    ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, [EVENT500_600], "a5-6", STRATEGY),
+                    ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, [EVENT500_600], 0, "a5-6", STRATEGY),
                     ActivityByStrategy(
-                        HOUR14_00, HOUR15_00, HOUR14_00, HOUR15_00, [EVENT1400_1600], "a14-16", STRATEGY
+                        HOUR14_00, HOUR15_00, HOUR14_00, HOUR15_00, [EVENT1400_1600], 0, "a14-16", STRATEGY
                     ),  # Note that duration is measured by event-s length.
                 ],
                 {
                     "activities completely covered by tt": Metric(1, float(3600)),  # a5-6
+                    "activities not completely covered by tt": Metric(3, 25200.0),  # all remaining
                     "activities removed because are out of tt": Metric(1, float(3600)),  # a17-18
-                    "activities removed with ActivityBoundaries.START started before tt": Metric(2, float(18000)),
+                    "activities removed with IntervalBoundaries.START started before tt": Metric(2, float(18000)),
                     "activities with tail cut by tt": Metric(1, float(3600)),  # a14-16
                 },
             ),
@@ -280,13 +329,14 @@ class TestAnalyzer(unittest.TestCase):
                 IntervalBoundaries.END,
                 TREE,
                 [
-                    ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, [EVENT500_600], "a5-6", STRATEGY),
-                    ActivityByStrategy(HOUR8_00, HOUR9_00, HOUR8_00, HOUR9_00, [EVENT830_900], "a7-9", STRATEGY),
+                    ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, [EVENT500_600], 0, "a5-6", STRATEGY),
+                    ActivityByStrategy(HOUR8_00, HOUR9_00, HOUR8_00, HOUR9_00, [EVENT830_900], 0, "a7-9", STRATEGY),
                 ],
                 {
                     "activities completely covered by tt": Metric(1, float(3600)),  # a5-6
+                    "activities not completely covered by tt": Metric(3, 25200.0),  # all remaining
                     "activities removed because are out of tt": Metric(1, float(3600)),  # a17-18
-                    "activities removed with ActivityBoundaries.END ended before tt": Metric(2, float(18000)),
+                    "activities removed with IntervalBoundaries.END ended before tt": Metric(2, float(18000)),
                     "activities with start cut by tt": Metric(1, float(3600)),  # a8-9
                 },
             ),
@@ -296,19 +346,27 @@ class TestAnalyzer(unittest.TestCase):
                 IntervalBoundaries.DIM,
                 TREE,
                 [
-                    ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, [EVENT500_600], "a5-6", STRATEGY),
-                    ActivityByStrategy(HOUR8_00, HOUR9_00, HOUR8_00, HOUR9_00, [EVENT830_900], "a7-9", STRATEGY),
+                    ActivityByStrategy(HOUR5_00, HOUR6_00, HOUR5_00, HOUR6_00, [EVENT500_600], 0, "a5-6", STRATEGY),
+                    ActivityByStrategy(HOUR8_00, HOUR9_00, HOUR8_00, HOUR9_00, [EVENT830_900], 0, "a7-9", STRATEGY),
                     ActivityByStrategy(
-                        HOUR11_00, HOUR12_00, HOUR11_00, HOUR12_00, [EVENT1030_1130, EVENT1130_1300], "a10-13", STRATEGY
+                        HOUR11_00,
+                        HOUR12_00,
+                        HOUR11_00,
+                        HOUR12_00,
+                        [EVENT1030_1130, EVENT1130_1300],
+                        0,
+                        "a10-13",
+                        STRATEGY,
                     ),  # Note that duration is measured by event-s length.
                     ActivityByStrategy(
-                        HOUR14_00, HOUR15_00, HOUR14_00, HOUR15_00, [EVENT1400_1600], "a14-16", STRATEGY
+                        HOUR14_00, HOUR15_00, HOUR14_00, HOUR15_00, [EVENT1400_1600], 0, "a14-16", STRATEGY
                     ),  # Note that duration is measured by event-s length.
                 ],
                 {
                     "activities completely covered by tt": Metric(1, float(3600)),  # a5-6
+                    "activities not completely covered by tt": Metric(3, 25200.0),  # all remaining
                     "activities removed because are out of tt": Metric(1, float(3600)),  # a17-18
-                    "activities with ActivityBoundaries.DIM cut by tt": Metric(3, 0.0),
+                    "activities with IntervalBoundaries.DIM cut by tt": Metric(3, 0.0),
                 },
             ),
             (
@@ -333,6 +391,7 @@ class TestAnalyzer(unittest.TestCase):
                             EVENT1600_1700,
                             EVENT1700_1800,
                         ],
+                        density=0,
                         grouping_data="a5-18",
                         strategy=STRATEGY,
                     ),
@@ -340,21 +399,34 @@ class TestAnalyzer(unittest.TestCase):
                 IntervalBoundaries.DIM,
                 TREE,
                 [
-                    ActivityByStrategy(HOUR5_00, HOUR7_00, HOUR5_00, HOUR7_00, [EVENT500_600], "a5-18", STRATEGY),
+                    ActivityByStrategy(HOUR5_00, HOUR7_00, HOUR5_00, HOUR7_00, [EVENT500_600], 0, "a5-18", STRATEGY),
                     ActivityByStrategy(
-                        HOUR8_00, HOUR10_00, HOUR8_00, HOUR10_00, [EVENT830_900, EVENT900_1000], "a5-18", STRATEGY
+                        HOUR8_00, HOUR10_00, HOUR8_00, HOUR10_00, [EVENT830_900, EVENT900_1000], 0, "a5-18", STRATEGY
                     ),
                     ActivityByStrategy(
-                        HOUR11_00, HOUR12_00, HOUR11_00, HOUR12_00, [EVENT1030_1130, EVENT1130_1300], "a5-18", STRATEGY
+                        HOUR11_00,
+                        HOUR12_00,
+                        HOUR11_00,
+                        HOUR12_00,
+                        [EVENT1030_1130, EVENT1130_1300],
+                        0,
+                        "a5-18",
+                        STRATEGY,
                     ),  # Note that duration is measured by event-s length.
                     ActivityByStrategy(
-                        HOUR13_00, HOUR15_00, HOUR13_00, HOUR15_00, [EVENT1300_1400, EVENT1400_1600], "a5-18", STRATEGY
+                        HOUR13_00,
+                        HOUR15_00,
+                        HOUR13_00,
+                        HOUR15_00,
+                        [EVENT1300_1400, EVENT1400_1600],
+                        0,
+                        "a5-18",
+                        STRATEGY,
                     ),  # Note that duration is measured by event-s length.
                 ],
                 {
-                    "activities with ActivityBoundaries.DIM cut by tt": Metric(
-                        4, 0.0
-                    ),  # We only cut parts of 1 activity.
+                    "activities not completely covered by tt": Metric(1, 46800.0),
+                    "activities with IntervalBoundaries.DIM cut by tt": Metric(4, 0.0),  # Cut parts of 1 activity.
                 },
             ),
         ]
@@ -371,9 +443,151 @@ class TestAnalyzer(unittest.TestCase):
         self.maxDiff = None
         metrics = Metrics({})
         # Act
-        actual: List[ActivityByStrategy] = _include_tree_intervals(activities, boundaries, tree, metrics, "tt")
+        actual: List[ActivityByStrategy] = _include_tree_intervals(
+            activities=activities, boundaries=boundaries, tree=tree, metrics=metrics, name_of_tree="tt"
+        )
         # Assert
         self.assertListEqual(expected_activities, actual, "wrong activities")
+        self.assertDictEqual(
+            {k: v for (k, v) in expected_metrics.items()},
+            {k: v for (k, v) in metrics.metrics.items() if v.cnt > 0},
+            "wrong metrics",
+        )
+
+
+class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
+    @parameterized.expand(
+        [
+            (
+                "perfect_match_all_dim",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_DIM),
+                        intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_DIM),
+                        intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_DIM),
+                        intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_DIM),
+                        intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_DIM),
+                        intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_DIM),
+                    ]
+                ),
+                HOUR10_00,
+                HOUR11_00,
+                3600,
+                intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_DIM),
+                {
+                    "basic activities with highest score": Metric(1, float(3600)),
+                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                },
+            ),
+            (
+                "perfect_match_all_strict",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_STRICT),
+                    ]
+                ),
+                HOUR10_00,
+                HOUR11_00,
+                3600,
+                intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_STRICT),
+                {
+                    "basic activities with highest score": Metric(1, float(3600)),
+                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                },
+            ),
+            (
+                "perfect_match_all_start",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_START),
+                        intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_START),
+                        intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_START),
+                        intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
+                        intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_START),
+                        intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_START),
+                    ]
+                ),
+                HOUR10_00,
+                HOUR11_00,
+                3600,
+                intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
+                {
+                    "basic activities with high score": Metric(1, float(3600)),
+                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                },
+            ),
+            (
+                "perfect_match_all_end",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_END),
+                        intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_END),
+                        intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_END),
+                        intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_END),
+                        intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_END),
+                        intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_END),
+                    ]
+                ),
+                HOUR10_00,
+                HOUR11_00,
+                3600,
+                intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_END),
+                {
+                    "basic activities with good score": Metric(1, float(3600)),
+                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                },
+            ),
+            (
+                "perfect_match_start_while_other_strict",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
+                        intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_STRICT),
+                        intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_STRICT),
+                    ]
+                ),
+                HOUR10_00,
+                HOUR11_00,
+                3600,
+                intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
+                {
+                    "basic activities with high score": Metric(1, float(3600)),
+                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                },
+            ),
+        ]
+    )
+    def test_find_basic_activity_interval(
+        self,
+        test_name,
+        candidates_tree: intervaltree.IntervalTree,
+        start_point: datetime.datetime,
+        end_point: datetime.datetime,
+        max_duration_seconds: float,
+        expected_interval: intervaltree.Interval,
+        expected_metrics: Dict[str, Metric],
+    ):
+        self.maxDiff = None
+        metrics = Metrics({})
+        step = MergeCandidatesTreeIntoResultTreeStep(False, True)
+        # Act
+        interval: intervaltree.Interval = step._find_basic_activity_interval(
+            candidates_tree=candidates_tree,
+            start_point=start_point,
+            end_point=end_point,
+            max_duration_seconds=max_duration_seconds,
+            metrics=metrics,
+        )
+        # Assert
+        self.assertEqual(expected_interval, interval, "wrong interval")
         self.assertDictEqual(
             {k: v for (k, v) in expected_metrics.items()},
             {k: v for (k, v) in metrics.metrics.items() if v.cnt > 0},

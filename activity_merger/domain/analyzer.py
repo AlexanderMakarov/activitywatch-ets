@@ -205,7 +205,7 @@ def _include_tree_intervals(
             continue
         else:
             metrics.incr(
-                f"activities not completely covered by {name_of_tree} and need to be chopped",
+                f"activities not completely covered by {name_of_tree}",
                 (activity.suggested_end_time - activity.suggested_start_time).total_seconds(),
             )
 
@@ -537,7 +537,12 @@ def _build_activity_name(
     return " ".join(resulting_names)
 
 
-def _add_ra(ra: Activity, is_add_debug_buckets: bool, result_tree: intervaltree.IntervalTree, debug_buckets_handler: DebugBucketsHandler):
+def _add_ra(
+    ra: Activity,
+    is_add_debug_buckets: bool,
+    result_tree: intervaltree.IntervalTree,
+    debug_buckets_handler: DebugBucketsHandler,
+):
     result_tree.addi(ra.start_time, ra.end_time, ra)
     LOG.info("Added into 'result tree' activity: %s", ra)
     # Add RA to debug bucket if need.
@@ -732,24 +737,18 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             if "debug_buckets_handler" not in context:
                 context["debug_buckets_handler"] = DebugBucketsHandler()
 
-    def _check_and_report_basic_activity_interval(
-        self,
-        ba_interval: intervaltree.Interval,
-        found_among: int,
-        start_point: datetime.datetime,
-        metric_name: str,
-        metrics: Metrics,
-    ) -> intervaltree.Interval:
-        assert ba_interval.end > ba_interval.begin, f"Inner error with choosing as basic: {ba_interval.data}"
-        metrics.incr(metric_name, (ba_interval.end - ba_interval.begin).total_seconds())
-        LOG.info(
-            "Sorted out 'basic' activity at %s..%s from %d candidates: %s",
-            datetime_to_time_str(start_point),
-            datetime_to_time_str(ba_interval.end),
-            found_among,
-            ba_interval.data,
-        )
-        return ba_interval
+    @staticmethod
+    def _score_to_desc(score: int) -> str:
+        score_description = ""
+        if score == 100:
+            score_description = "highest"
+        elif score > 60:
+            score_description = "high"
+        elif score > 30:
+            score_description = "good"
+        else:
+            score_description = "low"
+        return score_description
 
     def _find_basic_activity_interval(
         self,
@@ -759,57 +758,70 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
         max_duration_seconds: float,
         metrics: Metrics,
     ) -> Optional[intervaltree.Interval]:
-        # We need to find "basic activity" as close as possible to the `start_point`.
-        # Activities may both start later than `start_point` and start before `start_point`.
-        # BA should better start on `start_point` but in case if no such activities this time or it is some
-        # START/END boundaries activity then it cannot be BA.
-        # So filter out what would be the appropriate:
-        # - Best case when BA starts exactly on `start_point` and ends on `end_point` or
-        #   later then `start_point` + max_duration_seconds.
-        # - If BA starts earlier than `start_point` it should end later then `start_point` + MIN_ACTIVITY_DURATION_SEC.
-        # - If no such activities left then BA starts later.
+        """
+        Finds "basic" activity among tree of candidates.
+        """
         candidates: Set[intervaltree.Interval] = candidates_tree.overlap(start_point, end_point)
         if not candidates:
             return None
 
+        perfect_duration_sec = min(max_duration_seconds, (end_point - start_point).total_seconds())
         candidate_scores: List[Tuple[int, intervaltree.Interval]] = []
         for candidate in candidates:
-            score = 0
-            # Set scores for start and end points.
-            if candidate.begin == start_point:
-                score += 100
-            if candidate.end == end_point:
-                score += 100
-            # Set scores for the duration on the intereseted interval.
-            overlap_sec = candidate.overlap_size(start_point, end_point).total_seconds()
-            if overlap_sec < 0:
-                score -= 1000
-            if MIN_ACTIVITY_DURATION_SEC <= overlap_sec <= max_duration_seconds:
-                score += 200
-            # Set scores for the boundaries.
+            score: float = 0.0
+            # NOTE: keep max score = 100 to translate into percentage.
             boundaries: IntervalBoundaries = candidate.data.strategy.in_trustable_boundaries
-            if boundaries == IntervalBoundaries.STRICT:
-                score += 100
-            elif boundaries == IntervalBoundaries.DIM:
-                score += 50
-            # Set scores for the density.
-            score += candidate.data.density * 100
+            # 40 max - for start point.
+            if candidate.begin == start_point and boundaries != IntervalBoundaries.END:
+                score += 40
+            # 20 max - for end point.
+            if candidate.end == end_point and boundaries != IntervalBoundaries.START:
+                score += 20
+            # 15 max - for the density.
+            score += candidate.data.density * 15.0
+            # 10 max - for the duration on the intersected interval.
+            overlap_sec = candidate.overlap_size(start_point, end_point).total_seconds()
+            overlap_ratio = 1 - abs(perfect_duration_sec - overlap_sec) / perfect_duration_sec
+            if overlap_ratio > 0:
+                score += 10.0 * overlap_ratio
+            # 10 max - for the equality duration to required interval.
+            if (candidate.end - candidate.begin).total_seconds() == overlap_sec:
+                score += 10
+            # 5 max - for fitness into [MIN_ACTIVITY_DURATION_SEC..max_duration_seconds].
+            if MIN_ACTIVITY_DURATION_SEC <= overlap_sec <= max_duration_seconds and boundaries not in [
+                IntervalBoundaries.START,
+                IntervalBoundaries.END,
+            ]:
+                score += 5
             # Store score in the list.
             candidate_scores.append((score, candidate))
+
         # Take candidate with highest score.
-        result = sorted(candidate_scores, key=lambda x: x[0], reverse=True)[0]
-        score = result[0]
-        # Name candidate score.
-        score_description = "low"
-        if score == 650:
-            score_description = "highest"
-        elif score > 450:
-            score_description = "high"
-        elif score > 200:
-            score_description = "good"
-        return self._check_and_report_basic_activity_interval(
-            result[1], len(candidates), start_point, f"basic activities with {score_description} score", metrics
+        sorted_results = sorted(candidate_scores, key=lambda x: x[0], reverse=True)
+        # Check that interval is valid.
+        ba_interval = sorted_results[0][1]
+        assert ba_interval.end > ba_interval.begin, f"Inner error with choosing as basic: {ba_interval.data}"
+        score = sorted_results[0][0]
+        # Provide metric and log about new basic activity found.
+        score_description = self._score_to_desc(score)
+        metrics.incr(
+            f"basic activities with {score_description} score", (ba_interval.end - ba_interval.begin).total_seconds()
         )
+        LOG.info("Found 'basic activity' with %.0f '%s' score: %s", score, score_description, ba_interval)
+        # Provide metric about "how distinguishable basic activity was".
+        if len(sorted_results) > 1:
+            closest_candidate_score = sorted_results[1][0]
+            distance_desc = self._score_to_desc(score - closest_candidate_score)
+            metrics.incr(
+                f"basic activities with {distance_desc} distance from other candidates",
+                (ba_interval.end - ba_interval.begin).total_seconds(),
+            )
+        else:
+            metrics.incr(
+                "basic activities without other candidates on interval",
+                (ba_interval.end - ba_interval.begin).total_seconds(),
+            )
+        return ba_interval
 
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")

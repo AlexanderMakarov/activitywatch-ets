@@ -2,8 +2,6 @@ import collections
 import datetime
 from typing import Dict, List, Optional, Set, Callable
 
-from .interval import Interval
-
 
 Metric = collections.namedtuple("Metric", ["cnt", "duration"])
 """
@@ -15,8 +13,8 @@ One entry in `Metrics` object.
 
 class Metrics:
     """
-    Object to track metrics of actions related to `Interval`-s.
-    Each metric has name, counter of occurrences and total duration.
+    Object to track metrics related to some time intervals.
+    Each metric has name, counter of occurrences and total duration. Duration is optional and 0 by default.
     Also ther is an ability to suppress some metrics in "reporting" methods.
     """
 
@@ -40,19 +38,6 @@ class Metrics:
         self.metrics = metrics
         return self
 
-    def increment(self, metric_name: str, interval: Optional[Interval] = None) -> Metric:
-        """
-        Increment metric on one event with given `Interval` duration. May add new metrics and skip None intervals.
-        :param metric_name: Name of metric to increment.
-        :param interval: Interval to increment metric with. If `None` then metric loses duration part forever.
-        """
-        if metric_name in self.skip_metrics:
-            return
-        metric = self.metrics.get(metric_name, Metric(0, 0.0))
-        metric = Metric(metric.cnt + 1, metric.duration + interval.get_duration() if interval else 0)
-        self.metrics[metric_name] = metric
-        return metric
-
     def incr(self, metric_name: str, duration: float = 0.0) -> Metric:
         """
         Increment metric on one event with given duration. May add new metrics and skip None intervals.
@@ -66,16 +51,16 @@ class Metrics:
         self.metrics[metric_name] = metric
         return metric
 
-    def increment_and_call_handler(self, metric_name: str, interval: Interval, *args):
+    def incr_and_call_handler(self, metric_name: str, duration: float = 0.0, *args):
         """
-        Increment metric on one event with given `Interval` duration and reports it with specified handler.
+        Increment metric on one event with given duration and reports it with specified handler.
         Rejects new metrics.
         :param metric_name: Name of metric to increment.
-        :param interval: Interval to increment metric with.
+        :param duration: Duration in seconds to add. May be 0.
         :param kwargs: Extra arguments to "handler" method.
         """
         assert metric_name in self.handler_per_metric, f"Unsupported metric name '{metric_name}'."
-        if self.increment(metric_name, interval):
+        if self.incr(metric_name, duration):
             handler = self.handler_per_metric[metric_name]
             handler(*args)
 
