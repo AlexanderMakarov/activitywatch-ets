@@ -140,6 +140,12 @@ i.e. time of commit from A repo is not used for B repo events.
 
 Everything is configured in [config.py](/activity_merger/config/config.py).
 
+## Contribute
+
+1. Run [Setup](#setup).
+2. Go to "scripts" folder and run `./install-hooks.sh` from here.
+3. Commit, push, make pull requests and so on.
+
 ## Roadmap
 
 ### Must:
