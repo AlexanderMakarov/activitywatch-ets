@@ -750,7 +750,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             score_description = "low"
         return score_description
 
-    def _find_basic_activity_interval(
+    def find_basic_activity_interval(
         self,
         candidates_tree: intervaltree.IntervalTree,
         start_point: datetime.datetime,
@@ -823,49 +823,56 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             )
         return ba_interval
 
+    @staticmethod
+    def find_next_uncovered_intervals(
+        result_tree: intervaltree.IntervalTree,
+        candidates_tree: intervaltree.IntervalTree,
+        start_point: datetime.datetime = None,
+    ) -> Tuple[datetime.datetime, datetime.datetime]:
+        # If start_point is None, take the begin of the candidates_tree
+        if start_point is None:
+            start_point = candidates_tree.begin()
+        
+        # If start point is not in candidates_tree, return None
+        if not candidates_tree.overlaps_point(start_point):
+            return (None, None)
+
+        # Check if there's an overlap with result_tree
+        candidates_end = candidates_tree.end()
+        while result_tree.overlaps_point(start_point) and start_point < candidates_end:
+            overlapping_intervals = sorted(result_tree[start_point])
+            # Set start_point as the end of the last overlapping interval
+            start_point = overlapping_intervals[-1].end
+        
+        # If we reached the end of the candidates_tree without finding an uncovered interval
+        if start_point >= candidates_end:
+            return (None, None)
+
+        end_point = candidates_end
+        # If there's a result interval starting after our current start_point and before our current end_point
+        # we update the end_point to the beginning of that result interval
+        for interval in result_tree[start_point:end_point]:
+            if start_point < interval.begin < end_point:
+                end_point = interval.begin
+
+        return (start_point, end_point)
+
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
         result_tree: intervaltree.IntervalTree = context["result_tree"]
         candidates_tree: intervaltree.IntervalTree = context["candidates_tree"]
-        debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
 
-        # Loop through candidates tree and try to fill up gaps in result tree with intervals from here.
+        # Iterate through candidates tree and try to fill up gaps in result tree with intervals from here.
         # Note that very often results tree will be empty and need to make up all activities from candidates tree.
-
-        # Choose initial "current" points:
-        # TODO fix bug below - wrong coverage by activities of day
         current_start_point: datetime.datetime
         current_end_point: datetime.datetime
-        if not result_tree:
-            current_start_point = candidates_tree.begin()
-            current_end_point = candidates_tree.end()
-        else:
-            current_start_point = min(candidates_tree.begin(), result_tree.begin())
-            current_end_point = None
-            for ra_interval in sorted(result_tree):
-                if ra_interval.begin > current_start_point:
-                    # I.e. start point is placed before and we may set end point by begin of result_tree.
-                    current_end_point = ra_interval.begin
-                    break
-                else:
-                    # I.e. current interval begins before start point. Then check end of interval.
-                    if ra_interval.end >= candidates_tree.end():
-                        # I.e. candidates tree starts somewhere on this result_tree interval.
-                        # In this case we may choose start point at the end of this interval.
-                        current_start_point = ra_interval.end
-                    else:
-                        # If candidates_tree is not started yet then go next.
-                        continue
-            # If end point was not set at all then just see up to end of the candidates_tree.
-            if current_end_point is None:
-                current_end_point = candidates_tree.end()
-
-        # Start loop of filling result_tree with activities from candidates_tree.
-        # Update current_start_point and current_end_point on each iteration.
+        current_start_point, current_end_point = self.find_next_uncovered_intervals(
+            candidates_tree=candidates_tree, result_tree=result_tree
+        )
         while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
             metrics.incr("iterations to assemble remaining activities")
             # Find "basic activity" to base "result" activity on interval of it.
-            ba_interval = self._find_basic_activity_interval(
+            ba_interval = self.find_basic_activity_interval(
                 candidates_tree,
                 current_start_point,
                 current_end_point,
@@ -892,21 +899,14 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
                         (ra.end_time - existing_interval.begin).total_seconds(),
                     )
             # Add RA into the result tree.
-            result_tree.addi(ra.start_time, ra.end_time, ra)
-            LOG.info("Added into 'result tree' activity: %s", ra)
-            # Add RA to debug bucket if need.
-            if self.is_add_debug_buckets:
-                # Use the only debug bucket here because events should be consequtive.
-                debug_buckets_handler.add_event(
-                    bucket_id=debug_bucket_prefix,
-                    timestamp=ra.start_time,
-                    duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
-                    description=ra.description,
-                    density=0,  # Don't set density for "resulting" activities.
-                    events_count=len(ra.events),
-                )
+            _add_ra(ra, self.is_add_debug_buckets, result_tree, debug_buckets_handler)
             # Configure next iteration.
-            current_start_point = ra.end_time
+            current_start_point, current_end_point = self.find_next_uncovered_intervals(
+                candidates_tree=candidates_tree,
+                result_tree=result_tree,
+                start_point=ra.end_time,
+            )
+            # current_start_point = ra.end_time
         context["analyzer_result"] = AnalyzerResult(
             sorted([x.data for x in result_tree], key=lambda x: x.start_time),
             None,

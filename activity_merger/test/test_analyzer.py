@@ -476,7 +476,7 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
                 intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_DIM),
                 {
                     "basic activities with highest score": Metric(1, float(3600)),
-                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                    "basic activities with low distance from other candidates": Metric(1, 3600.0),
                 },
             ),
             (
@@ -497,7 +497,7 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
                 intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_STRICT),
                 {
                     "basic activities with highest score": Metric(1, float(3600)),
-                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                    "basic activities with low distance from other candidates": Metric(1, 3600.0),
                 },
             ),
             (
@@ -518,7 +518,7 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
                 intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
                 {
                     "basic activities with high score": Metric(1, float(3600)),
-                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                    "basic activities with low distance from other candidates": Metric(1, 3600.0),
                 },
             ),
             (
@@ -539,7 +539,7 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
                 intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_END),
                 {
                     "basic activities with good score": Metric(1, float(3600)),
-                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                    "basic activities with low distance from other candidates": Metric(1, 3600.0),
                 },
             ),
             (
@@ -560,7 +560,7 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
                 intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
                 {
                     "basic activities with high score": Metric(1, float(3600)),
-                    'basic activities with low distance from other candidates': Metric(1, 3600.0),
+                    "basic activities with low distance from other candidates": Metric(1, 3600.0),
                 },
             ),
         ]
@@ -579,7 +579,7 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
         metrics = Metrics({})
         step = MergeCandidatesTreeIntoResultTreeStep(False, True)
         # Act
-        interval: intervaltree.Interval = step._find_basic_activity_interval(
+        interval: intervaltree.Interval = step.find_basic_activity_interval(
             candidates_tree=candidates_tree,
             start_point=start_point,
             end_point=end_point,
@@ -593,3 +593,105 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
             {k: v for (k, v) in metrics.metrics.items() if v.cnt > 0},
             "wrong metrics",
         )
+
+    @parameterized.expand(
+        [
+            (
+                "empty_result_tree",
+                intervaltree.IntervalTree(),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                    ]
+                ),
+                None,
+                HOUR9_00,
+                HOUR10_00,
+            ),
+            (
+                "result_tree_1_interval_starts_before",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR8_00, HOUR9_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                None,
+                HOUR9_00,
+                HOUR12_00,
+            ),
+            (
+                "result_tree_1_interval_starts_at_start",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                None,
+                HOUR10_00,
+                HOUR12_00,
+            ),
+            (
+                "result_tree_1_interval_starts_at_middle",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR10_00, HOUR11_00),
+                        intervaltree.Interval(HOUR12_00, HOUR13_00),
+                        intervaltree.Interval(HOUR14_00, HOUR15_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR14_00),
+                    ]
+                ),
+                None,
+                HOUR9_00,
+                HOUR10_00,
+            ),
+            (
+                "result_tree_1_interval_starts_after",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR12_00, HOUR13_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                None,
+                HOUR9_00,
+                HOUR12_00,
+            ),
+        ]
+    )
+    def test_find_next_uncovered_intervals(
+        self,
+        test_name,
+        result_tree: intervaltree.IntervalTree,
+        candidates_tree: intervaltree.IntervalTree,
+        start_point: datetime.datetime,
+        expected_start_point: datetime.datetime,
+        expected_end_point: datetime.datetime,
+    ):
+        self.maxDiff = None
+        # Act
+        actual_start_point, actual_end_point = MergeCandidatesTreeIntoResultTreeStep.find_next_uncovered_intervals(
+            result_tree=result_tree,
+            candidates_tree=candidates_tree,
+            start_point=start_point,
+        )
+        # Assert
+        self.assertEqual(expected_start_point, actual_start_point, "wrong start_point")
+        self.assertEqual(expected_end_point, actual_end_point, "wrong end_point")
