@@ -771,28 +771,38 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             score: float = 0.0
             # NOTE: keep max score = 100 to translate into percentage.
             boundaries: IntervalBoundaries = candidate.data.strategy.in_trustable_boundaries
-            # 40 max - for start point.
-            if candidate.begin == start_point and boundaries != IntervalBoundaries.END:
-                score += 40
-            # 20 max - for end point.
-            if candidate.end == end_point and boundaries != IntervalBoundaries.START:
-                score += 20
-            # 15 max - for the density.
-            score += candidate.data.density * 15.0
-            # 10 max - for the duration on the intersected interval.
+            # Reward start point or proximity.
+            top = 30
+            proximity_sec = abs(candidate.begin - start_point).seconds
+            if proximity_sec < 10:
+                score += top
+            elif proximity_sec < 60:
+                score += top * 0.75
+            elif proximity_sec < 120:
+                score += top * 0.5
+            elif proximity_sec < MIN_ACTIVITY_DURATION_SEC:
+                score += top * 0.1
+            # Reward end point proximity.
+            top = 10
+            if abs(candidate.end - end_point).seconds < 60 and boundaries != IntervalBoundaries.START:
+                score += top
+            # Reward density.
+            top = 10
+            score += candidate.data.density * top
+            # Reward duration on the intersected interval. Only if overlap is big enough.
+            top = 20
             overlap_sec = candidate.overlap_size(start_point, end_point).total_seconds()
-            overlap_ratio = 1 - abs(perfect_duration_sec - overlap_sec) / perfect_duration_sec
-            if overlap_ratio > 0:
-                score += 10.0 * overlap_ratio
-            # 10 max - for the equality duration to required interval.
-            if (candidate.end - candidate.begin).total_seconds() == overlap_sec:
-                score += 10
-            # 5 max - for fitness into [MIN_ACTIVITY_DURATION_SEC..max_duration_seconds].
+            if overlap_sec > MIN_ACTIVITY_DURATION_SEC:
+                overlap_ratio = 1.0 - abs(perfect_duration_sec - overlap_sec) / perfect_duration_sec
+                if overlap_ratio > 0:
+                    score += 20 * overlap_ratio
+            # Reward being in the [MIN_ACTIVITY_DURATION_SEC..max_duration_seconds].
+            top = 30
             if MIN_ACTIVITY_DURATION_SEC <= overlap_sec <= max_duration_seconds and boundaries not in [
                 IntervalBoundaries.START,
                 IntervalBoundaries.END,
             ]:
-                score += 5
+                score += top
             # Store score in the list.
             candidate_scores.append((score, candidate))
 
