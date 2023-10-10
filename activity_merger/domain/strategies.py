@@ -310,8 +310,6 @@ class InStrategyPropertiesHandler:
 
         # TODO: refactor to pluggable handlers.
         # Hanldle events depending on strategy parameters.
-
-        # TODO fix issue that all except "Outlook" activities aren't rounded by second.
         if strategy.in_each_event_is_activity:  # Watchdog, Outlook.
             return self._convert_each_event_into_activity()
         if strategy.in_events_density_matters:

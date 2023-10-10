@@ -10,7 +10,8 @@ from .strategies import (ActivitiesByStrategy, InStrategyPropertiesHandler)
 
 
 def _add_raw_event(raw_event: AWEvent, list_to_add: List[Event], bucket_id: str, metrics: Metrics):
-    resulting_event = Event(bucket_id, raw_event.timestamp, raw_event.duration, raw_event.data)
+    # Remove part which is less than a second.
+    resulting_event = Event(bucket_id, raw_event.timestamp.replace(microsecond=0), raw_event.duration, raw_event.data)
     list_to_add.append(resulting_event)
     # Note that total duration of "events to handle" may be bigger than total duration of
     # "raw events" for Window and other buckets because of `sort_merge_convert_raw_events` logic - 
