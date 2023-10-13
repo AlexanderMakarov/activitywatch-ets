@@ -60,6 +60,8 @@ class ActivityByStrategy:
     Group of events aggregated for the specific strategy.
     """
 
+    id: int
+    """Identifier for the activity"""
     suggested_start_time: datetime.datetime
     """Suggested start time of the activity."""
     suggested_end_time: datetime.datetime
@@ -86,7 +88,7 @@ class ActivityByStrategy:
 
     def __repr__(self) -> str:
         return (
-            f"{seconds_to_timedelta(self.duration())} x{self.density:.2f},"
+            f"{self.id:>4}: {seconds_to_timedelta(self.duration())} x{self.density:.2f},"
             f" {from_start_to_end_to_str(self.suggested_start_time, self.suggested_end_time)}"
             f" (min {from_start_to_end_to_str(self.max_start_time, self.min_end_time)}),"
             f" {len(self.events):>3} {self.strategy.name} events grouped by {self.grouping_data}."
@@ -100,6 +102,7 @@ class ActivitiesByStrategy:
     strategy: Strategy
     activities: List[ActivityByStrategy]
     metrics: Metrics
+    last_id: int
 
     def to_string(self, ignore_metrics_by_substrings: List[str] = None) -> str:
         """
@@ -205,7 +208,7 @@ def calculate_activity_density(
         event_end = event.timestamp + event.duration
         if event_end > start_time and event.timestamp < end_time:
             duration += (min(event_end, end_time) - max(event.timestamp, start_time)).total_seconds()
-    return duration/(end_time - start_time).total_seconds()
+    return duration / (end_time - start_time).total_seconds()
 
 
 class InStrategyPropertiesHandler:
@@ -222,6 +225,7 @@ class InStrategyPropertiesHandler:
         self.afk_tree: intervaltree.IntervalTree = None
         self.window_events: List[Event] = None
         self.current_window_tree: intervaltree.IntervalTree = None
+        self.current_id: int = 0
 
     @staticmethod
     def _build_tree(events: List[Event]) -> intervaltree.IntervalTree:
@@ -336,7 +340,9 @@ class InStrategyPropertiesHandler:
             if event is None:
                 continue
             end_time = event.timestamp + event.duration
+            self.current_id += 1
             activity = ActivityByStrategy(
+                id=self.current_id,
                 suggested_start_time=event.timestamp,
                 suggested_end_time=end_time,
                 max_start_time=event.timestamp,
@@ -348,7 +354,7 @@ class InStrategyPropertiesHandler:
             )
             self.current_metrics.incr("activities", event.duration.seconds)
             activities.append(activity)
-        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics)
+        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics, self.current_id)
 
     def _make_activity_between_events(
         self,
@@ -376,7 +382,9 @@ class InStrategyPropertiesHandler:
         elif in_trustable_boundaries is IntervalBoundaries.START:
             min_end_time = events[-1].timestamp
             density_zero = True
+        self.current_id += 1
         activity = ActivityByStrategy(
+            id=self.current_id,
             suggested_start_time=start_time,
             suggested_end_time=end_time,
             max_start_time=max_start_time,
@@ -451,7 +459,7 @@ class InStrategyPropertiesHandler:
                 ListOfPairsDescriptor(list(window_kv_pairs)),
                 activities,
             )
-        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics)
+        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics, self.current_id)
 
     def _add_event_to_window(
         self, event: Event, key: GroupingDescriptior, windows: Dict[GroupingDescriptior, List[Event]]
@@ -553,7 +561,7 @@ class InStrategyPropertiesHandler:
         activities = []
         for key, events in windows.items():
             self._make_activity_between_events(events, key, activities)
-        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics)
+        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics, self.current_id)
 
     def _aggregate_events_with_few_sliding_windows_by_density(self) -> ActivitiesByStrategy:
         """Produces overlapping Activities basing on theirs density on time scale."""
@@ -593,4 +601,4 @@ class InStrategyPropertiesHandler:
                     key,
                     activities,
                 )
-        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics)
+        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics, self.current_id)

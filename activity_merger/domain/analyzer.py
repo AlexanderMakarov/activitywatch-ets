@@ -4,8 +4,6 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import intervaltree
 
-from activity_merger.helpers.helpers import datetime_to_time_str
-
 from ..config.config import (
     DEBUG_BUCKET_PREFIX,
     LIMIT_OF_RESULTING_ACTIVITIES,
@@ -19,13 +17,16 @@ from .output_entities import Activity, AnalyzerResult
 from .strategies import BUCKET_AFK_PREFIX, ActivitiesByStrategy, ActivityByStrategy, calculate_activity_density
 
 
-def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
+def _cut_activity_start(
+    activity: ActivityByStrategy, point: datetime.datetime, new_id: int = None
+) -> ActivityByStrategy:
     """
     Cuts start from activity (suggested and 'max_start_time' if need) and returns only tail after specified point.
     """
     events = [x for x in activity.events if (x.timestamp + x.duration) > point]  # Keep "border" event.
     density_zero = activity.density == 0  # If density was zero before cutoff then it will remain same.
     return ActivityByStrategy(
+        id=activity.id if new_id is None else new_id,
         suggested_start_time=point,
         suggested_end_time=activity.suggested_end_time,
         max_start_time=max(point, activity.max_start_time),
@@ -37,13 +38,14 @@ def _cut_activity_start(activity: ActivityByStrategy, point: datetime.datetime) 
     )
 
 
-def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime) -> ActivityByStrategy:
+def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime, new_id: int = None) -> ActivityByStrategy:
     """
     Cuts end from activity (suggested and 'min_end_time' if need) and returns only head before specified point.
     """
     events = [x for x in activity.events if x.timestamp < point]  # Keep "border" event.
     density_zero = activity.density == 0  # If density was zero before cutoff then it will remain same.
     return ActivityByStrategy(
+        id=activity.id if new_id is None else new_id,
         suggested_start_time=activity.suggested_start_time,
         suggested_end_time=point,
         max_start_time=activity.max_start_time,
@@ -56,27 +58,32 @@ def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime) ->
 
 
 def _split_activity(
-    activity: ActivityByStrategy, start_point: datetime.datetime, end_point: datetime.datetime
+    activity: ActivityByStrategy, start_point: datetime.datetime, end_point: datetime.datetime, new_id: int
 ) -> List[ActivityByStrategy]:
     """
     Cuts some middle part from the activity to get 2 new 'ActivityByStrategy'-s:
     - from the start of initial activity to the 'start_point',
     - from the 'end_point' to the end of initial activity.
     """
-    return [_cut_activity_end(activity, start_point), _cut_activity_start(activity, end_point)]
+    return [_cut_activity_end(activity, start_point), _cut_activity_start(activity, end_point, new_id)]
 
 
 def _exclude_tree_intervals(
-    activities: List[ActivityByStrategy], tree: intervaltree.IntervalTree, metrics: Metrics, name_of_tree: str
-) -> List[ActivityByStrategy]:
+    activities: List[ActivityByStrategy],
+    tree: intervaltree.IntervalTree,
+    id_for_new: int,
+    metrics: Metrics,
+    name_of_tree: str,
+) -> Tuple[List[ActivityByStrategy], int]:
     """
     Cuts different parts of activities which overlap with intervals in the specified tree.
     Note that for metrics are used bounds of activities, not inner event intervals sum.
     :param activities: List of activities to cut tree intervals from.
     :param tree: Tree with intervals to cut activities by.
+    :param id_for_new: Identifier with auto-increment for new activities.
     :param metrics: Metrics instance.
     :param name_of_tree: Name of the tree for metrics.
-    :return: List of chopped activities.
+    :return: Tuple with list of chopped activities and last new activity ID assigned.
     """
     result: List[ActivityByStrategy] = []
 
@@ -95,8 +102,10 @@ def _exclude_tree_intervals(
         if len(intervals) == 0:
             result.append(activity)
             continue
-        # Handle only first (and random). Because in result activity would be either skipped or modified.
-        # In "modified" case need to search overlaps again anyway.
+        # Sort intervals to put new activities ID-s in deterministic order.
+        intervals = sorted(intervals)
+        # Handle activities one by one. In result activity would be either skipped or modified.
+        # In "modified" case need to search overlaps again.
         interval = intervals.pop()
         if interval.begin <= activity.suggested_start_time:
             # Interval starts before activity.
@@ -134,7 +143,8 @@ def _exclude_tree_intervals(
                 raise NotImplementedError(f"Inner error with {interval} actually not overlapping with" f" {activity}.")
         else:
             # Interval is placed in the middle of the current activity.
-            split_activities = _split_activity(activity, interval.begin, interval.end)
+            id_for_new += 1
+            split_activities = _split_activity(activity, interval.begin, interval.end, id_for_new)
             # Due to interval was random, both parts of the initial activity should be checked again.
             activities_queue.extend(split_activities)
             # Update metric without duration because very often activity is cut few times and resulting
@@ -142,7 +152,10 @@ def _exclude_tree_intervals(
             metrics.incr("activities with middle cut by " + name_of_tree)
             continue
     # Sort result because parts of long activities may be placed into it randomly.
-    return sorted(result, key=lambda x: x.suggested_start_time)
+    return (
+        sorted(result, key=lambda x: x.suggested_start_time),
+        id_for_new,
+    )
 
 
 def _include_tree_intervals(
@@ -299,6 +312,7 @@ class DebugBucketsHandler:
     def add_event(
         self,
         bucket_id: str,
+        event_id: int,
         timestamp: datetime.datetime,
         duration: datetime.timedelta,
         description: str,
@@ -307,9 +321,14 @@ class DebugBucketsHandler:
     ):
         # Note that ActivityWatch UI shows only strings.
         if density:
-            data = {"desc": description, "events_count": str(events_count), "density": f"{density:.2f}"}
+            data = {
+                "id": str(event_id),
+                "desc": description,
+                "events_cnt": str(events_count),
+                "density": f"{density:.2f}",
+            }
         else:
-            data = {"desc": description, "events_count": str(events_count)}
+            data = {"id": str(event_id), "desc": description, "events_cnt": str(events_count)}
         self.events.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
 
     def add_debug_events_to_not_overlap(
@@ -352,6 +371,7 @@ class DebugBucketsHandler:
             for activity in group:
                 self.add_event(
                     bucket_id=debug_bucket_prefix,
+                    event_id=activity.id,
                     timestamp=activity.suggested_start_time,
                     # For debug events need to use end-start time, not duration by events.
                     duration=activity.suggested_end_time - activity.suggested_start_time,
@@ -539,8 +559,8 @@ def _build_activity_name(
 
 def _add_ra(
     ra: Activity,
-    is_add_debug_buckets: bool,
     result_tree: intervaltree.IntervalTree,
+    is_add_debug_buckets: bool,
     debug_buckets_handler: DebugBucketsHandler,
 ):
     result_tree.addi(ra.start_time, ra.end_time, ra)
@@ -551,6 +571,7 @@ def _add_ra(
         # Use the only debug bucket here because events should be consequtive.
         debug_buckets_handler.add_event(
             bucket_id=debug_bucket_prefix,
+            event_id=0,  # Don't set ID for events which shouldn't be pointed.
             timestamp=ra.start_time,
             duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
             description=ra.description,
@@ -632,7 +653,12 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
                     activity.events,
                     name,
                 )
-                _add_ra(ra, self.is_add_debug_buckets, result_tree, debug_buckets_handler)
+                _add_ra(
+                    ra=ra,
+                    result_tree=result_tree,
+                    is_add_debug_buckets=self.is_add_debug_buckets,
+                    debug_buckets_handler=debug_buckets_handler,
+                )
                 metrics.incr("self sufficient activities", duration)
         context["result_tree"] = result_tree
         return True
@@ -657,6 +683,7 @@ class ChopActivitiesByResultTreeStep(AnalyzerStep):
 
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         result_tree: intervaltree.IntervalTree = context.get("result_tree")
+        last_id: int = context.get("last_id")
         if len(result_tree) > 0:
             strategy_result: ActivitiesByStrategy
             for strategy_result in context["activities_by_strategy"]:
@@ -667,8 +694,8 @@ class ChopActivitiesByResultTreeStep(AnalyzerStep):
                 ):
                     continue
                 # Cut activities from strategy by result tree. Do it strictly, i.e. boundaries=whole.
-                strategy_result.activities = _exclude_tree_intervals(
-                    strategy_result.activities, result_tree, metrics, "result_tree"
+                strategy_result.activities, last_id = _exclude_tree_intervals(
+                    strategy_result.activities, result_tree, last_id, metrics, "result_tree"
                 )
         return True
 
@@ -697,6 +724,7 @@ class MakeCandidatesTreeStep(AnalyzerStep):
 
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
+        last_id: int = context.get("last_id")
         candidates_tree = intervaltree.IntervalTree()
         strategy_result: ActivitiesByStrategy
         for strategy_result in context["activities_by_strategy"]:
@@ -713,6 +741,7 @@ class MakeCandidatesTreeStep(AnalyzerStep):
                     bucket_suffix=strategy_result.strategy.bucket_prefix + "_candidate",
                     metrics=metrics,
                 )
+        metrics.override("last activity id", last_id, 0)
         context["candidates_tree"] = candidates_tree
         return True
 
@@ -842,7 +871,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
         # If start_point is None, take the begin of the candidates_tree
         if start_point is None:
             start_point = candidates_tree.begin()
-        
+
         # If start point is not in candidates_tree, return None
         if not candidates_tree.overlaps_point(start_point):
             return (None, None)
@@ -853,7 +882,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             overlapping_intervals = sorted(result_tree[start_point])
             # Set start_point as the end of the last overlapping interval
             start_point = overlapping_intervals[-1].end
-        
+
         # If we reached the end of the candidates_tree without finding an uncovered interval
         if start_point >= candidates_end:
             return (None, None)
@@ -909,7 +938,12 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
                         (ra.end_time - existing_interval.begin).total_seconds(),
                     )
             # Add RA into the result tree.
-            _add_ra(ra, self.is_add_debug_buckets, result_tree, debug_buckets_handler)
+            _add_ra(
+                ra=ra,
+                result_tree=result_tree,
+                is_add_debug_buckets=self.is_add_debug_buckets,
+                debug_buckets_handler=debug_buckets_handler,
+            )
             # Configure next iteration.
             current_start_point, current_end_point = self.find_next_uncovered_intervals(
                 candidates_tree=candidates_tree,
@@ -947,7 +981,10 @@ def merge_activities(
     Merges activities into `AnalyzerResult` with the given steps.
     """
 
-    context = {"activities_by_strategy": activities_by_strategy}
+    context = {
+        "activities_by_strategy": activities_by_strategy,
+        "last_id": max(x.last_id for x in activities_by_strategy),
+    }
     for step in steps:
         metrics = Metrics({})
         step.check_context(context)

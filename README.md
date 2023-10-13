@@ -168,10 +168,16 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Add "in_only_if_window_app" to strategies (similar to out_only_not_afk).
 - [x] Change licence.
 - [x] Add "density" characteristic for the `ActivityByStrategy` to choose "basic activity".
+- [ ] Add ability to separate distinct activity by name, like 'ETS' or 'Slack meeting' in Window events.
+      For Slack meetings need to separate calls and texting.
+      If it is Huddle call then title is "Slack - UserName - Huddle".
+      If it is texting to specific user or channel title is "UserName - WorkspaceName - Slack".
+      For Firefox titles it is possible to parse Jira ID or some webapp name.
+      I.e. add ability to separate into "activity" not only by the whole "title" but by fraction.
 - [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab
       with relevant ID in the title.
-- [ ] Add ability to separate distinct activity by name, like 'ETS' or 'Slack meeting' in Window events.
-      For Slack meetings need to extract name of interlocutor.
+- [x] Add ID-s to ActivityByStrategy-ies and show them in ActivityWatch UI.
+- [ ] Add (revert) "tuner" to ask users for "basic activity" ID ^ and correct weights in find_basic_activity_interval.
 - [ ] Add ability to cut by AFK both events and activities (example?).
 - [ ] Keep exact events in result activities (example?).
 - [ ] Add Google Calendar importer.
