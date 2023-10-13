@@ -81,17 +81,6 @@ class Strategy:
     probable activities.
     """
 
-    in_group_by_keys: List[Tuple[str]] = None
-    """
-    Specific keys to separate events into the windows/activities when related values are similar.
-    By default events are grouped together if set of keys and values for all keys are identical.
-    But some events producers may set different sets of keys.
-    If provide list of possible key sets (as Python tuples) then only those keys would be checked and default
-    behavior would be applied only not all keys are presented in the event.
-    Note that order of key sets/tuples is important - if first set of keys was matched then all remained are ignored
-    for "only consecutive activities" case (for "parallel activities" case would be used all).
-    """
-
     in_skip_key_values: Dict[str, any] = None
     """
     Map of key/value pairs (i.e. dictionary) to skip and don't make activities from.
@@ -102,6 +91,17 @@ class Strategy:
     in_only_not_afk: bool = False
     """
     True means that events will be cut to appear only in not-AFK intervals.
+    """
+
+    in_group_by_keys: List[Tuple[str]] = None
+    """
+    Specific keys to separate events into the windows/activities when related values are similar.
+    By default events are grouped together if set of keys and values for all keys are identical.
+    But some events producers may set different sets of keys.
+    If provide list of possible key sets (as Python tuples) then only those keys would be checked and default
+    behavior would be applied only not all keys are presented in the event.
+    Note that order of key sets/tuples is important - if first set of keys was matched then all remained are ignored
+    for "only consecutive activities" case (for "parallel activities" case would be used all).
     """
 
     in_only_if_window_app: List[str] = None
