@@ -2,7 +2,7 @@
 import argparse
 import datetime
 import os
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import aw_client
 
@@ -18,8 +18,11 @@ from activity_merger.domain.analyzer import (
     MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
     MergeCandidatesTreeIntoResultTreeStep,
+    MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep,
     merge_activities,
 )
+from activity_merger.domain.basic_activity_finder import BAFinder
+from activity_merger.domain.input_entities import Event
 from activity_merger.domain.merger import analyze_buckets
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
@@ -73,7 +76,7 @@ def get_activities_by_strategy(
     )
 
 
-def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.ActivityWatchClient):
+def reload_debug_buckets(debug_dict: Dict[str, List[Event]], client: aw_client.ActivityWatchClient):
     """
     Uploads events representing analyzer debug information into ActivityWatch "debug" buckets. Removes these
     bucket preliminary.
@@ -81,7 +84,7 @@ def reload_debug_buckets(analyzer_result: AnalyzerResult, client: aw_client.Acti
     :param client: ActivityWatch client to use.
     """
     delete_debug_buckets(client)
-    for bucket_id, events in analyzer_result.debug_dict.items():
+    for bucket_id, events in debug_dict.items():
         LOG.info(upload_events(events, DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
 
 
@@ -112,19 +115,24 @@ def convert_aw_events_to_activities(
         "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in activities_by_strategy),
     )
 
+    ba_finder = BAFinder()  # TODO populate with coefficients.
     analyzer_result = merge_activities(
         activities_by_strategy=activities_by_strategy,
         steps=[
-            MakeResultTreeFromSelfSufficientActivitiesStep(True),
-            ChopActivitiesByResultTreeStep(True, True),
-            MakeCandidatesTreeStep(is_import_debug_buckets),
-            MergeCandidatesTreeIntoResultTreeStep(is_import_debug_buckets, is_only_good_strategies_for_description),
+            MakeResultTreeFromSelfSufficientActivitiesStep(is_add_debug_buckets=True),
+            ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),
+            MakeCandidatesTreeStep(is_add_debug_buckets=is_import_debug_buckets),
+            MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(
+                ba_finder=ba_finder,
+                is_add_debug_buckets=is_import_debug_buckets,
+                is_only_good_strategies_for_description=is_only_good_strategies_for_description,
+            ),
         ],
         ignore_substrings=ignore_substrings,
     )
     LOG.info(analyzer_result.to_str(ignore_metrics_by_substrings=ignore_substrings))
     if is_import_debug_buckets:
-        reload_debug_buckets(analyzer_result, client)
+        reload_debug_buckets(analyzer_result.debug_dict, client)
     return analyzer_result
 
 

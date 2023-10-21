@@ -5,3 +5,4 @@ jira  # For get_jira_events.py only.
 dill  # For tune_rules.py only. Pickle wrapper working with lambdas.
 pick
 intervaltree
+scikit-learn

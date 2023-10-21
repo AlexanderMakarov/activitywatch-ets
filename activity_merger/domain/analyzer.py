@@ -4,6 +4,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import intervaltree
 
+from activity_merger.domain.basic_activity_finder import BAFinder
+
 from ..config.config import (
     DEBUG_BUCKET_PREFIX,
     LIMIT_OF_RESULTING_ACTIVITIES,
@@ -667,6 +669,9 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
 class ChopActivitiesByResultTreeStep(AnalyzerStep):
     """
     Cuts activites by "result_tree" `IntervalTree` intervals.
+    :param is_skip_afk: Flag to don't chop AFK activities by current 'result_tree'.
+    :param is_skip_self_sufficient_strategies: Flag to don't chop activities from "self sufficient"
+    strategies by current 'result_tree'.
     """
 
     def __init__(self, is_skip_afk: bool = False, is_skip_self_sufficient_strategies: bool = True):
@@ -703,6 +708,9 @@ class ChopActivitiesByResultTreeStep(AnalyzerStep):
 class MakeCandidatesTreeStep(AnalyzerStep):
     """
     Makes "candidates_tree" `IntervalTree`.
+    :param is_add_debug_buckets: Flag to build events into "debug" buckets.
+    :param is_add_afk: Flag to add AFK activities into "result_tree".
+    :param is_add_self_sufficient: Flag to add activities from "self sufficient" strategies into "result_tree".
     """
 
     def __init__(
@@ -960,6 +968,95 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
         return True
 
 
+class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidatesTreeIntoResultTreeStep):
+    """
+    Makes "candidates_tree" `IntervalTree`.
+    :param ba_finder: BAFinder instance to use for choosing "basic" activity on each step.
+    :param is_add_debug_buckets: Flag to build events into "debug" buckets.
+    :param is_only_good_strategies_for_description: Flag to use only activities from "good" strategies to
+    build description of result activities.
+    """
+
+    def __init__(
+        self,
+        ba_finder: BAFinder,
+        is_add_debug_buckets: bool = False,
+        is_only_good_strategies_for_description: bool = True,
+    ):
+        super(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep, self).__init__(
+            is_add_debug_buckets=is_add_debug_buckets,
+            is_only_good_strategies_for_description=is_only_good_strategies_for_description,
+        )
+        self.ba_finder = ba_finder
+
+    def get_description(self) -> str:
+        return "Merging 'candidates_tree' into 'result_tree'."
+
+    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+        debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
+        result_tree: intervaltree.IntervalTree = context["result_tree"]
+        candidates_tree: intervaltree.IntervalTree = context["candidates_tree"]
+
+        # Iterate through candidates tree and try to fill up gaps in result tree with intervals from here.
+        # Note that very often results tree will be empty and need to make up all activities from candidates tree.
+        current_start_point: datetime.datetime
+        current_end_point: datetime.datetime
+        current_start_point, current_end_point = self.find_next_uncovered_intervals(
+            candidates_tree=candidates_tree, result_tree=result_tree
+        )
+        while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
+            metrics.incr("iterations to assemble remaining activities")
+            # Find "basic activity" to base "result" activity on interval of it.
+            ba_interval = self.ba_finder.find_basic_activity_interval(
+                candidates_tree,
+                current_start_point,
+                current_end_point,
+                MAX_ACTIVITY_DURATION_SEC,
+                metrics,
+            )
+            if ba_interval is None:
+                break  # No more activities are possible.
+            # Find all overlapping activities and make new `result` activity (RA).
+            ra = _build_result_activity(
+                ba_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics
+            )
+            # Check RA doesn't overlaps with existing result activities at the end.
+            result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
+            # If we had interval in `result_tree` when added RA then we need to search next gap.
+            # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
+            for existing_interval in result_tree_overlapped_with_ra_end:
+                if existing_interval.begin < ra.end_time:
+                    # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
+                    ra.end_time = existing_interval.begin
+                    ra.events = [x for x in ra.events if x.timestamp < ra.end_time]
+                    metrics.incr(
+                        "result activities shrinked because it overlaps by end with alredy existing",
+                        (ra.end_time - existing_interval.begin).total_seconds(),
+                    )
+            # Add RA into the result tree.
+            _add_ra(
+                ra=ra,
+                result_tree=result_tree,
+                is_add_debug_buckets=self.is_add_debug_buckets,
+                debug_buckets_handler=debug_buckets_handler,
+            )
+            # Configure next iteration.
+            # TODO fails after the first "self sufficient" interval "aka" gap.
+            current_start_point, current_end_point = self.find_next_uncovered_intervals(
+                candidates_tree=candidates_tree,
+                result_tree=result_tree,
+                start_point=ra.end_time,
+            )
+            # current_start_point = ra.end_time
+        context["analyzer_result"] = AnalyzerResult(
+            sorted([x.data for x in result_tree], key=lambda x: x.start_time),
+            None,
+            metrics,
+            debug_buckets_handler.events if debug_buckets_handler else None,
+        )
+        return True
+
+
 """
 20230930 sum of issues which may happen:
 - Preparation to Java exam (10:03-10:30) is not separated from other events.
@@ -975,7 +1072,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
 def merge_activities(
     activities_by_strategy: List[ActivitiesByStrategy],
     steps: List[AnalyzerStep],
-    ignore_substrings: List[str],
+    ignore_substrings: List[str] = None,
 ) -> AnalyzerResult:
     """
     Merges activities into `AnalyzerResult` with the given steps.

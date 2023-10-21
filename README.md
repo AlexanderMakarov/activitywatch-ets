@@ -174,6 +174,14 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
       If it is texting to specific user or channel title is "UserName - WorkspaceName - Slack".
       For Firefox titles it is possible to parse Jira ID or some webapp name.
       I.e. add ability to separate into "activity" not only by the whole "title" but by fraction.
+    # TODO in_group_keys_regexps: Dict[str, List[str]] = None
+    """
+    A dictionary of event "data" keys to list of regexps to be used as a way to distinguish not they whole
+    value for a given key, but some fractions of it. In result activities will be separated in a "smarter"
+    but more "personal" way.
+    Useful for Windows Manager events to group together things like "browser tabs from specific Jira ID",
+    "Slack calls".
+    """
 - [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab
       with relevant ID in the title.
 - [x] Add ID-s to ActivityByStrategy-ies and show them in ActivityWatch UI.
