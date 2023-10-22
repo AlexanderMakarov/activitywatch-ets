@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-import datetime
-from typing import Dict, List, Set, Tuple, Union
 import argparse
+import dataclasses
+import datetime
 import os
 import subprocess
-import dataclasses
+from typing import Dict, List, Union
 
 from activity_merger.config.config import (
-    LOG,
-    GIT_FOLDERS_WITH_REPOS,
-    GIT_SCRAPER_NAME,
     GIT_BUCKET_ID,
     GIT_DEPTH_IN_FOLDER,
+    GIT_FOLDERS_WITH_REPOS,
+    GIT_SCRAPER_NAME,
+    LOG,
 )
-from activity_merger.helpers.helpers import setup_logging, valid_date, ensure_datetime, upload_events, event_to_str
 from activity_merger.domain.input_entities import Event
+from activity_merger.helpers.helpers import ensure_datetime, event_to_str, setup_logging, upload_events, valid_date
 
 
 @dataclasses.dataclass

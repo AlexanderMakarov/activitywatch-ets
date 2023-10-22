@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import datetime
 from typing import List, Callable, Any, Tuple
+import argparse
+import contextlib
+import unittest
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.common.by import By
@@ -8,9 +11,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.common.exceptions import NoSuchElementException
-import argparse
-import contextlib
-import unittest
 import parameterized
 
 from activity_merger.config.config import (
@@ -51,7 +51,7 @@ def start_firefox_under_existing_profile(profile: str, page: str, headless: bool
     # But see https://stackoverflow.com/a/71604450/1535127 - it is the only way to open running profile aside.
     options.profile = profile
     options.headless = headless
-    LOG.info(f"Wait few seconds/minutes - new Firefox window is starting with profile '{profile}'")
+    LOG.info("Wait few seconds/minutes - new Firefox window is starting with profile '%s'", profile)
     driver = webdriver.Firefox(options=options)  # Note that all other params are deprecated.
     try:
         yield driver
@@ -89,7 +89,7 @@ def _wait_on_page(driver: WebDriver, xpath: str) -> Any:
     try:
         return WebDriverWait(driver, 1 * 60).until(
             EC.visibility_of_all_elements_located((By.XPATH, xpath)),
-            f"Can't find/wait Outlook Web 'Calendar' page elements. Make sure that you've logged in on main window.",
+            "Can't find/wait Outlook Web 'Calendar' page elements. Make sure that you've logged in on main window.",
         )
     except Exception as err:
         driver.get_screenshot_as_file(SCREENSHOT_FAIL_NAME)
@@ -138,7 +138,7 @@ def _scroll_to_day(back_days: int, date_label: str, driver: WebDriver):
             )
             scroll_back.click()
             scrolls_back += 1
-    LOG.info(f"Finishing on {current_day_desc} page.")
+    LOG.info("Finishing on %s page.", current_day_desc)
 
 
 def _get_hour_points(container_web_element: WebElement):
@@ -256,7 +256,7 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
     # Wait until all events are rendered on the container. Immediate check returns only first event(s).
     driver.implicitly_wait(1)
     events_container.screenshot(SCREENSHOT_NAME)
-    LOG.info(f"Page of required day is opened, scrapping events. See screenshot {SCREENSHOT_NAME}.")
+    LOG.info("Page of required day is opened, scrapping events. See screenshot %s", SCREENSHOT_NAME)
     # Note that these div-s also contains elements with calendar(s) name.
     TYPE_DIV_XPATH_SELECTOR = (
         "div[contains(@class,'calendarBusy') or contains(@class,'calendarTentative')"
@@ -278,7 +278,7 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
             False,
         )
         if not event_div:
-            LOG.info(f"Skipping '{probable_event_div.text}' because event rectangle is not placed in it.")
+            LOG.info("Skipping '%s' because event rectangle is not placed in it.", probable_event_div.text)
             continue
         # Search for event data container. They are wrapped into 'div' next to 'event_div' with 2 types of structure:
         # 1) Series of events - inside 2 div-s where 1st contains 3 span-s with name, location, sender.
@@ -290,10 +290,10 @@ def scrape_events_from_page(driver: WebDriver, events_date: datetime.datetime) -
             False,
         )
         if not event_data_container:
-            LOG.info(f"Skipping '{probable_event_div.text}' because event data is not placed in it.")
+            LOG.info("Skipping '%s' because event data is not placed in it.", probable_event_div.text)
             continue
         # Event is found - grab/calculate data from it.
-        LOG.info(f"Found event '{event_data_container.text}' in rect {event_div.rect}.")
+        LOG.info("Found event '%s' in rect %s.", event_data_container.text, event_div.rect)
         event_elements: List[WebElement] = call_web_element_with_fail_handling(
             "elements of event",
             event_data_container,
