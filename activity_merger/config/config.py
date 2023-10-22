@@ -1,156 +1,251 @@
 import datetime
 import logging
 import socket
-from ..domain.input_entities import EventKeyHandler, Rule
+from typing import List, Tuple
+from functools import partial
+
+from activity_merger.domain.input_entities import Strategy
 
 
 # ---------- PERSONAL SETTINGS ---------- Certanly of very probable to change settings.
-# How short may be activity.
-MIN_DURATION_SEC = 15 * 60  # 0.25 hours
-# How long activity may be.
-TOO_LONG_ACTIVITY_ALERT_AFTER_SECONDS = datetime.timedelta(hours=2).seconds
-# List of rules describing "watcher" event activity and priority if different "watcher" events happened simultaneously.
-# Keys matche bucket names start. If there will be few buckets with ID starting from key then all will be handled.
-# If few keys match the same bucket then only first `EventKeyHandler` will be applied to the bucket events.
-# Next see docstrings for `EventKeyHandler` and `Rule` classes.
-RULES = {
-    # Passive watcher, always provides value, even if user AFK. But "change value" event 100% shows activity.
-    # data={app: str, title: str}.
-    "aw-watcher-window": [
-        EventKeyHandler("app", [
-            Rule("zoom", 900, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
-                Rule("Zoom Meeting", 900, to_string=lambda _: "Zoom Meeting"),
-                Rule(".*", 200, merge_next=True)
-            ])),
-            Rule("Slack", 890, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
-                Rule("Slack \| (.*?) \|.*", 889, to_string=lambda x: f"Slack {x.group(1)}"),
-                Rule("(.*) screen share", 890, to_string=lambda x: f"Slack {x.group(1)}"),
-            ])),
-            # Skype doesn't provide info that it is a meeting.
-            Rule("Skype", 880),
-            Rule("unknown", 2, merge_next=True),  # Means that OS windows manager was unable to gather data.
-            Rule("flameshot", 520),  # Screenshot tool.
-            Rule("jetbrains-idea", 40),  # IDE. TODO ~2 seconds after "afk" watcher events -> are not counted!
-            Rule("Double Commander", 35),  # File manager.
-            Rule("smplayer", 36),  # Video player.
-            Rule("FeatherPad", 37),  # Text editor.
-            Rule("gedit", 38),  # Text editor.
-            Rule("discord", 39),
-        ]),
-    ],
-    # Passive watcher, always provides value, even if user AFK.
-    # But "change value" event most probably shows activity (excluding web pages which change title periodically).
-    # data={url: str, title: str, audible: bool, incognito: bool, tabCount: int}.
-    "aw-watcher-web": [
-        EventKeyHandler("url", [
-            Rule("https://(vimbox|student)\.skyeng\.ru/.*", 501, skip=True), # English lesson, may look like AFK.
-            Rule("https://(armenian-language\.org)/.*", 502, skip=True), # Armenian class lesson, may look like AFK.
-            Rule("https://gitlab\.company\.net:9443/.*", 41, to_string=lambda _: "company GitLab"),
-            Rule("https://company\.atlassian\.net/wiki/.*", 42, to_string=lambda _: "company Wiki"),
-            Rule("https://company\.atlassian\.net/browse/.*", 43, to_string=lambda _: "company Jira"),
-            Rule("https://wiki\.company\.com/wiki/.*", 44, to_string=lambda _: "company Wiki"),
-            Rule("https://mail\.company\.com/.*", 45, to_string=lambda _: "company Mail"),
-            Rule("https://company\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
-            Rule("https://www\.google\.com/.*", 48, to_string=lambda _: "www.google.com"),
-            Rule("about:blank", 520, to_string=lambda _: None, subhandler=EventKeyHandler("title", [
-                Rule("company\.atlassian\.net/browse/.*", 521, to_string=lambda _: "company Jira"),
-                Rule("zoom\.us/j/.*", 521, to_string=lambda _: "zoom"),
-                Rule("logs\.(devops|us\.dev\.kube)\.company\.com.*", 401, to_string=lambda _: "company Logs"),
-                Rule("metrics\.(devops|us\.dev\.kube)\.company\.com.*", 400, to_string=lambda _: "company Metrics"),
-                Rule("gitlab\.company\.net:9443/.*", 41, to_string=lambda _: "company GitLab"),
-                Rule("New Tab", 42, merge_next=True),
-                Rule("wiki\.company\.com/wiki/.*", 44, to_string=lambda _: "company Wiki"),
-                Rule("company\.zoom\.us/.*", 47, to_string=lambda _: "zoom"),
-                # Last item as an "uncategorized site".
-                Rule("(.+?)/.*", 3, to_string=lambda x: f"Firefox '{x.group(1)}'")
-            ])),
-            Rule("https://signin\.company\.com/", 49, to_string=lambda _: "company SignIn"),
-            Rule("https://company\.zendesk\.com/.*", 100, to_string=lambda _: "company Zendesk"),
-            Rule("https://docs\.google\.com/spreadsheets/.*", 101, to_string=lambda _: "Google Spreadsheets"),
-            Rule("https://translate\.google.*", 102, to_string=lambda _: "Google Translate"),
-            Rule("https://logs\.(devops|us\.dev\.kube)\.company\.com.*", 530, to_string=lambda _: "company Logs"),
-            Rule("https://metrics\.(devops|us\.dev\.kube)\.company\.com.*", 531, to_string=lambda _: "company Metrics"),
-            Rule("file:///.*", 532, to_string=lambda _: "Local file in browser"),
-            # Last item as an "uncategorized site".
-            Rule("https?://(.+?)/.*", 3, to_string=lambda x: f"Firefox '{x.group(1)}'")
-        ]),
-    ],
-    # Passive watcher, always provides value, even if user AFK. But "change value" event shows activity/focus on.
-    # data={file: str, projectPath: str, language: str, editor: const, editorVersion: const, eventType: const}
-    # Need to handle only "switch to" intervals because watcher is strange.
-    # Also keys are not stable in it, for example 'project' may be absent.
-    "aw-watcher-idea": [
-        EventKeyHandler("project", [
-            Rule(".*", 100, to_string=lambda x: f"IDEA project '{x.group(0)}'")
-        ]),
-        EventKeyHandler("file", [
-            Rule(".*", 100, to_string=lambda x: f"IDEA file '{x.group(0)}'")
-        ])
-    ],
-    # Ad-hoc importer. Due to JIRA doesn't allow to get time when user started to work on the change it measures
-    # duration either from previous event or from the start of the day. Therefore events doesn't intersect with AFK.
-    # 'symbols_count' field contains probable number of keystrokes user made to make this change but it is not precise
-    # and for cases where don't need to use keyboard is equal to 1.
-    # data={jira_id: str, field: str, change_desc: str, symbols_count: int}.
-    "jira_aw_events_scraper": [
-        EventKeyHandler("jira_id", [
-            Rule(".*", 30, to_string=lambda x: f"JIRA task '{x.group(0)}'")  # TODO add subhandler by 'field'.
-        ])
-    ],
-    # Ad-hoc importer. Represents items from "Calendar" tab of OWA365.
-    # data={type: [busy, free, tentative], name: str, location: str, sender: str}.
-    "outlook_aw_events_scraper": [
-        EventKeyHandler("name", [
-            Rule(".*", 910, to_string=lambda x: f"Meeting '{x.group(0)}'")
-        ])
-    ],
-}
+# How short may activity be in seconds. Strictness of this setting depends on the current logic.
+MIN_ACTIVITY_DURATION_SEC = 15 * 60  # 0.25 hours
+# How long may activity be in seconds. Strictness of this setting depends on the current logic.
+MAX_ACTIVITY_DURATION_SEC = 2 * 60 * 60  # 2 hours
+# Comma-separated list of folders to search git repos in.
+GIT_FOLDERS_WITH_REPOS = "/home/user/code"
 # Absolute path to Firefox profile folder to grab OWA events under.
 # On Linux it looks like '/home/{username}/.mozilla/firefox/{some_id}.default-release/'.
 # May be found by opening 'about:profiles' in Firefox - "Root Directory" value.
-FIREFOX_PROFILE_PATH: str = None
+FIREFOX_PROFILE_PATH: str = "/home/user/snap/firefox/common/.mozilla/firefox/ooooooooooo.default-0000000000000"
 # URL to home page of Web (MS Office Web Apps) Outlook. May look like 'https://mail.company.com/owa'.
-OWA_URL: str = None
+OWA_URL: str = "https://mail.company.com/owa"
 # URL to Jira main/host page. May look like 'https://company.jira.net'.
-JIRA_URL: str = None
+JIRA_URL: str = "https://company.atlassian.net"
 # Email to log in into Jira.
-JIRA_LOGIN_EMAIL: str = None
+JIRA_LOGIN_EMAIL: str = "firstname.lastname@company.com"
 # API Token to login into Jira.
 # See https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/
-JIRA_LOGIN_API_TOKEN: str = None
+JIRA_LOGIN_API_TOKEN: str = "xxxxxxxxxxxxxxxxxxxxxxxxxx"
 # Comma-separated list of Jira project ID's to scrape events from. Like "OTD,EDIF".
-JIRA_PROJECTS: str = None
+JIRA_PROJECTS: str = "OTD,EDIF"
+# Number of folders to scan for git repos starting from any in `GIT_FOLDERS_WITH_REPOS`.
+# If GIT_FOLDERS_WITH_REPOS=code then value 2 here enables to check "code/repo/subrepo" but not "code/one/two/repo".
+GIT_DEPTH_IN_FOLDER = 2
 
-# ---------- FINE TUNING SETTINGS ---------- Settings which a sutable for regular user.
+
+# ---------- COMMON SETTINGS ---------- Settings with values suitable for most people.
+def __jira_activity_name_sentence_builder(kv_list: List[Tuple[str, str]]) -> str:
+    """
+    Activity name sentence builder for Jira events.
+    """
+    # Expecting either only 'jira_id' key or 'jira_id'+'field' keys.
+    if len(kv_list) == 1:
+        return f"{kv_list[0][1]}:"  # Just set Jira ID(s) as prefix.
+    else:
+        as_dict = dict(kv_list)  # Should have 'jira_id' and 'field' keys.
+        return f"{as_dict['jira_id']}: updated {as_dict['field']} field(s)."
+
+
+def __outlook_activity_name_sentence_builder(kv_list: List[Tuple[str, str]]) -> str:
+    """
+    Activity name sentence builder for Outlook events.
+    """
+    # Should have 'name', 'location', 'type', 'sender' keys.
+    # And it should have by 1 value for the each key, probably empty.
+    # Ignore "type" value because it is often wrong. "location" is not informative as well.
+    as_dict = dict(kv_list)
+    name = as_dict.get("name")
+    sender = as_dict.get("sender")
+    sentence: str = "Meeting "
+    if name:
+        sentence = f"Meeting '{name}'"
+    if sender:
+        return f"{sentence} organised by {sender}."
+    return f"{sentence}."
+
+
+def __web_browser_activity_name_sentence_builder(kv_list: List[Tuple[str, str]]) -> str:
+    """
+    Activity name sentence builder for Web Browser events.
+    """
+    # Should have 'url', 'title', 'audible' and some other not informative keys.
+    as_dict = dict(kv_list)
+    titles = as_dict.get("title")
+    sentence: str = "Browsed "
+    if titles:
+        return f"{sentence} '{titles}' page(s)."
+    else:
+        return f"{sentence} {as_dict.get('url')} page(s)."
+
+
+def __ide_activity_name_sentence_builder(ide_name, kv_list: List[Tuple[str, str]]) -> str:
+    """
+    Activity name sentence builder for IDEA or VSCode/Codium events.
+    """
+    # Should have 'project', 'file' fields.
+    as_dict = dict(kv_list)
+    projects = as_dict.get("project")
+    files = as_dict.get("file")
+    if files and len(files) > 30:  # If got too long path to file then use only file name, not full path.
+        files = files.split("/")[-1]
+    sentence: str = "Worked "
+    if projects:
+        if files:
+            sentence = f"Worked on '{projects}' project(s) and {files} file(s)"
+        else:
+            sentence = f"Worked on '{projects}' project(s)"
+    elif files:
+        sentence = f"Worked on {files} file(s)"
+    return f"{sentence} in {ide_name}."
+
+
+# Strategies to aggregate each watcher/exporter events into activities.
+# Order of strategies means order of handling and fulfillment of inter-strategies dependencies.
+# Therefore first should be AFK, next OS Windows Manager.
+# For settings see docs for `Strategy` class. Also first AFK strategy below is provided with all settings.
+STRATEGIES = [
+    Strategy(
+        name="AFK",
+        bucket_prefix="aw-watcher-afk",
+        in_each_event_is_activity = False,
+        in_trustable_boundaries="strict",
+        in_events_density_matters = False,
+        in_activities_may_overlap = False,
+        in_skip_key_values = None,
+        in_only_not_afk = False,
+        in_group_by_keys = None,
+        in_only_if_window_app = None,
+        out_self_sufficient = False,
+        out_produces_good_activity_name = False,
+        out_activity_name_sentence_builder=lambda _: None,  # Don't contribute to activity name.
+    ),
+    Strategy(
+        name="OS Windows Manager",
+        bucket_prefix="aw-watcher-window",
+        in_events_density_matters=True,
+        in_activities_may_overlap=True,
+        # Title may change very often, but better to keep track of apps as well.
+        in_skip_key_values={"app": "unknown"},  # "unknown" events are duplicated by more meaningful events usually.
+        in_only_not_afk=True,
+        in_group_by_keys=[("app",), ("app", "title",)],
+        out_activity_name_sentence_builder=lambda x: f"Worked with {x[0][1]} application(s).",  # TODO sort apps by density*duration
+    ),
+    Strategy(
+        name="Watchdog",
+        bucket_prefix="aw-watcher-watchdog",
+        in_each_event_is_activity=True,
+        in_trustable_boundaries="strict",
+        out_self_sufficient=True,
+        out_produces_good_activity_name=True,
+        out_activity_name_sentence_builder=lambda x: x[0][1],  # The only key is possible in 'data'.
+    ),
+    Strategy(
+        name="Outlook",
+        bucket_prefix="outlook_aw_events_scraper",
+        in_each_event_is_activity=True,
+        in_trustable_boundaries="dim",  # Sometimes it may start later or finish earlier. Plus preparation before.
+        out_self_sufficient=True,
+        out_produces_good_activity_name=True,
+        out_activity_name_sentence_builder=__outlook_activity_name_sentence_builder,
+    ),
+    Strategy(
+        name="Jira",
+        bucket_prefix="jira_aw_events_scraper",
+        in_trustable_boundaries="end",
+        in_events_density_matters=True,
+        in_activities_may_overlap=True,
+        in_only_not_afk=True,
+        in_group_by_keys=[
+            (
+                "jira_id",
+                "field",
+            ),
+            ("jira_id",),
+        ],
+        in_only_if_window_app=None,  # Jira activity may happen everywhere, not only in browser.
+        out_produces_good_activity_name=True,
+        out_activity_name_sentence_builder=__jira_activity_name_sentence_builder,
+    ),
+    Strategy(
+        name="Web Browser",
+        bucket_prefix="aw-watcher-web",
+        in_trustable_boundaries="start",
+        in_events_density_matters=True,
+        in_activities_may_overlap=True,
+        in_only_not_afk=True,
+        in_only_if_window_app=["firefox"],
+        out_activity_name_sentence_builder=__web_browser_activity_name_sentence_builder,
+    ),
+    Strategy(
+        name="IDEA",
+        bucket_prefix="aw-watcher-idea",
+        # Boundaries are "start" actually, but IDEA watcher may produce events if app in the background
+        # so "in_only_if_window_app" value doesn't match event start.
+        in_trustable_boundaries="dim",
+        in_events_density_matters=True,
+        in_activities_may_overlap=True,
+        in_only_not_afk=True,
+        in_group_by_keys=[
+            ("project",),
+            ("file",),
+        ],  # IDEA events may lack 'project' field. But 'file' contians full path.
+        in_only_if_window_app=["jetbrains-idea"],
+        out_activity_name_sentence_builder=partial(__ide_activity_name_sentence_builder, "IDEA"),
+    ),
+    Strategy(
+        name="VSCode",
+        bucket_prefix="aw-watcher-vscode",
+        in_trustable_boundaries="start",
+        in_events_density_matters=True,
+        in_activities_may_overlap=True,
+        in_only_not_afk=True,
+        in_group_by_keys=[("project",), ("file",)],  # Events may lack 'project' field. But 'file' contians full path.
+        in_only_if_window_app=["code", "vscodium"],
+        out_activity_name_sentence_builder=partial(__ide_activity_name_sentence_builder, "VSCode"),
+    ),
+    Strategy(
+        name="Git",
+        bucket_prefix="git_aw_events_scraper",
+        in_trustable_boundaries="end",
+        in_events_density_matters=True,
+        in_activities_may_overlap=True,
+        in_only_not_afk=True,
+        in_group_by_keys=[("repo",)],
+        out_produces_good_activity_name=True,
+        out_activity_name_sentence_builder=lambda x: f"Committed into {x[0][1]} repository(ies).",
+    ),
+]
+
+# ---------- FINE TUNING SETTINGS ---------- Something which may be changed only in rare cases.
 # Tolerance to use when comparing events. Events shorter than this value are ignored.
 # If duration between start and end of different events is equal or less then they are treated adjacent.
 EVENTS_COMPARE_TOLERANCE_TIMEDELTA = datetime.timedelta(0, 1, 0)  # 1 sec
-# Default priority of "afk" event. All events with equal or higher priority are treated as "independent"
-# and may form separate activities.
-AFK_RULE_PRIORITY = 500
-# Default priority of "watchdog" watcher, aka maximum priority.
-WATCHDOG_RULE_PRIORITY = 1000
+# Limit of resulting activities.
+LIMIT_OF_RESULTING_ACTIVITIES = 100
+# Don't convert into activity-by-strategies events spanning too small interval.
+TOO_SMALL_INTERVAL_SEC = 30
 # Name of ActivityWatch client created to import debugging buckets.
-DEBUG_BUCKETS_IMPORTER_NAME = 'activity_merger_debugger'
-# Name of ActivityWatch bucket to import debugging information about raw RuleResult-s. Starts with "z" to be at bottom.
-BUCKET_DEBUG_RAW_RULE_RESULTS = "z1_activity_merger_raw_rule_results"
-# Name of ActivityWatch bucket to import debugging info about final RuleResult-s. Starts with "z" to be at bottom.
-BUCKET_DEBUG_FINAL_RULE_RESULTS = "z2_activity_merger_final_rule_results"
-# Name of ActivityWatch bucket to import resulting activities. Starts with "z" to be at bottom.
-BUCKET_DEBUG_ACTIVITES = "z3_activity_merger_activities"
+DEBUG_BUCKETS_IMPORTER_NAME = "activity_merger_debugger"
+# Prefix for debug buckets. Starts with "z" to be at bottom in ActivityWatch UI.
+DEBUG_BUCKET_PREFIX = "z"
 # Timezone to show dates.
 CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo  # Use system timezone.
 # Default logger. Used for cases when script is called as a library.
 LOG: logging.Logger = logging.getLogger(__name__)
 # ActivityWatch client name and screenshots prefix for OWA365/Web Outlook Calendar events.
-OWA_SCRAPER_NAME = 'outlook_aw_events_scraper'
+OWA_SCRAPER_NAME = "outlook_aw_events_scraper"
 # ActivityWatch bucket ID for OWA365/Web Outlook Calendar events.
-OWA_BUCKET_ID = f'{OWA_SCRAPER_NAME}_{socket.gethostname()}'
+OWA_BUCKET_ID = f"{OWA_SCRAPER_NAME}_{socket.gethostname()}"
 # Max number of "scroll back" operations on OWA365/Web Outlook Calendar page.
 OWA_MAX_SCROLL_BACK = 31
 # ActivityWatch client name for Jira-based events.
-JIRA_SCRAPER_NAME = 'jira_aw_events_scraper'
+JIRA_SCRAPER_NAME = "jira_aw_events_scraper"
 # ActivityWatch bucket ID for Jira-based events.
-JIRA_BUCKET_ID = f'{JIRA_SCRAPER_NAME}_{socket.gethostname()}'
+JIRA_BUCKET_ID = f"{JIRA_SCRAPER_NAME}_{socket.gethostname()}"
 # Number of issues to ask Jira API for. Note that if ask many days back then this value should be big.
 JIRA_ISSUES_MAX = 100
+# ActivityWatch client name for GIT-based events.
+GIT_SCRAPER_NAME = "git_aw_events_scraper"
+# ActivityWatch bucket ID for GIT-based events.
+GIT_BUCKET_ID = f"{GIT_SCRAPER_NAME}_{socket.gethostname()}"
