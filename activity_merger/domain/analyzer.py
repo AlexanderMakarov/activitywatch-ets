@@ -19,6 +19,9 @@ from .output_entities import Activity, AnalyzerResult
 from .strategies import BUCKET_AFK_PREFIX, ActivitiesByStrategy, ActivityByStrategy, calculate_activity_density
 
 
+RA_DEBUG_BUCKET_NAME = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
+
+
 def _cut_activity_start(
     activity: ActivityByStrategy, point: datetime.datetime, new_id: int = None
 ) -> ActivityByStrategy:
@@ -568,11 +571,10 @@ def _add_ra(
     result_tree.addi(ra.start_time, ra.end_time, ra)
     LOG.info("Added into 'result tree' activity: %s", ra)
     # Add RA to debug bucket if need.
-    debug_bucket_prefix = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
     if is_add_debug_buckets:
         # Use the only debug bucket here because events should be consequtive.
         debug_buckets_handler.add_event(
-            bucket_id=debug_bucket_prefix,
+            bucket_id=RA_DEBUG_BUCKET_NAME,
             event_id=0,  # Don't set ID for events which shouldn't be pointed.
             timestamp=ra.start_time,
             duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
@@ -594,7 +596,7 @@ class AnalyzerStep:
         """
         raise NotImplementedError("Not implemented 'get_description'.")
 
-    def check_context(self, context: Dict[str, any]) -> None:  # TODO consider to use contextvars package.
+    def check_context(self, context: Dict[str, any]) -> None:  # TODO (impr) consider to use contextvars package.
         """
         Checks that all required items are present in the context.
         Raises an exception if the context is invalid. Expected to be executed before `run` method.
@@ -872,36 +874,37 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
 
     @staticmethod
     def find_next_uncovered_intervals(
-        result_tree: intervaltree.IntervalTree,
         candidates_tree: intervaltree.IntervalTree,
+        result_tree: intervaltree.IntervalTree,
         start_point: datetime.datetime = None,
     ) -> Tuple[datetime.datetime, datetime.datetime]:
-        # If start_point is None, take the begin of the candidates_tree
-        if start_point is None:
-            start_point = candidates_tree.begin()
+        candidates_begin = candidates_tree.begin()
+        candidates_end = candidates_tree.end()
 
-        # If start point is not in candidates_tree, return None
-        if not candidates_tree.overlaps_point(start_point):
+        # If start_point is None, take the begin of the candidates_tree.
+        # Also check that in candidates_tree range, otherwise there are no more intervals possible.
+        if start_point is None:
+            start_point = candidates_begin
+        elif start_point < candidates_begin or start_point > candidates_end:
             return (None, None)
 
-        # Check if there's an overlap with result_tree
-        candidates_end = candidates_tree.end()
+        # Take out start_point under result_tree by shifting it to the end of overlapping interval in result_tree.
         while result_tree.overlaps_point(start_point) and start_point < candidates_end:
             overlapping_intervals = sorted(result_tree[start_point])
-            # Set start_point as the end of the last overlapping interval
+            # Set start_point as the end of the last overlapping interval.
             start_point = overlapping_intervals[-1].end
 
-        # If we reached the end of the candidates_tree without finding an uncovered interval
+        # Check if we reached the end of the candidates_tree without finding an uncovered interval/gap.
         if start_point >= candidates_end:
             return (None, None)
 
+        # Set end_point. Need to check each interval in result_tree.
         end_point = candidates_end
         # If there's a result interval starting after our current start_point and before our current end_point
-        # we update the end_point to the beginning of that result interval
+        # we update the end_point to the beginning of that result interval.
         for interval in result_tree[start_point:end_point]:
             if start_point < interval.begin < end_point:
                 end_point = interval.begin
-
         return (start_point, end_point)
 
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
@@ -1041,7 +1044,7 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidates
                 debug_buckets_handler=debug_buckets_handler,
             )
             # Configure next iteration.
-            # TODO fails after the first "self sufficient" interval "aka" gap.
+            # TODO (major) fails after the first "self sufficient" interval "aka" gap.
             current_start_point, current_end_point = self.find_next_uncovered_intervals(
                 candidates_tree=candidates_tree,
                 result_tree=result_tree,

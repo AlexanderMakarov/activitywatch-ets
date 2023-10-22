@@ -28,6 +28,7 @@ from pick import pick
 
 from activity_merger.config.config import DEBUG_BUCKETS_IMPORTER_NAME, LOG
 from activity_merger.domain.analyzer import (
+    RA_DEBUG_BUCKET_NAME,
     AnalyzerStep,
     ChopActivitiesByResultTreeStep,
     DebugBucketsHandler,
@@ -78,7 +79,7 @@ class TerminalLeader:
         :return: Chosen option and it's index.
         """
         # 'pick' library cleans screen and draws menu with options. At end disappears and leaves old content.
-        # TODO need abiity to:
+        # TODO (impr) need abiity to:
         # - enter ID of activity.
         # - choose but "only until this point"
         return pick(options, question, multiselect=False, min_selection_count=1)
@@ -224,7 +225,7 @@ class UnixTerminalLeader(TerminalLeader):
                     break
         finally:
             # Revert TTY attributes.
-            # TODO fix - doesn't revert in xfce4-terminal. STR: run once, stop, try again - menu doesn't clean.
+            # TODO (minor) fix - doesn't revert in xfce4-terminal. STR: run once, stop, try again - menu doesn't clean.
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
             # NOTE breaks cursor movements in xfce4-terminal sys.stdout.write(self.ANSI_SHOW_CURSOR)
         return [x[0] for x in menu if x[2]]
@@ -310,8 +311,10 @@ class SupervisedBAFinder(BAFinder):
         for candidate in sorted_candidates:
             activity: ActivityByStrategy = candidate.data
             options.append(str(activity))
-        question = "Which activity-by-strategy from 'z###-*' buckets (see ActivityWatch 'Timeline') represents " +\
-                   f"activty started from {datetime_to_time_str(start_point)} to {datetime_to_time_str(end_point)}?"
+        question = (
+            "Which activity-by-strategy from 'z###-*' buckets on ActivityWatch 'Timeline' page best represents "
+            + f"activty from {datetime_to_time_str(start_point)} to {datetime_to_time_str(end_point)}?"
+        )
         answer: Tuple[str, int] = self.leader.ask_select_question(question, options)
         try:
             index_chosen_in_sorted_candidates = answer[1]
@@ -343,9 +346,6 @@ class UploadDebugBucketsAndResetStep(AnalyzerStep):
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
         reload_debug_buckets(debug_buckets_handler.events, self.client)
-        # Remove existing DebugBucketsHandler from context to don't load duplicates.
-        # TODO don't remove "self_sufficient" results!
-        del context["debug_buckets_handler"]
         return True
 
 
@@ -365,7 +365,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
         context = Context()
     # Build ActivitiesByStrategy list by provided events date.
     activities_by_strategy, metrics = get_activities_by_strategy(events_date, client)
-    # TODO: don't see options for manual judgements:
+    # TODO (impr) don't see options for manual judgements:
     # - with proper splitting by AFK
     if not activities_by_strategy:
         LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
@@ -385,8 +385,16 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     )
     if analyzer_result:
         LOG.info(analyzer_result.to_str())
-        for bucket_id, events in analyzer_result.debug_dict.items():
-            LOG.info(upload_events(events, DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
+        # Reload only "resulting activity" debug bucket events! See UploadDebugBucketsAndResetStep.
+        LOG.info(
+            upload_events(
+                events=analyzer_result.debug_dict[RA_DEBUG_BUCKET_NAME],
+                event_type=DEBUG_BUCKETS_IMPORTER_NAME,
+                bucket_id=RA_DEBUG_BUCKET_NAME,
+                is_replace=True,
+                client=client,
+            )
+        )
         ba_finder.dump_results(is_ask_user=True)
     else:
         LOG.error("Haven't received analyzer results!")

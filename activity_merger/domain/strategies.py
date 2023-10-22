@@ -312,7 +312,7 @@ class InStrategyPropertiesHandler:
                     tree.addi(event.timestamp, event.timestamp + event.duration, event)
             self.current_window_tree = tree
 
-        # TODO: refactor to pluggable handlers.
+        # TODO (impr) refactor to pluggable handlers.
         # Hanldle events depending on strategy parameters.
         if strategy.in_each_event_is_activity:  # Watchdog, Outlook.
             return self._convert_each_event_into_activity()

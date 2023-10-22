@@ -474,184 +474,87 @@ class TestAnalyzer(unittest.TestCase):
 
 
 class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
-    # @parameterized.expand(
-    #     [
-    #         (
-    #             "perfect_match_all_dim",
-    #             intervaltree.IntervalTree(
-    #                 [
-    #                     intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_DIM),
-    #                     intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_DIM),
-    #                     intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_DIM),
-    #                     intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_DIM),
-    #                     intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_DIM),
-    #                     intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_DIM),
-    #                 ]
-    #             ),
-    #             HOUR10_00,
-    #             HOUR11_00,
-    #             3600,
-    #             intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_DIM),
-    #             {
-    #                 "basic activities with highest score": Metric(1, float(3600)),
-    #                 "basic activities with low distance from other candidates": Metric(1, 3600.0),
-    #             },
-    #         ),
-    #         (
-    #             "perfect_match_all_strict",
-    #             intervaltree.IntervalTree(
-    #                 [
-    #                     intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_STRICT),
-    #                 ]
-    #             ),
-    #             HOUR10_00,
-    #             HOUR11_00,
-    #             3600,
-    #             intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_STRICT),
-    #             {
-    #                 "basic activities with highest score": Metric(1, float(3600)),
-    #                 "basic activities with low distance from other candidates": Metric(1, 3600.0),
-    #             },
-    #         ),
-    #         (
-    #             "perfect_match_all_start",
-    #             intervaltree.IntervalTree(
-    #                 [
-    #                     intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_START),
-    #                     intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_START),
-    #                     intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_START),
-    #                     intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
-    #                     intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_START),
-    #                     intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_START),
-    #                 ]
-    #             ),
-    #             HOUR10_00,
-    #             HOUR11_00,
-    #             3600,
-    #             intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
-    #             {
-    #                 "basic activities with good score": Metric(1, float(3600)),
-    #                 "basic activities with low distance from other candidates": Metric(1, 3600.0),
-    #             },
-    #         ),
-    #         (
-    #             "perfect_match_all_end",
-    #             intervaltree.IntervalTree(
-    #                 [
-    #                     intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_END),
-    #                     intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_END),
-    #                     intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_END),
-    #                     intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_END),
-    #                     intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_END),
-    #                     intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_END),
-    #                 ]
-    #             ),
-    #             HOUR10_00,
-    #             HOUR11_00,
-    #             3600,
-    #             intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_END),
-    #             {
-    #                 "basic activities with high score": Metric(1, float(3600)),
-    #                 "basic activities with low distance from other candidates": Metric(1, 3600.0),
-    #             },
-    #         ),
-    #         (
-    #             "perfect_match_start_while_other_strict",
-    #             intervaltree.IntervalTree(
-    #                 [
-    #                     intervaltree.Interval(HOUR9_00, HOUR10_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR9_00, HOUR11_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR9_00, HOUR12_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
-    #                     intervaltree.Interval(HOUR10_00, HOUR12_00, ACTIVITY_STRICT),
-    #                     intervaltree.Interval(HOUR11_00, HOUR12_00, ACTIVITY_STRICT),
-    #                 ]
-    #             ),
-    #             HOUR10_00,
-    #             HOUR11_00,
-    #             3600,
-    #             intervaltree.Interval(HOUR10_00, HOUR11_00, ACTIVITY_START),
-    #             {
-    #                 "basic activities with high score": Metric(1, float(3600)),
-    #                 "basic activities with low distance from other candidates": Metric(1, 3600.0),
-    #             },
-    #         ),
-    #     ]
-    # )
-    # def test_find_basic_activity_interval(
-    #     self,
-    #     test_name,
-    #     candidates_tree: intervaltree.IntervalTree,
-    #     start_point: datetime.datetime,
-    #     end_point: datetime.datetime,
-    #     max_duration_seconds: float,
-    #     expected_interval: intervaltree.Interval,
-    #     expected_metrics: Dict[str, Metric],
-    # ):
-    #     self.maxDiff = None
-    #     metrics = Metrics({})
-    #     step = MergeCandidatesTreeIntoResultTreeStep(False, True)
-    #     # Act
-    #     interval: intervaltree.Interval = step.find_basic_activity_interval(
-    #         candidates_tree=candidates_tree,
-    #         start_point=start_point,
-    #         end_point=end_point,
-    #         max_duration_seconds=max_duration_seconds,
-    #         metrics=metrics,
-    #     )
-    #     # Assert
-    #     self.assertEqual(expected_interval, interval, "wrong interval")
-    #     self.assertDictEqual(
-    #         {k: v for (k, v) in expected_metrics.items()},
-    #         {k: v for (k, v) in metrics.metrics.items() if v.cnt > 0},
-    #         "wrong metrics",
-    #     )
 
     @parameterized.expand(
         [
             (
-                "empty_result_tree",
-                intervaltree.IntervalTree(),
+                "start:empty_result_tree",
                 intervaltree.IntervalTree(
                     [
                         intervaltree.Interval(HOUR9_00, HOUR10_00),
                     ]
                 ),
+                intervaltree.IntervalTree(),
                 None,
                 HOUR9_00,
                 HOUR10_00,
             ),
             (
-                "result_tree_1_interval_starts_before",
+                "middle:empty_result_tree",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR11_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(),
+                HOUR10_00,
+                HOUR10_00,
+                HOUR11_00,
+            ),
+            (
+                "end:empty_result_tree",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR11_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(),
+                HOUR11_00,
+                None,
+                None,
+            ),
+            (
+                "start:result_tree_1_interval_starts_before",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
                 intervaltree.IntervalTree(
                     [
                         intervaltree.Interval(HOUR8_00, HOUR9_00),
                     ]
                 ),
-                intervaltree.IntervalTree(
-                    [
-                        intervaltree.Interval(HOUR9_00, HOUR12_00),
-                    ]
-                ),
                 None,
                 HOUR9_00,
                 HOUR12_00,
             ),
             (
-                "result_tree_1_interval_starts_at_start",
+                "end:result_tree_1_interval_starts_before",
                 intervaltree.IntervalTree(
                     [
-                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
                     ]
                 ),
                 intervaltree.IntervalTree(
                     [
+                        intervaltree.Interval(HOUR8_00, HOUR9_00),
+                    ]
+                ),
+                HOUR12_00,
+                None,
+                None,
+            ),
+            (
+                "start1:result_tree_1_interval_starts_at_start",
+                intervaltree.IntervalTree(
+                    [
                         intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
                     ]
                 ),
                 None,
@@ -659,46 +562,230 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
                 HOUR12_00,
             ),
             (
-                "result_tree_1_interval_starts_at_middle",
+                "start2:result_tree_1_interval_starts_at_start",
                 intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                    ]
+                ),
+                HOUR9_00,
+                HOUR10_00,
+                HOUR12_00,
+            ),
+            (
+                "middle:result_tree_1_interval_starts_at_start",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                    ]
+                ),
+                HOUR11_00,
+                HOUR11_00,
+                HOUR12_00,
+            ),
+            (
+                "end:result_tree_1_interval_starts_at_start",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                    ]
+                ),
+                HOUR12_00,
+                None,
+                None,
+            ),
+            (
+                "start:result_tree_1_interval_starts_at_middle",
+                intervaltree.IntervalTree(  # Multiple overlapping intervals on 9..14.
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                        intervaltree.Interval(HOUR10_00, HOUR13_00),
+                        intervaltree.Interval(HOUR9_00, HOUR14_00),
+                        intervaltree.Interval(HOUR11_00, HOUR13_00),
+                        intervaltree.Interval(HOUR13_00, HOUR14_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(  # Covers few intervals in "candidates_tree".
                     [
                         intervaltree.Interval(HOUR10_00, HOUR11_00),
                         intervaltree.Interval(HOUR12_00, HOUR13_00),
                         intervaltree.Interval(HOUR14_00, HOUR15_00),
                     ]
                 ),
-                intervaltree.IntervalTree(
-                    [
-                        intervaltree.Interval(HOUR9_00, HOUR14_00),
-                    ]
-                ),
                 None,
                 HOUR9_00,
                 HOUR10_00,
             ),
             (
-                "result_tree_1_interval_starts_after",
+                "middle_before:result_tree_1_interval_starts_at_middle",
+                intervaltree.IntervalTree(  # Multiple overlapping intervals on 9..14.
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                        intervaltree.Interval(HOUR10_00, HOUR13_00),
+                        intervaltree.Interval(HOUR9_00, HOUR14_00),
+                        intervaltree.Interval(HOUR11_00, HOUR13_00),
+                        intervaltree.Interval(HOUR13_00, HOUR14_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(  # Covers 11..12 interval.
+                    [
+                        intervaltree.Interval(HOUR11_00, HOUR12_00),
+                    ]
+                ),
+                HOUR10_00,
+                HOUR10_00,
+                HOUR11_00,
+            ),
+            (
+                "middle_on:result_tree_1_interval_starts_at_middle",
+                intervaltree.IntervalTree(  # Multiple overlapping intervals on 9..14.
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                        intervaltree.Interval(HOUR10_00, HOUR13_00),
+                        intervaltree.Interval(HOUR9_00, HOUR14_00),
+                        intervaltree.Interval(HOUR11_00, HOUR13_00),
+                        intervaltree.Interval(HOUR13_00, HOUR14_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(  # Covers 11..12 interval.
+                    [
+                        intervaltree.Interval(HOUR11_00, HOUR12_00),
+                    ]
+                ),
+                HOUR11_00,
+                HOUR12_00,
+                HOUR14_00,
+            ),
+            (
+                "middle_inside:result_tree_1_interval_starts_at_middle",
+                intervaltree.IntervalTree(  # Multiple overlapping intervals on 9..14.
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                        intervaltree.Interval(HOUR10_00, HOUR13_00),
+                        intervaltree.Interval(HOUR9_00, HOUR14_00),
+                        intervaltree.Interval(HOUR11_00, HOUR13_00),
+                        intervaltree.Interval(HOUR13_00, HOUR14_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(  # Covers 11..13 interval.
+                    [
+                        intervaltree.Interval(HOUR11_00, HOUR13_00),
+                    ]
+                ),
+                HOUR12_00,
+                HOUR13_00,
+                HOUR14_00,
+            ),
+            (
+                "middle_after:result_tree_1_interval_starts_at_middle",
+                intervaltree.IntervalTree(  # Multiple overlapping intervals on 9..14.
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                        intervaltree.Interval(HOUR10_00, HOUR13_00),
+                        intervaltree.Interval(HOUR9_00, HOUR14_00),
+                        intervaltree.Interval(HOUR11_00, HOUR13_00),
+                        intervaltree.Interval(HOUR13_00, HOUR14_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(  # Covers 11..12 interval.
+                    [
+                        intervaltree.Interval(HOUR11_00, HOUR12_00),
+                    ]
+                ),
+                HOUR12_00,
+                HOUR12_00,
+                HOUR14_00,
+            ),
+            (
+                "end:result_tree_1_interval_starts_at_middle",
+                intervaltree.IntervalTree(  # Multiple overlapping intervals on 9..14.
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR10_00),
+                        intervaltree.Interval(HOUR10_00, HOUR13_00),
+                        intervaltree.Interval(HOUR9_00, HOUR14_00),
+                        intervaltree.Interval(HOUR11_00, HOUR13_00),
+                        intervaltree.Interval(HOUR13_00, HOUR14_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(  # Covers 11..12 interval.
+                    [
+                        intervaltree.Interval(HOUR11_00, HOUR12_00),
+                    ]
+                ),
+                HOUR14_00,
+                None,
+                None,
+            ),
+            (
+                "start:result_tree_1_interval_starts_after",
                 intervaltree.IntervalTree(
                     [
-                        intervaltree.Interval(HOUR12_00, HOUR13_00),
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
                     ]
                 ),
                 intervaltree.IntervalTree(
                     [
-                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                        intervaltree.Interval(HOUR12_00, HOUR13_00),
                     ]
                 ),
                 None,
                 HOUR9_00,
                 HOUR12_00,
             ),
+            (
+                "end:result_tree_1_interval_starts_after",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR12_00, HOUR13_00),
+                    ]
+                ),
+                HOUR12_00,
+                None,
+                None,
+            ),
+            (
+                "later:result_tree_1_interval_starts_after",
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR9_00, HOUR12_00),
+                    ]
+                ),
+                intervaltree.IntervalTree(
+                    [
+                        intervaltree.Interval(HOUR12_00, HOUR13_00),
+                    ]
+                ),
+                HOUR13_00,
+                None,
+                None,
+            ),
         ]
     )
     def test_find_next_uncovered_intervals(
         self,
         test_name,
-        result_tree: intervaltree.IntervalTree,
         candidates_tree: intervaltree.IntervalTree,
+        result_tree: intervaltree.IntervalTree,
         start_point: datetime.datetime,
         expected_start_point: datetime.datetime,
         expected_end_point: datetime.datetime,
@@ -706,8 +793,8 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
         self.maxDiff = None
         # Act
         actual_start_point, actual_end_point = MergeCandidatesTreeIntoResultTreeStep.find_next_uncovered_intervals(
-            result_tree=result_tree,
             candidates_tree=candidates_tree,
+            result_tree=result_tree,
             start_point=start_point,
         )
         # Assert

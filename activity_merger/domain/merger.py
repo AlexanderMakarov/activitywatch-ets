@@ -35,8 +35,7 @@ def sort_merge_convert_raw_events(
     raw_events.sort(key=lambda e: (e.timestamp, e.duration))
     result = []
 
-    # TODO bug with Window events duration "normalized" > "raw" on 16 seconds.
-
+    # Probably there is a bug with Window events duration "normalized" > "raw" on 16 seconds.
     # 2. Iterate events with postponing each previous event.
     prev_event: AWEvent = None
     for event in raw_events:
@@ -151,7 +150,7 @@ def analyze_buckets(
         strat_metrics = Metrics({})  # These Metrics are per strategy, not per bucket!
         total_raw_events = 0
         # Fetch and normilize events.
-        # TODO (performance) do in parallel, AFK and Window before all.
+        # TODO (performance) do in parallel, AFK and Window before all. Think about ID-s.
         for bucket_id in strategy_buckets:
             metrics.incr("handled buckets")
             strat_metrics.incr("total buckets")

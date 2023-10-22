@@ -30,6 +30,7 @@ IntervalFeatures = namedtuple(
         "is_end_boundaries",
         "is_dim_boundaries",
         "is_not_start_end_boundaries",
+        # TODO add feature "amount of keys"
     ],
 )
 
