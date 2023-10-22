@@ -16,7 +16,7 @@ from ..config.config import (
 from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
-from .strategies import BUCKET_AFK_PREFIX, ActivitiesByStrategy, ActivityByStrategy, calculate_activity_density
+from .strategies import BUCKET_AFK_PREFIX, StrategyApplyResult, ActivityByStrategy, calculate_interval_density
 
 
 RA_DEBUG_BUCKET_NAME = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
@@ -37,7 +37,7 @@ def _cut_activity_start(
         max_start_time=max(point, activity.max_start_time),
         min_end_time=activity.min_end_time,
         events=events,
-        density=0 if density_zero else calculate_activity_density(events, point, activity.suggested_end_time),
+        density=0 if density_zero else calculate_interval_density(events, point, activity.suggested_end_time),
         grouping_data=activity.grouping_data,
         strategy=activity.strategy,
     )
@@ -56,7 +56,7 @@ def _cut_activity_end(activity: ActivityByStrategy, point: datetime.datetime, ne
         max_start_time=activity.max_start_time,
         min_end_time=min(point, activity.min_end_time),
         events=events,
-        density=0 if density_zero else calculate_activity_density(events, activity.suggested_start_time, point),
+        density=0 if density_zero else calculate_interval_density(events, activity.suggested_start_time, point),
         grouping_data=activity.grouping_data,
         strategy=activity.strategy,
     )
@@ -603,13 +603,12 @@ class AnalyzerStep:
         By-default checks nothing.
         """
 
-    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+    def run(self, context: Dict[str, any], metrics: Metrics):
         """
         Executes this step on the given context. All results are placed back to the context.
         By-default does nothing.
-        Should return True if passed.
         """
-        return False
+        raise NotImplementedError("AnalyzerStep.run is not implemented.")
 
 
 class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
@@ -625,7 +624,7 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
         return "Making 'result_tree' from self sufficient activities."
 
     def check_context(self, context: Dict[str, any]) -> None:
-        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
+        assert "strategy_apply_result" in context, "Need in 'strategy_apply_result' property"
         if self.is_add_debug_buckets:
             if "debug_buckets_handler" not in context:
                 context["debug_buckets_handler"] = DebugBucketsHandler()
@@ -633,8 +632,8 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
         result_tree = intervaltree.IntervalTree()
-        strategy_result: ActivitiesByStrategy
-        for strategy_result in context["activities_by_strategy"]:
+        strategy_result: StrategyApplyResult
+        for strategy_result in context["strategy_apply_result"]:
             if not strategy_result.strategy.out_self_sufficient:
                 continue
             metrics.incr("self sufficient strategies")
@@ -665,7 +664,6 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
                 )
                 metrics.incr("self sufficient activities", duration)
         context["result_tree"] = result_tree
-        return True
 
 
 class ChopActivitiesByResultTreeStep(AnalyzerStep):
@@ -685,15 +683,15 @@ class ChopActivitiesByResultTreeStep(AnalyzerStep):
         return "Chopping 'candidates_tree' from all not self sufficient activities."
 
     def check_context(self, context: Dict[str, any]) -> None:
-        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
+        assert "strategy_apply_result" in context, "Need in 'strategy_apply_result' property"
         assert "result_tree" in context, "Need in 'result_tree' property"
 
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         result_tree: intervaltree.IntervalTree = context.get("result_tree")
         last_id: int = context.get("last_id")
         if len(result_tree) > 0:
-            strategy_result: ActivitiesByStrategy
-            for strategy_result in context["activities_by_strategy"]:
+            strategy_result: StrategyApplyResult
+            for strategy_result in context["strategy_apply_result"]:
                 bucket_prefix = strategy_result.strategy.bucket_prefix
                 # Skip AFK activities and self sufficient if need.
                 if (self.is_skip_afk and bucket_prefix.startswith(BUCKET_AFK_PREFIX)) or (
@@ -704,7 +702,6 @@ class ChopActivitiesByResultTreeStep(AnalyzerStep):
                 strategy_result.activities, last_id = _exclude_tree_intervals(
                     strategy_result.activities, result_tree, last_id, metrics, "result_tree"
                 )
-        return True
 
 
 class MakeCandidatesTreeStep(AnalyzerStep):
@@ -727,7 +724,7 @@ class MakeCandidatesTreeStep(AnalyzerStep):
         return "Building 'candidates_tree' activities."
 
     def check_context(self, context: Dict[str, any]) -> None:
-        assert "activities_by_strategy" in context, "Need in 'activities_by_strategy' property"
+        assert "strategy_apply_result" in context, "Need in 'strategy_apply_result' property"
         if self.is_add_debug_buckets:
             if "debug_buckets_handler" not in context:
                 context["debug_buckets_handler"] = DebugBucketsHandler()
@@ -736,8 +733,8 @@ class MakeCandidatesTreeStep(AnalyzerStep):
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
         last_id: int = context.get("last_id")
         candidates_tree = intervaltree.IntervalTree()
-        strategy_result: ActivitiesByStrategy
-        for strategy_result in context["activities_by_strategy"]:
+        strategy_result: StrategyApplyResult
+        for strategy_result in context["strategy_apply_result"]:
             # Skip some strategies if need.
             if (not self.is_add_afk and strategy_result.strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX)) or (
                 not self.is_add_self_sufficient and strategy_result.strategy.out_self_sufficient
@@ -753,7 +750,6 @@ class MakeCandidatesTreeStep(AnalyzerStep):
                 )
         metrics.override("last activity id", last_id, 0)
         context["candidates_tree"] = candidates_tree
-        return True
 
 
 class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
@@ -968,7 +964,6 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             metrics,
             debug_buckets_handler.events if debug_buckets_handler else None,
         )
-        return True
 
 
 class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidatesTreeIntoResultTreeStep):
@@ -1057,7 +1052,6 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidates
             metrics,
             debug_buckets_handler.events if debug_buckets_handler else None,
         )
-        return True
 
 
 """
@@ -1073,7 +1067,7 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidates
 
 
 def merge_activities(
-    activities_by_strategy: List[ActivitiesByStrategy],
+    strategy_apply_result: List[StrategyApplyResult],
     steps: List[AnalyzerStep],
     ignore_substrings: List[str] = None,
 ) -> AnalyzerResult:
@@ -1082,8 +1076,8 @@ def merge_activities(
     """
 
     context = {
-        "activities_by_strategy": activities_by_strategy,
-        "last_id": max(x.last_id for x in activities_by_strategy),
+        "strategy_apply_result": strategy_apply_result,
+        "last_id": max(x.last_id for x in strategy_apply_result),
     }
     for step in steps:
         metrics = Metrics({})
@@ -1091,16 +1085,11 @@ def merge_activities(
         step_description = step.get_description()
         LOG.info("STEP START: %s", step_description)
         time = datetime.datetime.now()
-        step_result = step.run(context, metrics)
+        step.run(context, metrics)
         time = datetime.datetime.now() - time
-        if step_result:
-            metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
-            if metrics_strings:
-                LOG.info("STEP FINISH: %s\n%s\n", time, "\n".join(metrics_strings))
-            else:
-                LOG.info("STEP FINISH: %s", time)
+        metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
+        if metrics_strings:
+            LOG.info("STEP FINISH: %s, metrics:\n%s", time, "\n".join(metrics_strings))
         else:
-            metrics_strings = list(metrics.to_strings())
-            LOG.error("STEP FAILED: %s\n%s", time, "\n".join(metrics_strings))
-            return None
+            LOG.info("STEP FINISH: %s, no metrics", time)
     return context["analyzer_result"]

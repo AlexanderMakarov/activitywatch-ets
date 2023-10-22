@@ -170,6 +170,7 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Add "density" characteristic for the `ActivityByStrategy` to choose "basic activity".
 - [x] Add ID-s to ActivityByStrategy-ies and show them in ActivityWatch UI.
 - [x] Add (revert) "tuner" to ask users for "basic activity" ID ^ and correct weights in find_basic_activity_interval.
+- [x] Cut too small activity-by-strategy-es.
 - [ ] Add ability to separate distinct activity by name, like 'ETS' or 'Slack meeting' in Window events.
       Such activities should be configured separately, like don't need cut by AFK.
       For Slack meetings need to separate calls and texting.

@@ -23,10 +23,10 @@ from activity_merger.domain.analyzer import (
 )
 from activity_merger.domain.basic_activity_finder import BAFinder
 from activity_merger.domain.input_entities import Event
-from activity_merger.domain.merger import analyze_buckets
+from activity_merger.domain.merger import apply_strategies_on_events
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
-from activity_merger.domain.strategies import ActivitiesByStrategy
+from activity_merger.domain.strategies import StrategyApplyResult
 from activity_merger.helpers.helpers import setup_logging, upload_events, valid_date
 
 
@@ -46,9 +46,9 @@ def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
     return result
 
 
-def get_activities_by_strategy(
+def clean_debug_buckets_and_apply_strategies_on_one_day_events(
     events_date: datetime.datetime, client: aw_client.ActivityWatchClient
-) -> Tuple[List[ActivitiesByStrategy], Metrics]:
+) -> Tuple[List[StrategyApplyResult], Metrics]:
     """
     Connects to ActivityWatch, gets list of buckets and applies all strategies on all events in them.
     :param events_date: Date to get events for.
@@ -66,7 +66,7 @@ def get_activities_by_strategy(
         )
         exit(1)
     LOG.info("Buckets to analyze: [%s]", ", ".join(buckets.keys()))
-    return analyze_buckets(
+    return apply_strategies_on_events(
         client,
         events_date.date(),
         events_date.date() + datetime.timedelta(days=1),
@@ -107,17 +107,17 @@ def convert_aw_events_to_activities(
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
     LOG.info("Starting to build activities per strategy...")
-    activities_by_strategy, metrics = get_activities_by_strategy(events_date, client)
+    strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_date, client)
     metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
-    LOG.info("Analyzed all buckets separately:\n  %s", "\n  ".join(metrics_strings))
+    LOG.info("Analyzed all buckets separately, metrics:\n  %s", "\n  ".join(metrics_strings))
     LOG.info(
         "Got following activities-per-strategy:\n%s",
-        "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in activities_by_strategy),
+        "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in strategy_apply_result),
     )
 
     ba_finder = BAFinder()  # TODO populate with coefficients.
     analyzer_result = merge_activities(
-        activities_by_strategy=activities_by_strategy,
+        strategy_apply_result=strategy_apply_result,
         steps=[
             MakeResultTreeFromSelfSufficientActivitiesStep(is_add_debug_buckets=True),
             ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),

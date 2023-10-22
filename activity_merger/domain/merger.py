@@ -6,7 +6,7 @@ from aw_core import Event as AWEvent
 from ..config.config import LOG
 from .input_entities import Event, Strategy
 from .metrics import Metrics
-from .strategies import (ActivitiesByStrategy, InStrategyPropertiesHandler)
+from .strategies import (StrategyApplyResult, InStrategyPropertiesHandler)
 
 
 def _add_raw_event(raw_event: AWEvent, list_to_add: List[Event], bucket_id: str, metrics: Metrics):
@@ -112,31 +112,30 @@ def sort_merge_convert_raw_events(
     return result
 
 
-def analyze_buckets(
+def apply_strategies_on_events(
     activity_watch_client,
     start_time: datetime.datetime,
     end_time: datetime.datetime,
     buckets: List[str],
     strategies: List[Strategy],
     tolerance: datetime.timedelta,
-) -> Tuple[List[ActivitiesByStrategy], Metrics]:
+) -> Tuple[List[StrategyApplyResult], Metrics]:
     """
-    Analyzes given list of event's buckets and for each of them which is covered by provided strategy makes
-    `ActivitiesByStrategy` objects. Also gets metrics for this process.
+    Gets ActivityWatch events for specified time duration and applies strategies "in" parameters on them.
     :param activity_watch_client: ActivityWatch client to use for fetching events.
     :param start_time: Analyzing interval start.
     :param end_time: Analyzing interval end.
     :param buckets: List of buckets to analyze.
     :param strategies: List of strategies to analyze with.
     :param tolerance: Tolerance for comparing and merging events.
-    :returns: List of `ActivitiesByStrategy` objects per strategy.
+    :returns: Tuple with list of `StrategyApplyResult` and metrics.
     Note that one strategy may span few buckets if data taken from the few machines.
     """
     metrics = Metrics({})
     bucket_ids_to_handle = list(buckets.keys())
     metrics.override("total buckets", len(buckets), 0)
     strategies_handler = InStrategyPropertiesHandler()
-    result: List[ActivitiesByStrategy] = []
+    result: List[StrategyApplyResult] = []
     for strategy in strategies:
         metrics.incr("total strategies")
         strategy_buckets = [x for x in bucket_ids_to_handle if x.startswith(strategy.bucket_prefix)]

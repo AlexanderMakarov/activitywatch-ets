@@ -40,7 +40,7 @@ from activity_merger.domain.analyzer import (
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.helpers.helpers import datetime_to_time_str, setup_logging, upload_events, valid_date
-from get_activities import get_activities_by_strategy, reload_debug_buckets
+from get_activities import clean_debug_buckets_and_apply_strategies_on_one_day_events, reload_debug_buckets
 
 
 class TerminalLeader:
@@ -315,6 +315,10 @@ class SupervisedBAFinder(BAFinder):
             "Which activity-by-strategy from 'z###-*' buckets on ActivityWatch 'Timeline' page best represents "
             + f"activty from {datetime_to_time_str(start_point)} to {datetime_to_time_str(end_point)}?"
         )
+        # TODO (impr) need interactions to:
+        # - (here???) split existing activity-by-strategy in the middle
+        # - revert previous decision
+        # - stop without completing till the end of the day.
         answer: Tuple[str, int] = self.leader.ask_select_question(question, options)
         try:
             index_chosen_in_sorted_candidates = answer[1]
@@ -346,7 +350,6 @@ class UploadDebugBucketsAndResetStep(AnalyzerStep):
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
         reload_debug_buckets(debug_buckets_handler.events, self.client)
-        return True
 
 
 def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
@@ -364,17 +367,23 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     else:
         context = Context()
     # Build ActivitiesByStrategy list by provided events date.
-    activities_by_strategy, metrics = get_activities_by_strategy(events_date, client)
-    # TODO (impr) don't see options for manual judgements:
-    # - with proper splitting by AFK
-    if not activities_by_strategy:
-        LOG.warning("Can't find events/intervals for %s. Doing nothing.", events_date.date())
+    strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_date, client)
+    metrics_strings = list(metrics.to_strings())
+    # Don't print resulting activity-by-strategies - better to see them in ActivityWatch UI.
+    LOG.info("Analyzed all buckets separately, common metrics:\n  %s", "\n".join(metrics_strings))
+    LOG.info(
+        "\n".join(
+            x.strategy.name + " metrics:\n  " + "\n".join(x.metrics.to_strings()) for x in strategy_apply_result
+        )
+    )
+    if not strategy_apply_result:
+        LOG.warning("Can't build activity-by-strategies by events/intervals for %s. Doing nothing.", events_date.date())
         return None
 
     # Start to decide activities with last step involving user interactions.
     ba_finder = context.to_ba_finder()
     analyzer_result: AnalyzerResult = merge_activities(
-        activities_by_strategy=activities_by_strategy,
+        strategy_apply_result=strategy_apply_result,
         steps=[
             MakeResultTreeFromSelfSufficientActivitiesStep(True),
             ChopActivitiesByResultTreeStep(True, True),

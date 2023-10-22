@@ -4,9 +4,9 @@ from typing import Dict, List, Set, Tuple
 
 import intervaltree
 
-from ..config.config import LOG, MIN_ACTIVITY_DURATION_SEC
+from ..config.config import LOG, MIN_ACTIVITY_DURATION_SEC, TOO_SMALL_INTERVAL_SEC
 from ..helpers.helpers import event_to_str, from_start_to_end_to_str, seconds_to_timedelta
-from .input_entities import IntervalBoundaries, Event, Strategy
+from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 
 BUCKET_AFK_PREFIX = "aw-watcher-afk"
@@ -61,26 +61,27 @@ class ActivityByStrategy:
     """
 
     id: int
-    """Identifier for the activity"""
+    """Identifier for the activity-by-strategy"""
     suggested_start_time: datetime.datetime
-    """Suggested start time of the activity."""
+    """Suggested start time of the activity-by-strategy."""
     suggested_end_time: datetime.datetime
-    """Suggested end time of the activity."""
+    """Suggested end time of the activity-by-strategy."""
     max_start_time: datetime.datetime
-    """Maximum start time of the activity possible. Equal or later then 'start time'."""
+    """Maximum start time of the activity-by-strategy possible. Equal or later then 'start time'."""
     min_end_time: datetime.datetime
-    """Minimum end time of the activity possible. Equal or earlier then 'end time'."""
+    """Minimum end time of the activity-by-strategy possible. Equal or earlier then 'end time'."""
     events: List[Event]
-    """List of (dominant) events the activity consists of."""
+    """List of (dominant) events the activity-by-strategy consists of."""
     density: float
     """
-    Density of the activity in [0..1] measured by duration of the events inside and taking into account boundaries
-    of the parent strategy. I.e. if strategy's 'in_trustable_boundaries' is "START" or "END" then value will be zero.
+    Density of the activity-by-strategy in [0..1] measured by duration of the events inside and taking into account
+    boundaries of the parent strategy.
+    I.e. if strategy's 'in_trustable_boundaries' is "START" or "END" then value will be zero.
     """
     grouping_data: GroupingDescriptior
-    """Object describing why enclosed events are aggregated into activity."""
+    """Object describing why enclosed events are aggregated into activity-by-strategy."""
     strategy: Strategy
-    """ Strategy used to create this activity."""
+    """Strategy used to create this activity-by-strategy."""
 
     def duration(self) -> float:
         """Returns duration from suggest start to suggest end in seconds."""
@@ -96,8 +97,8 @@ class ActivityByStrategy:
 
 
 @dataclasses.dataclass
-class ActivitiesByStrategy:
-    """List of activities aggregated by a strategy."""
+class StrategyApplyResult:
+    """Result of applying one strategy on list of ActivityWatch events."""
 
     strategy: Strategy
     activities: List[ActivityByStrategy]
@@ -195,11 +196,11 @@ def cut_event(
     return Event(bucket_id=event.bucket_id, timestamp=event_start, duration=event_end - event_start, data=event.data)
 
 
-def calculate_activity_density(
+def calculate_interval_density(
     events: List[Event], start_time: datetime.datetime, end_time: datetime.datetime
 ) -> float:
     """
-    Calculates density of activity by the given events and bounds.
+    Calculates density of interval by the given events and bounds.
     Assumes that start_time and end_time are placed in the range of some events, probably on the first and last
     accordingly. Also events are sorted in time order. And start_time less than end_time.
     """
@@ -274,7 +275,17 @@ class InStrategyPropertiesHandler:
             metrics.incr("events chopped by 'relevant app active'", (initial_duration - event.duration).total_seconds())
         return event
 
-    def handle_events(self, strategy: Strategy, events: List[Event], metrics: Metrics) -> ActivitiesByStrategy:
+    def _check_wrong_duration(self, duration: datetime.timedelta) -> bool:
+        duration_sec = duration.total_seconds()
+        if duration_sec <= TOO_SMALL_INTERVAL_SEC:
+            self.current_metrics.incr(
+                f"activity-by-strategy-es not created because interval < {TOO_SMALL_INTERVAL_SEC} seconds",
+                duration_sec,
+            )
+            return True
+        return False
+
+    def handle_events(self, strategy: Strategy, events: List[Event], metrics: Metrics) -> StrategyApplyResult:
         """
         Handles list of events for the specified `Strategy` to provide `ActivitiesByStrategy` instance.
         """
@@ -315,7 +326,7 @@ class InStrategyPropertiesHandler:
         # TODO (impr) refactor to pluggable handlers.
         # Hanldle events depending on strategy parameters.
         if strategy.in_each_event_is_activity:  # Watchdog, Outlook.
-            return self._convert_each_event_into_activity()
+            return self._convert_each_event_into_activitybs()
         if strategy.in_events_density_matters:
             if strategy.in_activities_may_overlap:  # Jira, Window, Web, IDEA, VSCode, Git.
                 return self._aggregate_events_with_few_sliding_windows_by_density()
@@ -327,7 +338,7 @@ class InStrategyPropertiesHandler:
             else:  # AFK
                 return self._aggregate_events_with_one_sliding_window()
 
-    def _convert_each_event_into_activity(self) -> ActivitiesByStrategy:
+    def _convert_each_event_into_activitybs(self) -> StrategyApplyResult:
         # Produces Activity per each event.
         activities: List[ActivityByStrategy] = []
         density = (
@@ -340,8 +351,10 @@ class InStrategyPropertiesHandler:
             if event is None:
                 continue
             end_time = event.timestamp + event.duration
+            if self._check_wrong_duration(end_time - event.timestamp):
+                continue
             self.current_id += 1
-            activity = ActivityByStrategy(
+            activitybs = ActivityByStrategy(
                 id=self.current_id,
                 suggested_start_time=event.timestamp,
                 suggested_end_time=end_time,
@@ -353,25 +366,28 @@ class InStrategyPropertiesHandler:
                 strategy=self.current_strategy,
             )
             self.current_metrics.incr("activities", event.duration.seconds)
-            activities.append(activity)
-        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics, self.current_id)
+            activities.append(activitybs)
+        return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
 
-    def _make_activity_between_events(
+    def _make_activitybs_between_events(
         self,
         events: List[Event],
         grouping_data: GroupingDescriptior,
         activities: List[ActivityByStrategy],
     ):
         """
-        Makes activity starting on start of first event and ending at the end of last event.
+        Makes activity-by-strategy starting on start of first event and ending at the end of last event.
         Next adds it to provided list and updates `Metrics` with it.
         """
-        # Use start of first event and end of last event as "suggested" bounds of the activity.
+        # Use start of first event and end of last event as "suggested" bounds of the activity-by-strategy.
         start_time = events[0].timestamp
         end_time = events[-1].timestamp + events[-1].duration
+        # Skip too small intervals. Don't do it on "suggested" values because they may provide duration=0.
+        if self._check_wrong_duration(end_time - start_time):
+            return
         # For max and min time check 'in_trustable_boundaries' and put start/end time of first/last event respectively.
         # Note that for STRICT and DIM boundaries max and min time points aren't used.
-        # Because any overlap is either removes activity or splits it.
+        # Because any overlap is either removes activity-by-strategy or splits it.
         max_start_time = start_time
         min_end_time = end_time
         in_trustable_boundaries = self.current_strategy.in_trustable_boundaries
@@ -382,22 +398,23 @@ class InStrategyPropertiesHandler:
         elif in_trustable_boundaries is IntervalBoundaries.START:
             min_end_time = events[-1].timestamp
             density_zero = True
+        # Make a new activity-by-strategy. Increment ID-s counter.
         self.current_id += 1
-        activity = ActivityByStrategy(
+        activitybs = ActivityByStrategy(
             id=self.current_id,
             suggested_start_time=start_time,
             suggested_end_time=end_time,
             max_start_time=max_start_time,
             min_end_time=min_end_time,
             events=events,
-            density=0 if density_zero else calculate_activity_density(events, start_time, end_time),
+            density=0 if density_zero else calculate_interval_density(events, start_time, end_time),
             grouping_data=grouping_data,
             strategy=self.current_strategy,
         )
-        activities.append(activity)
-        self.current_metrics.incr("activities", activity.duration())
+        activities.append(activitybs)
+        self.current_metrics.incr("activity-by-strategy-es", activitybs.duration())
 
-    def _aggregate_events_with_one_sliding_window(self) -> ActivitiesByStrategy:
+    def _aggregate_events_with_one_sliding_window(self) -> StrategyApplyResult:
         # Produces Activity for all consequint events with the same data.
         activities: List[ActivityByStrategy] = []
         window: List[Event] = []
@@ -443,7 +460,7 @@ class InStrategyPropertiesHandler:
             # Otherwise if window exists then create Activity from it.
             if window:
                 window_key = ListOfPairsDescriptor(list(window_kv_pairs))
-                self._make_activity_between_events(
+                self._make_activitybs_between_events(
                     window,
                     window_key,
                     activities,
@@ -454,12 +471,12 @@ class InStrategyPropertiesHandler:
             window.append(event)
         # Handle last window.
         if window:
-            self._make_activity_between_events(
+            self._make_activitybs_between_events(
                 window,
                 ListOfPairsDescriptor(list(window_kv_pairs)),
                 activities,
             )
-        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics, self.current_id)
+        return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
 
     def _add_event_to_window(
         self, event: Event, key: GroupingDescriptior, windows: Dict[GroupingDescriptior, List[Event]]
@@ -530,7 +547,7 @@ class InStrategyPropertiesHandler:
                     # Current descriptor is longer, replace.
                     windows_with_interval[key] = descriptor
                     metrics.incr(
-                        "removed activities with same intervals but less keys",
+                        "removed activity-by-strategy-es with same intervals but less keys",
                         (window_end - window_start).total_seconds(),
                     )
                 elif length_diff < 0:
@@ -554,16 +571,16 @@ class InStrategyPropertiesHandler:
             windows = tmp
         return windows
 
-    def _aggregate_events_with_few_sliding_windows(self) -> ActivitiesByStrategy:
+    def _aggregate_events_with_few_sliding_windows(self) -> StrategyApplyResult:
         """Produces Activities covering all "same data" events."""
         windows: Dict[GroupingDescriptior, List[Event]] = self._separate_events_per_windows(events)
         # Make activities from the each window.
         activities = []
         for key, events in windows.items():
-            self._make_activity_between_events(events, key, activities)
-        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics, self.current_id)
+            self._make_activitybs_between_events(events, key, activities)
+        return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
 
-    def _aggregate_events_with_few_sliding_windows_by_density(self) -> ActivitiesByStrategy:
+    def _aggregate_events_with_few_sliding_windows_by_density(self) -> StrategyApplyResult:
         """Produces overlapping Activities basing on theirs density on time scale."""
         windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
         # Analyse gaps in each window.
@@ -579,26 +596,27 @@ class InStrategyPropertiesHandler:
                         gaps.append((i, gap))
                 prev_event = event
             if len(gaps) <= 0:
-                # If there are no gaps then just create one activity from all events.
-                self._make_activity_between_events(window_events, key, activities)
+                # If there are no gaps then just create one activity-by-strategy from all events.
+                self._make_activitybs_between_events(window_events, key, activities)
                 continue
             # Otherwise iterate gaps to find out those which are bigger than minimal activity duration.
             # Make activities between them.
-            last_activity_event_index = 0
+            last_activitybs_event_index = 0
             for gap in gaps:
-                # If gap bigger than minimal activity duration then it is a separate activity.
+                # If gap bigger than minimal activity duration then it is a separate activity-by-strategy.
                 if gap[1] >= MIN_ACTIVITY_DURATION_SEC:
-                    self._make_activity_between_events(
-                        window_events[last_activity_event_index : gap[0]],
+                    self._make_activitybs_between_events(
+                        window_events[last_activitybs_event_index : gap[0]],
                         key,
                         activities,
                     )
-                    last_activity_event_index = gap[0]
-            # Here we have activities made up to the last big gap. Make activity from the remained events.
-            if last_activity_event_index < len(window_events) - 1:
-                self._make_activity_between_events(
-                    window_events[last_activity_event_index:-1],
+                    last_activitybs_event_index = gap[0]
+            # Here we have activity-by-strategy-es made up to the last big gap.
+            # Make activity-by-strategy-es from the remained events.
+            if last_activitybs_event_index < len(window_events) - 1:
+                self._make_activitybs_between_events(
+                    window_events[last_activitybs_event_index:-1],
                     key,
                     activities,
                 )
-        return ActivitiesByStrategy(self.current_strategy, activities, self.current_metrics, self.current_id)
+        return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
