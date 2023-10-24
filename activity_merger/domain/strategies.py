@@ -3,6 +3,8 @@ import datetime
 from typing import Dict, List, Set, Tuple
 
 import intervaltree
+from sklearn.cluster import OPTICS
+import numpy as np
 
 from ..config.config import LOG, MIN_ACTIVITY_DURATION_SEC, TOO_SMALL_INTERVAL_SEC
 from ..helpers.helpers import event_to_str, from_start_to_end_to_str, seconds_to_timedelta
@@ -223,8 +225,8 @@ class InStrategyPropertiesHandler:
         self.current_strategy_skip_kv = []
         self.current_metrics: Metrics = None
         self.current_events: List[Event] = []
-        self.afk_tree: intervaltree.IntervalTree = None
-        self.window_events: List[Event] = None
+        self.afk_tree: intervaltree.IntervalTree = intervaltree.IntervalTree()
+        self.window_events: List[Event] = []
         self.current_window_tree: intervaltree.IntervalTree = None
         self.current_id: int = 0
 
@@ -301,21 +303,24 @@ class InStrategyPropertiesHandler:
         # Copy "standard watchers" events.
         if strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX):
             # Build tree from "not AFK" events here because only these events will be used.
-            tree = intervaltree.IntervalTree()
             for event in events:
                 status = event.data["status"]
                 if status == "not-afk":
-                    tree.addi(event.timestamp, event.timestamp + event.duration, event)
+                    self.afk_tree.addi(event.timestamp, event.timestamp + event.duration, event)
                     metrics.incr("not-afk events", event.duration.total_seconds())
                 else:
                     metrics.incr("afk events", event.duration.total_seconds())
-            self.afk_tree = tree
         if strategy.bucket_prefix.startswith(BUCKET_WINDOW_PREFIX):
+            assert self.current_window_tree is None, (
+                "Wrong order of buckets handling, 'current_window_tree' already exists"
+                + f" while strategy with '{BUCKET_WINDOW_PREFIX}' bucket prefix is received."
+                + f" Keep all strategies handling '{BUCKET_WINDOW_PREFIX}' bucket just after '{BUCKET_AFK_PREFIX}'."
+            )
             # Just save events because for each strategy will be specified different events.
-            self.window_events = events
+            self.window_events.extend(events)
 
-        # Build "window_tree" if need for the strategy.
-        if strategy.in_only_if_window_app:
+        # Build "window_tree" if need for the strategy and wasn't build before.
+        if strategy.in_only_if_window_app and self.current_window_tree is None:
             tree = intervaltree.IntervalTree()
             for event in self.window_events:
                 app_name = event.data["app"]
@@ -329,7 +334,8 @@ class InStrategyPropertiesHandler:
             return self._convert_each_event_into_activitybs()
         if strategy.in_events_density_matters:
             if strategy.in_activities_may_overlap:  # Jira, Window, Web, IDEA, VSCode, Git.
-                return self._aggregate_events_with_few_sliding_windows_by_density()
+                #return self._aggregate_events_with_few_sliding_windows_by_density()
+                return self._aggregate_events_with_few_sliding_windows_by_optics()
             else:  # No examples yet.
                 return self._aggregate_events_with_one_sliding_window()
         else:
@@ -415,7 +421,11 @@ class InStrategyPropertiesHandler:
         self.current_metrics.incr("activity-by-strategy-es", activitybs.duration())
 
     def _aggregate_events_with_one_sliding_window(self) -> StrategyApplyResult:
-        # Produces Activity for all consequint events with the same data.
+        """
+        Runs one sliding window on events list and creates new activity-by-strategy each time as new set of
+        key-value pairs is found.
+        In result produces activity-by-strategy for all consequent events with the same data.
+        """
         activities: List[ActivityByStrategy] = []
         window: List[Event] = []
         # Prepare variable to store keys in event's 'data' by which search similar events.
@@ -466,7 +476,7 @@ class InStrategyPropertiesHandler:
                     activities,
                 )
                 window = []
-            # In any case prepare next window.
+            # Prepare next window.
             window_kv_pairs = kv_pairs
             window.append(event)
         # Handle last window.
@@ -482,7 +492,7 @@ class InStrategyPropertiesHandler:
         self, event: Event, key: GroupingDescriptior, windows: Dict[GroupingDescriptior, List[Event]]
     ):
         window = windows.setdefault(key, [])
-        self.current_metrics.incr(f"events with data {key}", event.duration.seconds)
+        # TODO revert self.current_metrics.incr(f"events with data {key}", event.duration.seconds)
         window.append(event)
 
     def _separate_events_per_windows(self, events: List[Event]) -> Dict[GroupingDescriptior, List[Event]]:
@@ -581,7 +591,15 @@ class InStrategyPropertiesHandler:
         return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
 
     def _aggregate_events_with_few_sliding_windows_by_density(self) -> StrategyApplyResult:
-        """Produces overlapping Activities basing on theirs density on time scale."""
+        """
+        Produces overlapping activity-by-strategy-es basing on theirs density on time scale.
+        In details it first separates events with "same data" into windows (as big as needed).
+        Next in each window iterates events to collect list of gaps between events.
+        If there are no gaps then collects acitivity-by-strategy.
+        Otherwise splits events by gaps longer than `MIN_ACTIVITY_DURATION_SEC` and makes acitivity-by-strategy-es
+        from these chunks.
+        """
+        metrics = self.current_metrics
         windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
         # Analyse gaps in each window.
         activities: List[ActivityByStrategy] = []
@@ -598,10 +616,12 @@ class InStrategyPropertiesHandler:
             if len(gaps) <= 0:
                 # If there are no gaps then just create one activity-by-strategy from all events.
                 self._make_activitybs_between_events(window_events, key, activities)
+                metrics.incr("1 separated by density activity-by-strategy-es with same data")
                 continue
             # Otherwise iterate gaps to find out those which are bigger than minimal activity duration.
             # Make activities between them.
             last_activitybs_event_index = 0
+            activitybs_count = 0
             for gap in gaps:
                 # If gap bigger than minimal activity duration then it is a separate activity-by-strategy.
                 if gap[1] >= MIN_ACTIVITY_DURATION_SEC:
@@ -610,6 +630,7 @@ class InStrategyPropertiesHandler:
                         key,
                         activities,
                     )
+                    activitybs_count += 1
                     last_activitybs_event_index = gap[0]
             # Here we have activity-by-strategy-es made up to the last big gap.
             # Make activity-by-strategy-es from the remained events.
@@ -619,4 +640,42 @@ class InStrategyPropertiesHandler:
                     key,
                     activities,
                 )
+                activitybs_count += 1
+            metrics.incr(f"{activitybs_count} separated by density activity-by-strategy-es with same data")
+        return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
+
+    def _aggregate_events_with_few_sliding_windows_by_optics(self) -> StrategyApplyResult:
+        """
+        Produces overlapping activity-by-strategy-es basing on theirs density on time scale.
+        In details it first separates events with "same data" into windows (as big as needed).
+        Next in each window it simplifies intervals to middlepoints and
+        runs OPTICS algorithm - https://en.wikipedia.org/wiki/OPTICS_algorithm
+        to find clusters. Note that it works quite bad because it looses
+        """
+        metrics = self.current_metrics
+        windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
+        # Analyse gaps in each window.
+        activities: List[ActivityByStrategy] = []
+        for key, window_events in windows.items():
+            # If it is the only event then make activity-by-strategy from it right now.
+            if len(window_events) == 1:
+                self._make_activitybs_between_events(window_events, key, activities)
+                metrics.incr("1 separated by density activity-by-strategy-es with same data")
+                continue
+            # Convert list of events into 1D list of midpoints.
+            timestamps = []
+            for event in window_events:
+                midpoint: datetime.datetime = event.timestamp + event.duration / 2
+                # It's a list of lists because sklearn expects 2D array-like input.
+                timestamps.append([midpoint.timestamp()])
+            # Feed this list to OPTICS clustering algorithm to separate points by density.
+            timestamps_np = np.array(timestamps)
+            # FYI: with min_samples bigger we are getting bigger activities.
+            clustering = OPTICS(min_samples=0.002, max_eps=MIN_ACTIVITY_DURATION_SEC).fit(timestamps_np)
+            event_clusters = {}
+            for label, event in zip(clustering.labels_, window_events):
+                event_clusters.setdefault(label, []).append(event)
+            metrics.incr(f"{len(event_clusters)} separated by density activity-by-strategy-es with same data")
+            for event_list in event_clusters.values():
+                self._make_activitybs_between_events(event_list, key, activities)
         return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)

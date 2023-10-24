@@ -370,10 +370,10 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_date, client)
     metrics_strings = list(metrics.to_strings())
     # Don't print resulting activity-by-strategies - better to see them in ActivityWatch UI.
-    LOG.info("Analyzed all buckets separately, common metrics:\n  %s", "\n".join(metrics_strings))
+    LOG.info("Analyzed all buckets separately, common metrics:\n%s", "\n".join(metrics_strings))
     LOG.info(
         "\n".join(
-            x.strategy.name + " metrics:\n  " + "\n".join(x.metrics.to_strings()) for x in strategy_apply_result
+            x.strategy.name + " metrics:\n" + "\n".join(x.metrics.to_strings()) for x in strategy_apply_result
         )
     )
     if not strategy_apply_result:
