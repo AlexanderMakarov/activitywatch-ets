@@ -1,9 +1,9 @@
 import dataclasses
 import datetime
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, Optional
 
 import intervaltree
-from sklearn.cluster import OPTICS
+from sklearn.cluster import DBSCAN
 import numpy as np
 
 from ..config.config import LOG, MIN_ACTIVITY_DURATION_SEC, TOO_SMALL_INTERVAL_SEC
@@ -334,8 +334,8 @@ class InStrategyPropertiesHandler:
             return self._convert_each_event_into_activitybs()
         if strategy.in_events_density_matters:
             if strategy.in_activities_may_overlap:  # Jira, Window, Web, IDEA, VSCode, Git.
-                #return self._aggregate_events_with_few_sliding_windows_by_density()
-                return self._aggregate_events_with_few_sliding_windows_by_optics()
+                return self._aggregate_events_with_few_sliding_windows_by_density()
+                # return self._aggregate_events_with_few_sliding_windows_by_optics()
             else:  # No examples yet.
                 return self._aggregate_events_with_one_sliding_window()
         else:
@@ -379,18 +379,17 @@ class InStrategyPropertiesHandler:
         self,
         events: List[Event],
         grouping_data: GroupingDescriptior,
-        activities: List[ActivityByStrategy],
-    ):
+    ) -> Optional[ActivityByStrategy]:
         """
         Makes activity-by-strategy starting on start of first event and ending at the end of last event.
-        Next adds it to provided list and updates `Metrics` with it.
+        Updates `Metrics` with it.
         """
         # Use start of first event and end of last event as "suggested" bounds of the activity-by-strategy.
         start_time = events[0].timestamp
         end_time = events[-1].timestamp + events[-1].duration
         # Skip too small intervals. Don't do it on "suggested" values because they may provide duration=0.
         if self._check_wrong_duration(end_time - start_time):
-            return
+            return None
         # For max and min time check 'in_trustable_boundaries' and put start/end time of first/last event respectively.
         # Note that for STRICT and DIM boundaries max and min time points aren't used.
         # Because any overlap is either removes activity-by-strategy or splits it.
@@ -417,8 +416,8 @@ class InStrategyPropertiesHandler:
             grouping_data=grouping_data,
             strategy=self.current_strategy,
         )
-        activities.append(activitybs)
         self.current_metrics.incr("activity-by-strategy-es", activitybs.duration())
+        return activitybs
 
     def _aggregate_events_with_one_sliding_window(self) -> StrategyApplyResult:
         """
@@ -470,22 +469,18 @@ class InStrategyPropertiesHandler:
             # Otherwise if window exists then create Activity from it.
             if window:
                 window_key = ListOfPairsDescriptor(list(window_kv_pairs))
-                self._make_activitybs_between_events(
-                    window,
-                    window_key,
-                    activities,
-                )
+                activitybs = self._make_activitybs_between_events(window, window_key)
+                if activitybs is not None:
+                    activities.append(activitybs)
                 window = []
             # Prepare next window.
             window_kv_pairs = kv_pairs
             window.append(event)
         # Handle last window.
         if window:
-            self._make_activitybs_between_events(
-                window,
-                ListOfPairsDescriptor(list(window_kv_pairs)),
-                activities,
-            )
+            activitybs = self._make_activitybs_between_events(window, ListOfPairsDescriptor(list(window_kv_pairs)))
+            if activitybs is not None:
+                activities.append(activitybs)
         return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
 
     def _add_event_to_window(
@@ -587,8 +582,68 @@ class InStrategyPropertiesHandler:
         # Make activities from the each window.
         activities = []
         for key, events in windows.items():
-            self._make_activitybs_between_events(events, key, activities)
+            activitybs = self._make_activitybs_between_events(events, key)
+            if activitybs is not None:
+                activities.append(activitybs)
         return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
+
+    def _convert_events_with_gaps_to_activitiesbs(
+        self,
+        key,
+        events: List[Event],
+        gaps: List[Tuple[int, float]],
+        max_gap_sec: float,
+        recursion_max_gap_divider: float,
+        events_indexes: Tuple[int, int],
+        gaps_indexes: Tuple[int, int],
+    ) -> List[ActivityByStrategy]:
+        """
+        Converts list of events and relevant gaps between them (list with length less at least on one item) into
+        activities-by-strategy recursiverly (if need). Returns the number of created activity-by-strategy-es.
+        Idea is to iterate over all gaps to clusterise events with some big gaps. Next set gap to the fraction of
+        initial gap (half) and iterate events in each cluster one more time. Do it recursively until there are
+        big enough gaps to separate clusters.
+        Remained clusters would be dense enough to make activity-by-strategy-es from them.
+        """
+        # If there are no gaps then just create single activity-by-strategy.
+        activitiesbs = []
+        if len(gaps) < 1:
+            activitybs = self._make_activitybs_between_events(events[events_indexes[0] : events_indexes[1]], key)
+            return [activitybs] if activitybs is not None else []
+        # Otherwise iterate over all gaps to find gaps bigger than max_gap_sec recursively.
+        start_index = events_indexes[0]
+        start_gaps_index = gaps_indexes[0]
+        for i in range(gaps_indexes[0], gaps_indexes[1]):
+            gap = gaps[i]
+            # Check that gap is big enough to make separate cluster.
+            if gap[1] >= max_gap_sec:
+                end_index = gap[0]
+                # Check that need seach clusters recursively.
+                if recursion_max_gap_divider > 0:
+                    # Run recursion with slice of events and relevant gaps.
+                    local_activitiesbs = self._convert_events_with_gaps_to_activitiesbs(
+                        key,
+                        events,
+                        gaps,
+                        max_gap_sec / recursion_max_gap_divider,
+                        recursion_max_gap_divider,
+                        (start_index, end_index),
+                        (start_gaps_index, i),  # Note that gaps list may be much less than events list.
+                    )
+                    activitiesbs += local_activitiesbs
+                else:
+                    # If don't need seach clusters recursively then convert cluster to activity-by-strategy.
+                    activitybs = self._make_activitybs_between_events(events[start_index:end_index], key)
+                    if activitybs is not None:
+                        activitiesbs.append(activitybs)
+                start_index = end_index
+                start_gaps_index = i + 1  # Need to shift gaps index because we are skipping it.
+        # Check that remain some events in cluster to make last activity-by-strategy.
+        if events_indexes[1] - 1 > start_index:
+            activitybs = self._make_activitybs_between_events(events[start_index : events_indexes[1]], key)
+            if activitybs is not None:
+                activitiesbs.append(activitybs)
+        return activitiesbs
 
     def _aggregate_events_with_few_sliding_windows_by_density(self) -> StrategyApplyResult:
         """
@@ -602,7 +657,7 @@ class InStrategyPropertiesHandler:
         metrics = self.current_metrics
         windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
         # Analyse gaps in each window.
-        activities: List[ActivityByStrategy] = []
+        activitiesbs: List[ActivityByStrategy] = []
         for key, window_events in windows.items():
             # Measure all gaps.
             gaps: List[Tuple[int, float]] = []
@@ -615,34 +670,28 @@ class InStrategyPropertiesHandler:
                 prev_event = event
             if len(gaps) <= 0:
                 # If there are no gaps then just create one activity-by-strategy from all events.
-                self._make_activitybs_between_events(window_events, key, activities)
+                activitybs = self._make_activitybs_between_events(window_events, key)
+                if activitybs is not None:
+                    activitiesbs.append(activitybs)
                 metrics.incr("1 separated by density activity-by-strategy-es with same data")
                 continue
-            # Otherwise iterate gaps to find out those which are bigger than minimal activity duration.
-            # Make activities between them.
-            last_activitybs_event_index = 0
-            activitybs_count = 0
-            for gap in gaps:
-                # If gap bigger than minimal activity duration then it is a separate activity-by-strategy.
-                if gap[1] >= MIN_ACTIVITY_DURATION_SEC:
-                    self._make_activitybs_between_events(
-                        window_events[last_activitybs_event_index : gap[0]],
-                        key,
-                        activities,
-                    )
-                    activitybs_count += 1
-                    last_activitybs_event_index = gap[0]
-            # Here we have activity-by-strategy-es made up to the last big gap.
-            # Make activity-by-strategy-es from the remained events.
-            if last_activitybs_event_index < len(window_events) - 1:
-                self._make_activitybs_between_events(
-                    window_events[last_activitybs_event_index:-1],
-                    key,
-                    activities,
-                )
-                activitybs_count += 1
-            metrics.incr(f"{activitybs_count} separated by density activity-by-strategy-es with same data")
-        return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
+            recursion_max_gap_divider = (
+                2
+                if self.current_strategy.in_trustable_boundaries
+                not in [IntervalBoundaries.START, IntervalBoundaries.END]
+                else 0
+            )
+            activitiesbs += self._convert_events_with_gaps_to_activitiesbs(
+                key=key,
+                events=window_events,
+                gaps=gaps,
+                max_gap_sec=MIN_ACTIVITY_DURATION_SEC,
+                recursion_max_gap_divider=recursion_max_gap_divider,
+                events_indexes=(0, len(window_events)),
+                gaps_indexes=(0, len(gaps)),
+            )
+            metrics.incr(f"{len(activitiesbs)} separated by density activity-by-strategy-es with same data")
+        return StrategyApplyResult(self.current_strategy, activitiesbs, self.current_metrics, self.current_id)
 
     def _aggregate_events_with_few_sliding_windows_by_optics(self) -> StrategyApplyResult:
         """
@@ -655,27 +704,36 @@ class InStrategyPropertiesHandler:
         metrics = self.current_metrics
         windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
         # Analyse gaps in each window.
-        activities: List[ActivityByStrategy] = []
+        activitiesbs: List[ActivityByStrategy] = []
         for key, window_events in windows.items():
             # If it is the only event then make activity-by-strategy from it right now.
             if len(window_events) == 1:
-                self._make_activitybs_between_events(window_events, key, activities)
+                activitybs = self._make_activitybs_between_events(window_events, key)
+                if activitybs is not None:
+                    activitiesbs.append(activitybs)
                 metrics.incr("1 separated by density activity-by-strategy-es with same data")
                 continue
             # Convert list of events into 1D list of midpoints.
-            timestamps = []
-            for event in window_events:
-                midpoint: datetime.datetime = event.timestamp + event.duration / 2
-                # It's a list of lists because sklearn expects 2D array-like input.
-                timestamps.append([midpoint.timestamp()])
-            # Feed this list to OPTICS clustering algorithm to separate points by density.
-            timestamps_np = np.array(timestamps)
+            dist_matrix = np.zeros((len(window_events), len(window_events)))
+            for i in range(len(window_events)):
+                for j in range(len(window_events)):
+                    if i == j:
+                        dist_matrix[i][j] = 0
+                        continue
+                    e1 = window_events[i]
+                    e2 = window_events[j]
+                    if e1.timestamp < e2.timestamp:
+                        dist_matrix[i][j] = (e2.timestamp - (e1.timestamp + e1.duration)).total_seconds()
+                    else:
+                        dist_matrix[i][j] = (e1.timestamp - (e2.timestamp + e2.duration)).total_seconds()
             # FYI: with min_samples bigger we are getting bigger activities.
-            clustering = OPTICS(min_samples=0.002, max_eps=MIN_ACTIVITY_DURATION_SEC).fit(timestamps_np)
+            clustering = DBSCAN(min_samples=2, eps=MIN_ACTIVITY_DURATION_SEC, metric="precomputed").fit(dist_matrix)
             event_clusters = {}
             for label, event in zip(clustering.labels_, window_events):
                 event_clusters.setdefault(label, []).append(event)
             metrics.incr(f"{len(event_clusters)} separated by density activity-by-strategy-es with same data")
             for event_list in event_clusters.values():
-                self._make_activitybs_between_events(event_list, key, activities)
-        return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
+                activitybs = self._make_activitybs_between_events(event_list, key)
+                if activitybs is not None:
+                    activitiesbs.append(activitybs)
+        return StrategyApplyResult(self.current_strategy, activitiesbs, self.current_metrics, self.current_id)
