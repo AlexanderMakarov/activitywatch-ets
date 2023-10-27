@@ -25,6 +25,7 @@ try:
 except ImportError:
     pass
 from pick import pick
+import curses
 
 from activity_merger.config.config import DEBUG_BUCKETS_IMPORTER_NAME, LOG
 from activity_merger.domain.analyzer import (
@@ -43,10 +44,9 @@ from activity_merger.helpers.helpers import datetime_to_time_str, setup_logging,
 from get_activities import clean_debug_buckets_and_apply_strategies_on_one_day_events, reload_debug_buckets
 
 
-class TerminalLeader:
+class PickTerminalUI:
     """
-    Abstract matching song leader which expects user answers in terminal. Wraps `Matcher`, manages "ask - answer -
-    check" flow and prints statistic at the end. Delegates operating system specific actions to inheritors.
+    Terminal UI based on 'pick' library.
     """
 
     def __init__(self):
@@ -92,141 +92,120 @@ class TerminalLeader:
         return pick(options, question, multiselect=True, default_index=2, min_selection_count=1)
 
 
-class UnixTerminalLeader(TerminalLeader):
+class CursesTerminalUI:
     """
-    TerminalLeader for Unix machines. Relies on VT100 escape codes and TTY.
+    Terminal UI based on 'curses' library.
     """
 
-    # FYI: https://wiki.bash-hackers.org/scripting/terminalcodes
-    ANSI_CURSOR_UP = "\x1b[1A"  # Move cursor up (don't forget '\r' to put it on start of line).
-    ANSI_CURSOR_SAVE_POSITION = "\033[s"  #'\x1b7'
-    ANSI_CURSOR_TO_SAVED = "\033[u"  #'\x1b8'
-    ANSI_CLEAR_CURRENT_LINE = "\x1b[2K"  # Clear the whole line where cursor is placed.
-    ANSI_CLEAR_PREVIOUS_LINE = "\033[A"
-    ANSI_CLEAR_TO_END_OF_SCREEN = "\033[J"  #'\x1b[J'
-    ANSI_HIDE_CURSOR = "\033[?25l"
-    ANSI_SHOW_CURSOR = "\033[?25h"
-    ANSI_FONT_DECORATION_STOP = "\u001b[0m"
-    ANSI_FONT_DECORATION_BOLD = "\u001b[1m"
-    ANSI_FONT_DECORATION_UNDERLINE = "\u001b[4m"
-    ANSI_SHIFT_CURSOR_LEFT_PREFIX = "\u001b["
-    ANSI_SHIFT_CURSOR_LEFT_SUFFIX = "D"
-    KEY_ESC = "\u00001b"  #  '\x1b'
-    KEY_UP = "\u1b5b41"  # '\x1b[A'
-    KEY_DOWN = "\u1b5b42"  #  '\x1b[B'
-    KEY_LEFT = "\u1b5b44"  #  '\x1b[D'
-    KEY_RIGHT = "\u1b5b43"  # '\x1b[C'
+    def ask_yes_no(self, prefix_with_yn: List[str]) -> bool:
+        """
+        Prints the given prefix and waits 'y' or 'n' keypress.
+        :param prefix_with_yn: List of lines to print as a question. It is good to finish it with '[y/n]' prompt.
+        :returns: True if was chosen 'y', False if was chosen 'n'.
+        """
 
-    def clean_lines(self, cnt: int):
-        sys.stdout.write("".join([self.ANSI_CLEAR_PREVIOUS_LINE] * cnt))
-        sys.stdout.flush()
+        def curses_runner(stdscr, prefix_with_yn):
+            curses.curs_set(0)
+            stdscr.keypad(1)
+            return CursesTerminalUI._ask_yes_no(stdscr, prefix_with_yn)
 
-    def ask_yes_no(self, question_without_yn: str) -> bool:
-        # Also cleans question from the console.
-        self._save_cursor_position()
-        sys.stdout.write(question_without_yn + " [y/n]: ")
-        sys.stdout.flush()
-        result = input().lower() == "y"
-        self._clear_up_to_saved_position()
-        return result
+        return curses.wrapper(curses_runner, prefix_with_yn)
 
-    def _save_cursor_position(self):
-        sys.stdout.write(self.ANSI_CURSOR_SAVE_POSITION)
+    @staticmethod
+    def _ask_yes_no(stdscr, prefix_with_yn: List[str]) -> bool:
+        while True:
+            for i, line in enumerate(prefix_with_yn):
+                stdscr.addstr(i, 0, line)
+            stdscr.refresh()
+            char = stdscr.getch()
+            if char in [ord("y"), ord("Y")]:
+                return True
+            elif char in [ord("n"), ord("N")]:
+                return False
 
-    def _clear_up_to_saved_position(self):
-        sys.stdout.write(self.ANSI_CURSOR_TO_SAVED + self.ANSI_CLEAR_TO_END_OF_SCREEN)
-        sys.stdout.flush()
+    @staticmethod
+    def _reprint_input_with_menu(stdscr, prefix: List[str], input_str: str, cursor_pos: int, menu: List[str]):
+        stdscr.clear()
+        rows, columns = stdscr.getmaxyx()
+        # To avoid "addwstr() returned ERR" errors from `stdscr.addstr` need to print only in 1 screen, not more.
+        # Note that last line will be wrapped so may span multiple lines.
+        max_option_len = columns - 2  # Keep 2 characters for the pointer.
+        line_index = 0
+        for i, line in enumerate(prefix):
+            stdscr.addstr(line_index, 0, line)
+            line_index += 1
+        stdscr.addstr(line_index, 0, "filter by: " + input_str)
+        line_index += 1
+        # Calculate the number of rows left.
+        visible_options = rows - line_index - 1  # Show 1 line less.
+        # Shift slice of menu to show to ensure the selected option is always visible.
+        offset = max(0, cursor_pos + 1 - visible_options)
+        for i in range(visible_options):
+            menu_index = offset + i
+            if menu_index >= len(menu):
+                break
+            option = menu[menu_index][:max_option_len]
+            if menu_index == cursor_pos:
+                stdscr.addstr(line_index, 0, f"* {option}", curses.A_REVERSE)  # Reverse colors for selection.
+            else:
+                stdscr.addstr(line_index, 0, f"  {option}")
+            line_index += 1
+        stdscr.refresh()
 
-    def _reprint_input_with_menu(self, prefix: str, input_str: str, cursor_pos: int, menu: List[str]):
-        sys.stdout.write(prefix + input_str)
-        for i, option in enumerate(menu):
-            sys.stdout.write("\n " + f"{'*' if i == cursor_pos else ' '} {option}")
-        sys.stdout.flush()
-
-    def _move_cursor_and_reprint_input_with_menu(
-        self, prefix: str, input_str: str, cursor_pos: int, is_down:bool, menu: List[str]
-    ) -> int:
-        if (is_down and cursor_pos >= len(menu) - 1) or(not is_down and cursor_pos <= 0):
-            return cursor_pos  # We can't move this direction.
-        cursor_pos += 1 if is_down else -1
-        self._clear_up_to_saved_position()
-        self._reprint_input_with_menu(prefix, input_str, cursor_pos, menu)
-        return cursor_pos
-
-    def _select_question_filter_menu_and_reprint(self, prefix: str, input_str: str, options: List[Tuple[str, str]]) -> Tuple[List[str], int]:
-        menu = [x[0] for x in options if len(input_str) == 0 or input_str in x[1]]
-        self._reprint_input_with_menu(prefix, input_str, 0, menu)
-        return menu, 0
-
-    def ask_select_question_with_type_filter(self, question: str, options: List[Tuple[str, str]]) -> Tuple[str, int]:
+    def ask_select_question_with_type_filter(
+        self, prefix: List[str], options: List[Tuple[str, str]]
+    ) -> Tuple[str, int]:
         """
         Asks user for "select" question with ability to input string to filter options list by "contains".
-        :param question: Question to print to use.
-        :param options: List of tuples where first element is what to print to the user and second element is string to filter by.
-        :return: A tuple with chosen option and index of it in the options.
+        :param prefix: List of lines to prepend menu. Usually contains question.
+        :param options: List of tuples where first element is what to print to the user
+        and second element is string to filter by.
+        :return: A tuple with chosen option and index of it in the options. If [None, -1] then user decided to break.
         """
-        # TODO (impr) need abiity to:
-        # - enter ID of activity.
-        # - choose but "only until this point"
-
-        if not options:  # Avoid errors on building menu (simplified code below)
+        if not options:  # Avoid errors on building menu (simplifies code below)
             raise ValueError("ask_select_question_with_type_filter: Empty options are provided.")
         # Prepare full menu.
         menu = [x[0] for x in options]
-        # Modify TTY. Based on https://stackoverflow.com/a/47955341 and https://stackoverflow.com/a/47197390/1535127
-        # Save and clone TTY attributes.
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        new = termios.tcgetattr(fd)
-        # Correct TTY attributes to read single key strokes. See https://man7.org/linux/man-pages/man3/termios.3.html
-        new[3] = new[3] & ~termios.ICANON & ~termios.ECHO
-        # Start block of changes which should be reverted afterwards.
-        try:
-            # Save position, prepare and print "prefix". Prefix includes question and prompt to filter options.
-            # NOTE breaks cursor movements in xfce4-terminal sys.stdout.write(self.ANSI_HIDE_CURSOR)
-            self._save_cursor_position()
-            prefix = f"{question}\nfilter by: "
+
+        def curses_runner(stdscr, prefix, menu):
+            curses.curs_set(0)
+            stdscr.keypad(1)
             input_str = ""
             cursor_pos = 0
-            sys.stdout.write(prefix)
-            self._reprint_input_with_menu(prefix, input_str, cursor_pos, menu)
-            # Apply TTY modifications to hide cursor.
-            termios.tcsetattr(fd, termios.TCSANOW, new)
-            is_exit = False
-            # Listen key strokes and modify menu.
+            chosen_item = None
+            chosen_index = -1
             while True:
-                event = os.read(fd, 3).decode()
-                if len(event) == 3:
-                    code = ord(event[2])  # All 3 numbers mean special key when code is a last number.
-                    if code == 65:  # Up
-                        cursor_pos = self._move_cursor_and_reprint_input_with_menu(prefix, input_str, cursor_pos, False, menu)
-                    elif code == 66:  # Down
-                        cursor_pos = self._move_cursor_and_reprint_input_with_menu(prefix, input_str, cursor_pos, True, menu)
-                elif len(event) == 1:
-                    if '0' <= event[0] <= 'z' or event[0] == '\x20':  # It is input of string.
-                        input_str += event[0]
-                        menu, cursor_pos = self._select_question_filter_menu_and_reprint(prefix, input_str, options)
-                    elif event[0] == "\x08":  # Backspace.
-                        if input_str:
-                            input_str = input_str[:-1]
-                            menu, cursor_pos = self._select_question_filter_menu_and_reprint(prefix, input_str, options)
-                    elif event[0] == "\n":  # Enter.
-                        # Restore chosen place in options from potentially shrinked menu.
-                        chosen_item = menu[cursor_pos]
-                        options_index = next(i for i, x in enumerate(options) if x[0] == chosen_item)
-                        return [chosen_item, options_index]
-                    elif event[0] == "\x1b":  # Escape.
-                        is_exit = True
-                if is_exit:
-                    self._clear_up_to_saved_position()
-                    if self.ask_yes_no("Do you want to break?"):
+                self._reprint_input_with_menu(stdscr, prefix, input_str, cursor_pos, menu)
+                key = stdscr.getch()
+                if key == curses.KEY_UP and cursor_pos > 0:
+                    cursor_pos -= 1
+                elif key == curses.KEY_DOWN and cursor_pos < len(menu) - 1:
+                    cursor_pos += 1
+                elif key == curses.KEY_ENTER or key in [10, 13]:
+                    # Restore chosen place in options from potentially shrinked menu.
+                    chosen_item = menu[cursor_pos]
+                    chosen_index = next(i for i, x in enumerate(options) if x[0] == chosen_item)
+                    break
+                elif 32 <= key <= 126:  # printable characters
+                    input_str += chr(key)
+                    menu = [x[0] for x in options if len(input_str) == 0 or input_str in x[1]]
+                    cursor_pos = 0
+                elif key == 263 and len(input_str) > 0:  # BACKSPACE
+                    input_str = input_str[:-1]
+                    menu = [x[0] for x in options if len(input_str) == 0 or input_str in x[1]]
+                    cursor_pos = 0
+                elif key == 27:  # ESCAPE
+                    if CursesTerminalUI._ask_yes_no(stdscr, prefix + ["Do you want to break? [y/n]"]):
+                        chosen_item = None
+                        chosen_index = -1
                         break
-        finally:
-            # Revert TTY attributes.
-            # TODO (minor) fix - doesn't revert in xfce4-terminal. STR: run once, stop, try again - menu doesn't clean.
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-            # NOTE breaks cursor movements in xfce4-terminal sys.stdout.write(self.ANSI_SHOW_CURSOR)
-        return [x[0] for x in menu if x[2]]
+            stdscr.clear()
+            stdscr.addstr(0, 0, "You chose: " + menu[cursor_pos])
+            return [chosen_item, chosen_index]
+            # stdscr.refresh()
+            # stdscr.getch()
+
+        return curses.wrapper(curses_runner, prefix, menu)
 
 
 class Context:
@@ -238,7 +217,7 @@ class Context:
     FOUND_ACTIVITIES_METRIC_NAME = "found activities"
     SAVE_FILE_PATH = os.path.abspath("tune_rules-context.dill")
 
-    def __init__(self, coefs: List = [], intercept: List = []) -> None:
+    def __init__(self, coefs: List, intercept: List) -> None:
         self.coefs: List = coefs
         self.intercept: List = intercept
 
@@ -281,11 +260,7 @@ class SupervisedBAFinder(BAFinder):
         super(SupervisedBAFinder, self).__init__()
         self.context = context
         self.training_data: List[Tuple[IntervalFeatures, int]] = []
-        if sys.platform.startswith("win"):
-            LOG.error("Windows terminal is not supported yet")
-            exit(1)
-            # leader = WindowsTerminalLeader() TODO
-        self.leader: UnixTerminalLeader = UnixTerminalLeader()
+        self.leader: CursesTerminalUI = CursesTerminalUI()
 
     def _add_answer(self, features: List[IntervalFeatures], index_of_chosen: int):
         for i, feature in enumerate(features):
@@ -311,15 +286,18 @@ class SupervisedBAFinder(BAFinder):
             option_str = str(activity)
             options.append((option_str, option_str))  # Make the whole acitivity text as "searchable".
         question = (
-            "Which activity-by-strategy from 'z###-*' buckets on ActivityWatch 'Timeline' page best represents "
-            + f"activty from {datetime_to_time_str(start_point)} to {datetime_to_time_str(end_point)}?"
+            f"{datetime_to_time_str(start_point)} to {datetime_to_time_str(end_point)} - choose activity-by-strategy "
+            "from 'z###-*' buckets on ActivityWatch 'Timeline' page for start of this interval."
         )
         # TODO (impr) need interactions to:
-        # - (here???) split existing activity-by-strategy in the middle
         # - revert previous decision
-        answer: Tuple[str, int] = self.leader.ask_select_question_with_type_filter(question, options)
+        # - show previous choice
+        # - improve "decided to exit" handling
+        answer: Tuple[str, int] = self.leader.ask_select_question_with_type_filter([question], options)
         try:
             index_chosen_in_sorted_candidates = answer[1]
+            if index_chosen_in_sorted_candidates < 0:
+                raise ValueError("Used decided to exit")
             result = sorted_candidates[index_chosen_in_sorted_candidates]
             # If there were no exceptions above then add to training data.
             self._add_answer(sorted_features, index_chosen_in_sorted_candidates)
@@ -329,7 +307,7 @@ class SupervisedBAFinder(BAFinder):
 
     def dump_results(self, is_ask_user: bool = False):
         self.context.save()
-        if not is_ask_user or self.leader.ask_yes_no("Train by answers"):
+        if not is_ask_user or self.leader.ask_yes_no(["Train by answers? [y/n]"]):
             self.train(self.training_data)
             LOG.info("Training results: coef_=%s, intercept_=%s", self.model.coef_, self.model.intercept_)
 
@@ -363,7 +341,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     if is_use_saved_context:
         context = Context.read_from_file()
     else:
-        context = Context()
+        context = Context([], [])
     # Build ActivitiesByStrategy list by provided events date.
     strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_date, client)
     metrics_strings = list(metrics.to_strings())
