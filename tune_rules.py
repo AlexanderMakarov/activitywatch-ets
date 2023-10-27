@@ -79,9 +79,6 @@ class TerminalLeader:
         :return: Chosen option and it's index.
         """
         # 'pick' library cleans screen and draws menu with options. At end disappears and leaves old content.
-        # TODO (impr) need abiity to:
-        # - enter ID of activity.
-        # - choose but "only until this point"
         return pick(options, question, multiselect=False, min_selection_count=1)
 
     def ask_multiselect_question(self, question: str, options: List[str]) -> List[Tuple[str, int]]:
@@ -140,50 +137,42 @@ class UnixTerminalLeader(TerminalLeader):
         sys.stdout.write(self.ANSI_CURSOR_TO_SAVED + self.ANSI_CLEAR_TO_END_OF_SCREEN)
         sys.stdout.flush()
 
-    def _save_cursor_position_and_print_multiselect_question(self, question: str, menu: List[List]):
-        # item = [description, is_cursor, is_selected]
-        self._save_cursor_position()
-        sys.stdout.write("\n" + question)
-        for item in menu:
-            buffer = "\n "
-            buffer += "-> (" if item[1] else "   ("
-            buffer += "*) " if item[2] else " ) "
-            buffer += item[0]
-            sys.stdout.write(buffer)
+    def _reprint_input_with_menu(self, prefix: str, input_str: str, cursor_pos: int, menu: List[str]):
+        sys.stdout.write(prefix + input_str)
+        for i, option in enumerate(menu):
+            sys.stdout.write("\n " + f"{'*' if i == cursor_pos else ' '} {option}")
         sys.stdout.flush()
 
-    def _multiselect_question_move_cursor_and_reprint(self, question: str, menu: List[List], is_down: bool):
-        pointed = [i for i, x in enumerate(menu) if x[1]]  # Get index or empty list.
-        # Calculate desired position.
-        desired_position: int
-        if not pointed:
-            desired_position = 0
-        else:
-            current_position = pointed[0]
-            desired_position = current_position
-            if is_down:
-                if current_position < len(menu) - 1:
-                    desired_position = current_position + 1
-            else:
-                if current_position > 0:
-                    desired_position = current_position - 1
-        # Change position.
-        menu[current_position][1] = False
-        menu[desired_position][1] = True
-        # Note that `self.clean_lines(cnt)` works wrong after long lines being split due to lenght.
+    def _move_cursor_and_reprint_input_with_menu(
+        self, prefix: str, input_str: str, cursor_pos: int, is_down:bool, menu: List[str]
+    ) -> int:
+        if (is_down and cursor_pos >= len(menu) - 1) or(not is_down and cursor_pos <= 0):
+            return cursor_pos  # We can't move this direction.
+        cursor_pos += 1 if is_down else -1
         self._clear_up_to_saved_position()
-        self._save_cursor_position_and_print_multiselect_question(question, menu)
+        self._reprint_input_with_menu(prefix, input_str, cursor_pos, menu)
+        return cursor_pos
 
-    def _multiselect_question_switch_option_and_reprint(self, question: str, menu: List[List]):
-        for item in menu:
-            if item[1]:
-                item[2] = not item[2]
-                self._multiselect_question_move_cursor_and_reprint(question, menu, True)
-                return
+    def _select_question_filter_menu_and_reprint(self, prefix: str, input_str: str, options: List[Tuple[str, str]]) -> Tuple[List[str], int]:
+        menu = [x[0] for x in options if len(input_str) == 0 or input_str in x[1]]
+        self._reprint_input_with_menu(prefix, input_str, 0, menu)
+        return menu, 0
 
-    def ask_multiselect_question(self, question: str, options: List[str]) -> List[str]:
+    def ask_select_question_with_type_filter(self, question: str, options: List[Tuple[str, str]]) -> Tuple[str, int]:
+        """
+        Asks user for "select" question with ability to input string to filter options list by "contains".
+        :param question: Question to print to use.
+        :param options: List of tuples where first element is what to print to the user and second element is string to filter by.
+        :return: A tuple with chosen option and index of it in the options.
+        """
+        # TODO (impr) need abiity to:
+        # - enter ID of activity.
+        # - choose but "only until this point"
+
         if not options:  # Avoid errors on building menu (simplified code below)
-            raise ValueError("ask_multiselect_question: Empty options are provided.")
+            raise ValueError("ask_select_question_with_type_filter: Empty options are provided.")
+        # Prepare full menu.
+        menu = [x[0] for x in options]
         # Modify TTY. Based on https://stackoverflow.com/a/47955341 and https://stackoverflow.com/a/47197390/1535127
         # Save and clone TTY attributes.
         fd = sys.stdin.fileno()
@@ -193,13 +182,15 @@ class UnixTerminalLeader(TerminalLeader):
         new[3] = new[3] & ~termios.ICANON & ~termios.ECHO
         # Start block of changes which should be reverted afterwards.
         try:
-            # Prepare menu. Set pointer on the first option.
-            menu = [[x, False, False] for x in options]
-            menu[0][1] = True
-            # Hide cursor and print question with menu.
+            # Save position, prepare and print "prefix". Prefix includes question and prompt to filter options.
             # NOTE breaks cursor movements in xfce4-terminal sys.stdout.write(self.ANSI_HIDE_CURSOR)
-            self._save_cursor_position_and_print_multiselect_question(question, menu)
-            # Apply TTY modifications.
+            self._save_cursor_position()
+            prefix = f"{question}\nfilter by: "
+            input_str = ""
+            cursor_pos = 0
+            sys.stdout.write(prefix)
+            self._reprint_input_with_menu(prefix, input_str, cursor_pos, menu)
+            # Apply TTY modifications to hide cursor.
             termios.tcsetattr(fd, termios.TCSANOW, new)
             is_exit = False
             # Listen key strokes and modify menu.
@@ -208,21 +199,28 @@ class UnixTerminalLeader(TerminalLeader):
                 if len(event) == 3:
                     code = ord(event[2])  # All 3 numbers mean special key when code is a last number.
                     if code == 65:  # Up
-                        self._multiselect_question_move_cursor_and_reprint(question, menu, False)
+                        cursor_pos = self._move_cursor_and_reprint_input_with_menu(prefix, input_str, cursor_pos, False, menu)
                     elif code == 66:  # Down
-                        self._multiselect_question_move_cursor_and_reprint(question, menu, True)
+                        cursor_pos = self._move_cursor_and_reprint_input_with_menu(prefix, input_str, cursor_pos, True, menu)
                 elif len(event) == 1:
-                    if event[0] == " ":  # Space to set/unset menu item.
-                        self._multiselect_question_switch_option_and_reprint(question, menu)
-                    elif event[0] == "\n":  # Enter
-                        is_exit = True
-                    elif event[0] == "\x1b":  # Escape
-                        for item in menu:  # Clean all selected options to simulate "I just want to exit!".
-                            item[2] = False
+                    if '0' <= event[0] <= 'z' or event[0] == '\x20':  # It is input of string.
+                        input_str += event[0]
+                        menu, cursor_pos = self._select_question_filter_menu_and_reprint(prefix, input_str, options)
+                    elif event[0] == "\x08":  # Backspace.
+                        if input_str:
+                            input_str = input_str[:-1]
+                            menu, cursor_pos = self._select_question_filter_menu_and_reprint(prefix, input_str, options)
+                    elif event[0] == "\n":  # Enter.
+                        # Restore chosen place in options from potentially shrinked menu.
+                        chosen_item = menu[cursor_pos]
+                        options_index = next(i for i, x in enumerate(options) if x[0] == chosen_item)
+                        return [chosen_item, options_index]
+                    elif event[0] == "\x1b":  # Escape.
                         is_exit = True
                 if is_exit:
                     self._clear_up_to_saved_position()
-                    break
+                    if self.ask_yes_no("Do you want to break?"):
+                        break
         finally:
             # Revert TTY attributes.
             # TODO (minor) fix - doesn't revert in xfce4-terminal. STR: run once, stop, try again - menu doesn't clean.
@@ -287,7 +285,7 @@ class SupervisedBAFinder(BAFinder):
             LOG.error("Windows terminal is not supported yet")
             exit(1)
             # leader = WindowsTerminalLeader() TODO
-        self.leader: TerminalLeader = UnixTerminalLeader()
+        self.leader: UnixTerminalLeader = UnixTerminalLeader()
 
     def _add_answer(self, features: List[IntervalFeatures], index_of_chosen: int):
         for i, feature in enumerate(features):
@@ -310,7 +308,8 @@ class SupervisedBAFinder(BAFinder):
         options = []
         for candidate in sorted_candidates:
             activity: ActivityByStrategy = candidate.data
-            options.append(str(activity))
+            option_str = str(activity)
+            options.append((option_str, option_str))  # Make the whole acitivity text as "searchable".
         question = (
             "Which activity-by-strategy from 'z###-*' buckets on ActivityWatch 'Timeline' page best represents "
             + f"activty from {datetime_to_time_str(start_point)} to {datetime_to_time_str(end_point)}?"
@@ -318,8 +317,7 @@ class SupervisedBAFinder(BAFinder):
         # TODO (impr) need interactions to:
         # - (here???) split existing activity-by-strategy in the middle
         # - revert previous decision
-        # - stop without completing till the end of the day.
-        answer: Tuple[str, int] = self.leader.ask_select_question(question, options)
+        answer: Tuple[str, int] = self.leader.ask_select_question_with_type_filter(question, options)
         try:
             index_chosen_in_sorted_candidates = answer[1]
             result = sorted_candidates[index_chosen_in_sorted_candidates]
@@ -372,9 +370,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     # Don't print resulting activity-by-strategies - better to see them in ActivityWatch UI.
     LOG.info("Analyzed all buckets separately, common metrics:\n%s", "\n".join(metrics_strings))
     LOG.info(
-        "\n".join(
-            x.strategy.name + " metrics:\n" + "\n".join(x.metrics.to_strings()) for x in strategy_apply_result
-        )
+        "\n".join(x.strategy.name + " metrics:\n" + "\n".join(x.metrics.to_strings()) for x in strategy_apply_result)
     )
     if not strategy_apply_result:
         LOG.warning("Can't build activity-by-strategies by events/intervals for %s. Doing nothing.", events_date.date())
