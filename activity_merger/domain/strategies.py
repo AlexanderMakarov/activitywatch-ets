@@ -1,5 +1,6 @@
 import dataclasses
 import datetime
+import re
 from typing import Dict, List, Set, Tuple, Optional
 
 import intervaltree
@@ -222,7 +223,8 @@ class InStrategyPropertiesHandler:
 
     def __init__(self):
         self.current_strategy: Strategy = None
-        self.current_strategy_skip_kv = []
+        self.current_strategy_skip_key_pattern_list = []
+        self.current_strategy_only_key_pattern_list = []
         self.current_metrics: Metrics = None
         self.current_events: List[Event] = []
         self.afk_tree: intervaltree.IntervalTree = intervaltree.IntervalTree()
@@ -242,19 +244,36 @@ class InStrategyPropertiesHandler:
         Both checks that event may be used for building `ActivityByStrategy` and cuts it accordingly to
         "in_only_not_afk" and "in_only_if_window_app" parameters of the strategy.
         """
-        # Check if need to skip event because data kv.
+        # Check if need to skip event. First by "black list".
         metrics = self.current_metrics
-        for k, v in self.current_strategy_skip_kv:
-            if event.data.get(k) == v:
-                metrics.incr(f"events skipped because have {k}={v}", event.duration.total_seconds())
+        event_data = event.data
+        event_duration_sec = event.duration.total_seconds()
+        for (key, pattern) in self.current_strategy_skip_key_pattern_list:
+            key_value = event_data.get(key, None)
+            if pattern.match(key_value):
+                metrics.incr(
+                    f"events skipped because have '{key}' value matches '{pattern}'",
+                    event_duration_sec,
+                )
                 return None
+        # ... next by "white list".
+        # TODO (perf/impr) build new data entries, mark new event as "modified" and remove _find_value_for_key
+        for (key, pattern) in self.current_strategy_only_key_pattern_list:
+            key_value = event_data.get(key, None)
+            if not pattern.match(key_value):
+                metrics.incr(
+                    f"events skipped because have '{key}' value doesn't match '{pattern}'",
+                    event_duration_sec,
+                )
+                return None
+
         # If need then cut event by AFK.
         strategy = self.current_strategy
         if strategy.in_only_not_afk:
             # Cut event by to be only in "not-AFK" intervals.
             initial_duration = event.duration
             event = cut_event(
-                event, self.afk_tree, strategy.in_trustable_boundaries, "AFK", self.current_metrics, strategy.name, True
+                event, self.afk_tree, strategy.in_trustable_boundaries, "AFK", metrics, strategy.name, True
             )
             assert event.duration <= initial_duration, f"Issue with chopping by 'AFK' event: {event_to_str(event)}"
             metrics.incr("events chopped by AFK", (initial_duration - event.duration).total_seconds())
@@ -292,13 +311,22 @@ class InStrategyPropertiesHandler:
         Handles list of events for the specified `Strategy` to provide `ActivitiesByStrategy` instance.
         """
 
-        # Fill up "current" properties.
+        # Reset values from the previous strategy.
+        self.current_strategy_skip_key_pattern_list = []
+        self.current_strategy_only_key_pattern_list = []
+        # Fill up "current" properties (sometimes conditionally).
         self.current_strategy = strategy
         self.current_metrics = metrics
         self.current_events = events
-        self.current_strategy_skip_kv = []  # Reset from the previous strategy.
-        if strategy.in_skip_key_values:
-            self.current_strategy_skip_kv = list(strategy.in_skip_key_values.items())
+        if strategy.in_skip_key_regexp:
+            self.current_strategy_skip_key_pattern_list = list(
+                (k, re.compile(regexp)) for k, regexp in strategy.in_skip_key_regexp.items()
+            )
+        # TODO (perf) combine current_strategy_only_key_pattern_list with strategy.in_group_by_keys.
+        if strategy.in_only_key_regexp:
+            self.current_strategy_only_key_pattern_list = list(
+                (k, re.compile(regexp)) for k, regexp in strategy.in_only_key_regexp.items()
+            )
 
         # Copy "standard watchers" events.
         if strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX):
@@ -419,6 +447,15 @@ class InStrategyPropertiesHandler:
         self.current_metrics.incr("activity-by-strategy-es", activitybs.duration())
         return activitybs
 
+    def _find_value_for_key(self, data_key: str, event_data: dict):
+        value = event_data[data_key]
+        pattern = next((p for (k, p) in self.current_strategy_only_key_pattern_list if k == data_key), None)
+        if not pattern:
+            return value
+        match = pattern.match(value)
+        assert match is not None, "Internal error - pattern does not match value!"
+        return match.group(1) if match.groups() else match.group(0)
+
     def _aggregate_events_with_one_sliding_window(self) -> StrategyApplyResult:
         """
         Runs one sliding window on events list and creates new activity-by-strategy each time as new set of
@@ -436,16 +473,19 @@ class InStrategyPropertiesHandler:
             event = self._transform_event(event)
             if event is None:
                 continue
+            event_data = event.data
             kv_pairs: Set[Tuple[str, str]] = set()
             if strategy.in_group_by_keys:
+                # For each tuple of keys in the list check if all are placed in event's data and
+                # if so then add key-value pairs to `kv_pairs` and stop. We need only 1 window.
                 for key_tuple in strategy.in_group_by_keys:
-                    if all(key in event.data for key in key_tuple):
+                    if all(key in event_data for key in key_tuple):
                         kv_pairs.update(
                             (
                                 k,
-                                v,
+                                self._find_value_for_key(k, event_data),
                             )
-                            for k, v in event.data.items()
+                            for k in event_data
                             if k in key_tuple
                         )
                         break
@@ -453,9 +493,9 @@ class InStrategyPropertiesHandler:
                 kv_pairs.update(
                     (
                         k,
-                        v,
+                        self._find_value_for_key(k, event_data),
                     )
-                    for k, v in event.data.items()
+                    for k in event_data
                 )
             # If kv_pairs wasn't found then it is either warning about misconfiguration or warning about bad event data.
             if not kv_pairs:
@@ -510,9 +550,13 @@ class InStrategyPropertiesHandler:
                 # If way to make windows is specified they make window per each group of keys.
                 event_data = event.data
                 added_times = 0
+                # For each tuple of keys in the list try to build ListOfPairsDescriptor, skip and continue if
+                # exception was raised. We need in as many windows as possible.
                 for key_tuple in strategy.in_group_by_keys:
                     try:
-                        window_key = ListOfPairsDescriptor([(key, str(event_data[key])) for key in key_tuple])
+                        window_key = ListOfPairsDescriptor(
+                            [(key, self._find_value_for_key(key, event_data)) for key in key_tuple]
+                        )
                         self._add_event_to_window(event, window_key, windows)
                         added_times += 1
                     except KeyError:

@@ -1,12 +1,13 @@
 import datetime
 from typing import List, Tuple
 
+import aw_client
 from aw_core import Event as AWEvent
 
 from ..config.config import LOG
 from .input_entities import Event, Strategy
 from .metrics import Metrics
-from .strategies import (StrategyApplyResult, InStrategyPropertiesHandler)
+from .strategies import InStrategyPropertiesHandler, StrategyApplyResult
 
 
 def _add_raw_event(raw_event: AWEvent, list_to_add: List[Event], bucket_id: str, metrics: Metrics):
@@ -113,7 +114,7 @@ def sort_merge_convert_raw_events(
 
 
 def apply_strategies_on_events(
-    activity_watch_client,
+    activity_watch_client: aw_client.ActivityWatchClient,
     start_time: datetime.datetime,
     end_time: datetime.datetime,
     buckets: List[str],
@@ -122,6 +123,8 @@ def apply_strategies_on_events(
 ) -> Tuple[List[StrategyApplyResult], Metrics]:
     """
     Gets ActivityWatch events for specified time duration and applies strategies "in" parameters on them.
+    Note that one strategy may either span few buckets if data was taken from the few machines or few strategies
+    handle the same bucket if prefixes are the same.
     :param activity_watch_client: ActivityWatch client to use for fetching events.
     :param start_time: Analyzing interval start.
     :param end_time: Analyzing interval end.
@@ -129,7 +132,6 @@ def apply_strategies_on_events(
     :param strategies: List of strategies to analyze with.
     :param tolerance: Tolerance for comparing and merging events.
     :returns: Tuple with list of `StrategyApplyResult` and metrics.
-    Note that one strategy may span few buckets if data taken from the few machines.
     """
     metrics = Metrics({})
     bucket_ids_to_handle = list(buckets.keys())
@@ -149,7 +151,7 @@ def apply_strategies_on_events(
         strat_metrics = Metrics({})  # These Metrics are per strategy, not per bucket!
         total_raw_events = 0
         # Fetch and normilize events.
-        # TODO (performance) do in parallel, AFK and Window before all. Think about ID-s.
+        # TODO (performance) do in parallel, AFK and Window before all. Think about activitybs ID-s.
         for bucket_id in strategy_buckets:
             metrics.incr("handled buckets")
             strat_metrics.incr("total buckets")
@@ -160,7 +162,6 @@ def apply_strategies_on_events(
                 metrics.incr("not-empty buckets handled")
                 strat_metrics.incr("not-empty buckets")
                 events.extend(normilized_events)
-            bucket_ids_to_handle.remove(bucket_id)
         # Handle case when there are no events for the strategy.
         if not events:
             metrics.incr("strategies without events")

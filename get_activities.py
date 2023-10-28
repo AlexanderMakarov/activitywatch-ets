@@ -122,11 +122,15 @@ def convert_aw_events_to_activities(
             MakeResultTreeFromSelfSufficientActivitiesStep(is_add_debug_buckets=True),
             ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),
             MakeCandidatesTreeStep(is_add_debug_buckets=is_import_debug_buckets),
-            MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(
-                ba_finder=ba_finder,
+            MergeCandidatesTreeIntoResultTreeStep(
                 is_add_debug_buckets=is_import_debug_buckets,
                 is_only_good_strategies_for_description=is_only_good_strategies_for_description,
             ),
+            # MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(
+            #     ba_finder=ba_finder,
+            #     is_add_debug_buckets=is_import_debug_buckets,
+            #     is_only_good_strategies_for_description=is_only_good_strategies_for_description,
+            # ),
         ],
         ignore_substrings=ignore_substrings,
     )

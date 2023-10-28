@@ -82,7 +82,7 @@ mentioned above in a way:
 
 - Install Python 3.6+.
 - Create venv with `python -m venv .venv` (be careful with version of Python).
-    Activate it with something like `source venv/bin/activate`.
+    Activate it with something like `source .venv/bin/activate`.
 - Open root folder and run `pip3 install -r requirements.txt`.
 - (only for Outlook Calendar events scraping) Install [geckodriver](https://github.com/mozilla/geckodriver)
     from GitHub repo [Releases](https://github.com/mozilla/geckodriver/releases) page.
