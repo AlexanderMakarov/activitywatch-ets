@@ -8,7 +8,7 @@ from sklearn.cluster import DBSCAN
 import numpy as np
 
 from ..config.config import LOG, MIN_ACTIVITY_DURATION_SEC, TOO_SMALL_INTERVAL_SEC
-from ..helpers.helpers import event_to_str, from_start_to_end_to_str, seconds_to_timedelta
+from ..helpers.helpers import datetime_to_time_str, event_to_str, from_start_to_end_to_str, seconds_to_timedelta
 from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 
@@ -130,73 +130,114 @@ class StrategyApplyResult:
         return self.to_string()
 
 
-def cut_event(
-    event: Event,
+def get_cut_by_tree_interval(
+    event_start: datetime.datetime,
+    event_end: datetime.datetime,
     tree: intervaltree.IntervalTree,
     boundaries: IntervalBoundaries,
     tree_name: str,
     metrics: Metrics,
     strategy_name: str = None,
     is_fail_incompatible: bool = False,
-) -> Event:
+) -> Tuple[bool, Optional[Tuple[datetime.datetime, datetime.datetime]]]:
     """
-    Cuts event to be on the intervals in the given tree taking into account boundaries.
-    If boundaries and AFK are incompatible then either returns None or raises ValueError. List of incompatible cases:
+    Calculates event boundaries to be on the intervals in the given tree taking into account boundaries.
+    If boundaries and way of overlapping with tree are incompatible then either returns None or raises ValueError.
+    List of incompatible cases:
     - "strict" boundaries and there is no overlaps in the tree at least for one piece of event.
     - "start" boundaries and there is no overlapping with event start.
     - "end" boundaries and there is no overlapping with event end.
+    May return 3 types of result:
+    1. Event interval is OK as is - in this case first item in result is False.
+    2. Event should disappear completely - in this case second item in result is None.
+    3. Need to cut event to [start, end] - in this case first item is True and second item is new begin and end.
     """
-    event_start = event.timestamp
-    event_end = event_start + event.duration
+    initial_duration = event_end - event_start
+    is_changed = False
 
     # Get overlapping intervals
     overlaps: List[intervaltree.Interval] = sorted(tree[event_start:event_end])
-    metrics.incr(f"events overlapped by {len(overlaps)} {tree_name} events", event.duration.total_seconds())
     if not overlaps:
-        return event
+        return (False, None)
+    metrics.incr(f"events overlapped by {len(overlaps)} {tree_name} events", initial_duration.total_seconds())
 
     first_overlap = overlaps[0]
     last_overlap = overlaps[-1]
 
     # Handle according to boundaries
     if boundaries == IntervalBoundaries.STRICT:
-        event_interval = intervaltree.Interval(event_start, event_end, event)
+        # Check that no one from tree's intervals ends inside event.
+        event_interval = intervaltree.Interval(event_start, event_end)
         for overlap in overlaps:
-            # Check that all overlaps are bigger than the event.
             if not overlap.contains_interval(event_interval):
                 if is_fail_incompatible:
                     raise ValueError(
-                        f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with AFK events for "
-                        + event_to_str(event)
+                        f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
+                        f" intervals for event in [{event_start}-{event_end}]"
                     )
                 else:
-                    return None
+                    return (False, None)
     elif boundaries == IntervalBoundaries.START:
+        # Check that first overlapping interval doesn't overlap event start.
         if first_overlap.begin > event_start:
             if is_fail_incompatible:
                 raise ValueError(
-                    f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with AFK events for "
-                    + event_to_str(event)
+                    f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
+                    f" intervals for event in [{event_start}-{event_end}]"
                 )
             else:
-                return None
-        event_end = min(first_overlap.end, event_end)
+                return (False, None)
+        # If there is a gap in "tree overlapping" then need to cut event to the shortest interval from the start.
+        # Note that intervals in tree are expected to be not overlapping.
+        if first_overlap.end < event_end:
+            is_changed = True
+            event_end = first_overlap.end
     elif boundaries == IntervalBoundaries.END:
+        # Check that last overlapping interval doesn't overlap event end.
         if last_overlap.end < event_end:
             if is_fail_incompatible:
                 raise ValueError(
-                    f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with AFK events for "
-                    + event_to_str(event)
+                    f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
+                    f" intervals for event in [{event_start}-{event_end}]"
                 )
             else:
-                return None
-        event_start = max(first_overlap.begin, event_start)
+                return (False, None)
+        # If there is a gap in "tree overlapping" then need to cut event to the shortest interval from the end.
+        # Note that intervals in tree are expected to be not overlapping.
+        if last_overlap.begin > event_start:
+            is_changed = True
+            event_start = last_overlap.begin
     elif boundaries == IntervalBoundaries.DIM:
-        # Just use the first overlap to cut event by.
-        event_start = max(first_overlap.begin, event_start)
-        event_end = min(first_overlap.end, event_end)
+        # If there is a gap in "tree overlapping" then need to cut event to the shortest interval.
+        last_end = first_overlap.end
+        max_overlap_start = first_overlap.begin
+        min_overlap_end = last_overlap.end
+        # Iterate all overlaps and find the longest overlapped part of the event.
+        for overlap in overlaps[1:]:
+            if overlap.begin == last_end:
+                last_end = overlap.end
+                if (last_end - max_overlap_start) > (min_overlap_end - max_overlap_start):
+                    min_overlap_end = last_end
+            else:
+                if (last_end - max_overlap_start) > (min_overlap_end - max_overlap_start):
+                    min_overlap_end = last_end
+                max_overlap_start = overlap.begin
+                last_end = overlap.end
+        # Check if the longest overlapped part is out of event boundaries.
+        if max_overlap_start > event_start:
+            is_changed = True
+            event_start = max_overlap_start
+        if min_overlap_end < event_end:
+            is_changed = True
+            event_end = min_overlap_end
 
-    return Event(bucket_id=event.bucket_id, timestamp=event_start, duration=event_end - event_start, data=event.data)
+    # Check that the resulting duration is not greater than initial as simple sanity check.
+    if event_end - event_start > initial_duration:
+        raise AssertionError(
+            f"Issue with calculating points to chop by '{tree_name}' tree: initial duration {initial_duration}"
+            f" is less than resulting [{datetime_to_time_str(event_start)}..{datetime_to_time_str(event_end)}]"
+        )
+    return (is_changed, (event_start, event_end))
 
 
 def calculate_interval_density(
@@ -227,7 +268,8 @@ class InStrategyPropertiesHandler:
         self.current_strategy_only_key_pattern_list = []
         self.current_metrics: Metrics = None
         self.current_events: List[Event] = []
-        self.afk_tree: intervaltree.IntervalTree = intervaltree.IntervalTree()
+        self.any_afk_tree: intervaltree.IntervalTree = intervaltree.IntervalTree()
+        self.not_afk_tree: intervaltree.IntervalTree = intervaltree.IntervalTree()
         self.window_events: List[Event] = []
         self.current_window_tree: intervaltree.IntervalTree = None
         self.current_id: int = 0
@@ -244,56 +286,99 @@ class InStrategyPropertiesHandler:
         Both checks that event may be used for building `ActivityByStrategy` and cuts it accordingly to
         "in_only_not_afk" and "in_only_if_window_app" parameters of the strategy.
         """
-        # Check if need to skip event. First by "black list".
+        # Skip event entirely by "black list" or "white list".
         metrics = self.current_metrics
+        event_start = event.timestamp
+        event_duration = event.duration
+        event_end = event_start + event_duration
         event_data = event.data
-        event_duration_sec = event.duration.total_seconds()
-        for (key, pattern) in self.current_strategy_skip_key_pattern_list:
+        changers = []
+        for key, pattern in self.current_strategy_skip_key_pattern_list:
             key_value = event_data.get(key, None)
             if pattern.match(key_value):
                 metrics.incr(
                     f"events skipped because have '{key}' value matches '{pattern}'",
-                    event_duration_sec,
+                    event_duration.total_seconds(),
                 )
                 return None
-        # ... next by "white list".
-        # TODO (perf/impr) build new data entries, mark new event as "modified" and remove _find_value_for_key
-        for (key, pattern) in self.current_strategy_only_key_pattern_list:
-            key_value = event_data.get(key, None)
-            if not pattern.match(key_value):
+        for key, pattern in self.current_strategy_only_key_pattern_list:
+            value = event_data.get(key, None)
+            match = pattern.match(value)
+            if not match:
                 metrics.incr(
                     f"events skipped because have '{key}' value doesn't match '{pattern}'",
-                    event_duration_sec,
+                    event_duration.total_seconds(),
                 )
                 return None
+            else:
+                changers.append("in_only_key_regexp")
+                event_data[key] = match.group(1) if match.groups() else match.group(0)
 
-        # If need then cut event by AFK.
+        # Cut event by AFK if need.
+        # Note that if we need "only within not-AFK" then "only within any AFK" is applied automatically.
         strategy = self.current_strategy
+        boundaries = strategy.in_trustable_boundaries
         if strategy.in_only_not_afk:
             # Cut event by to be only in "not-AFK" intervals.
-            initial_duration = event.duration
-            event = cut_event(
-                event, self.afk_tree, strategy.in_trustable_boundaries, "AFK", metrics, strategy.name, True
+            is_changed, new_interval = get_cut_by_tree_interval(
+                event_start, event_end, self.not_afk_tree, boundaries, "not-AFK", metrics, strategy.name, False
             )
-            assert event.duration <= initial_duration, f"Issue with chopping by 'AFK' event: {event_to_str(event)}"
-            metrics.incr("events chopped by AFK", (initial_duration - event.duration).total_seconds())
-        # If need then cut event by windows watcher "app=" events.
+            if new_interval is None:
+                metrics.incr("events cut out by 'not-AFK'", event_duration.total_seconds())
+                return None
+            elif is_changed:
+                changers.append("in_only_not_afk")
+                event_start = new_interval[0]
+                event_end = new_interval[1]
+                metrics.incr(
+                    "events chopped by 'not-AFK'", (event_duration - (event_end - event_start)).total_seconds()
+                )
+        elif not strategy.in_may_be_offline:
+            is_changed, new_interval = get_cut_by_tree_interval(
+                event_start, event_end, self.any_afk_tree, boundaries, "any-AFK", metrics, strategy.name, False
+            )
+            if new_interval is None:
+                metrics.incr("events cut out by 'any-AFK'", event_duration.total_seconds())
+                return None
+            elif is_changed:
+                changers.append("in_may_be_offline")
+                event_start = new_interval[0]
+                event_end = new_interval[1]
+                metrics.incr(
+                    "events chopped by 'any-AFK'", (event_duration - (event_end - event_start)).total_seconds()
+                )
+
+        # Cut event by windows watcher "app=" events if need.
         if strategy.in_only_if_window_app:
             # Cut event by to be only in "relevant app active" intervals.
-            initial_duration = event.duration
-            event = cut_event(
-                event,
+            is_changed, new_interval = get_cut_by_tree_interval(
+                event_start,
+                event_end,
                 self.current_window_tree,
-                strategy.in_trustable_boundaries,
+                boundaries,
                 "relevant app active",
                 metrics,
                 strategy.name,
                 True,
             )
-            assert (
-                event.duration <= initial_duration
-            ), f"Issue with chopping by 'relevant app active' event: {event_to_str(event)}"
-            metrics.incr("events chopped by 'relevant app active'", (initial_duration - event.duration).total_seconds())
+            if new_interval is None:
+                metrics.incr("events cut out by 'relevant app active'", event_duration.total_seconds())
+                return None
+            elif is_changed:
+                changers.append("in_only_if_window_app")
+                event_start = new_interval[0]
+                event_end = new_interval[1]
+                metrics.incr(
+                    "events chopped by 'relevant app active'",
+                    (event_duration - (event_end - event_start)).total_seconds(),
+                )
+
+        # Transform event if need.
+        if changers:
+            event_data["changedBy"] = ", ".join(changers)
+            event = Event(
+                bucket_id=event.bucket_id, timestamp=event_start, duration=event_end - event_start, data=event.data
+            )
         return event
 
     def _check_wrong_duration(self, duration: datetime.timedelta) -> bool:
@@ -322,7 +407,6 @@ class InStrategyPropertiesHandler:
             self.current_strategy_skip_key_pattern_list = list(
                 (k, re.compile(regexp)) for k, regexp in strategy.in_skip_key_regexp.items()
             )
-        # TODO (perf) combine current_strategy_only_key_pattern_list with strategy.in_group_by_keys.
         if strategy.in_only_key_regexp:
             self.current_strategy_only_key_pattern_list = list(
                 (k, re.compile(regexp)) for k, regexp in strategy.in_only_key_regexp.items()
@@ -330,14 +414,17 @@ class InStrategyPropertiesHandler:
 
         # Copy "standard watchers" events.
         if strategy.bucket_prefix.startswith(BUCKET_AFK_PREFIX):
-            # Build tree from "not AFK" events here because only these events will be used.
+            # Build 2 AFK trees - to filter by "any_afk" and to sort by "not-afk".
             for event in events:
+                event_begin = event.timestamp
+                event_duration = event.duration
                 status = event.data["status"]
+                self.any_afk_tree.addi(event_begin, event_begin + event_duration, event)
                 if status == "not-afk":
-                    self.afk_tree.addi(event.timestamp, event.timestamp + event.duration, event)
-                    metrics.incr("not-afk events", event.duration.total_seconds())
+                    self.not_afk_tree.addi(event_begin, event_begin + event_duration, event)
+                    metrics.incr("not-afk events", event_duration.total_seconds())
                 else:
-                    metrics.incr("afk events", event.duration.total_seconds())
+                    metrics.incr("afk events", event_duration.total_seconds())
         if strategy.bucket_prefix.startswith(BUCKET_WINDOW_PREFIX):
             assert self.current_window_tree is None, (
                 "Wrong order of buckets handling, 'current_window_tree' already exists"
@@ -447,15 +534,6 @@ class InStrategyPropertiesHandler:
         self.current_metrics.incr("activity-by-strategy-es", activitybs.duration())
         return activitybs
 
-    def _find_value_for_key(self, data_key: str, event_data: dict):
-        value = event_data[data_key]
-        pattern = next((p for (k, p) in self.current_strategy_only_key_pattern_list if k == data_key), None)
-        if not pattern:
-            return value
-        match = pattern.match(value)
-        assert match is not None, "Internal error - pattern does not match value!"
-        return match.group(1) if match.groups() else match.group(0)
-
     def _aggregate_events_with_one_sliding_window(self) -> StrategyApplyResult:
         """
         Runs one sliding window on events list and creates new activity-by-strategy each time as new set of
@@ -483,7 +561,7 @@ class InStrategyPropertiesHandler:
                         kv_pairs.update(
                             (
                                 k,
-                                self._find_value_for_key(k, event_data),
+                                event_data[k],
                             )
                             for k in event_data
                             if k in key_tuple
@@ -493,7 +571,7 @@ class InStrategyPropertiesHandler:
                 kv_pairs.update(
                     (
                         k,
-                        self._find_value_for_key(k, event_data),
+                        event_data[k],
                     )
                     for k in event_data
                 )
@@ -554,9 +632,7 @@ class InStrategyPropertiesHandler:
                 # exception was raised. We need in as many windows as possible.
                 for key_tuple in strategy.in_group_by_keys:
                     try:
-                        window_key = ListOfPairsDescriptor(
-                            [(key, self._find_value_for_key(key, event_data)) for key in key_tuple]
-                        )
+                        window_key = ListOfPairsDescriptor([(key, event_data[key]) for key in key_tuple])
                         self._add_event_to_window(event, window_key, windows)
                         added_times += 1
                     except KeyError:

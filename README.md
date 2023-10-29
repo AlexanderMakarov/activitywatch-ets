@@ -171,27 +171,21 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Add ID-s to ActivityByStrategy-ies and show them in ActivityWatch UI.
 - [x] Add (revert) "tuner" to ask users for "basic activity" ID ^ and correct weights in find_basic_activity_interval.
 - [x] Cut too small activity-by-strategy-es.
-- [ ] Add ability to separate distinct activity by name, like 'ETS' or 'Slack meeting' in Window events.
+- [x] Add ability to separate distinct activity by name, like 'ETS' or 'Slack meeting' in Window events.
       Such activities should be configured separately, like don't need cut by AFK.
       For Slack meetings need to separate calls and texting.
       If it is Huddle call then title is "Slack - UserName - Huddle". And don't cut by AFK!
       If it is texting to specific user or channel title is "UserName - WorkspaceName - Slack".
       For Firefox titles it is possible to parse Jira ID or some webapp name.
       I.e. add ability to separate into "activity" not only by the whole "title" but by fraction.
-    # TODO in_group_keys_regexps: Dict[str, List[str]] = None
-    """
-    A dictionary of event "data" keys to list of regexps to be used as a way to distinguish not they whole
-    value for a given key, but some fractions of it. In result activities will be separated in a "smarter"
-    but more "personal" way.
-    Useful for Windows Manager events to group together things like "browser tabs from specific Jira ID",
-    "Slack calls".
-    """
-- [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab
-      with relevant ID in the title.
+- [ ] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
+- [ ] Add more features into BAFinder.
+- [ ] Find a way to aggregate "short" "result activities" into bigger chunks.
 - [ ] Add ability to cut by AFK both events and activities (example?).
 - [ ] Keep exact events in result activities (example?).
 - [ ] Add Google Calendar importer.
 - [ ] Add CI with tests coverage.
+- [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in config.py.
 - [ ] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust `Config` and code if need.
 - [ ] Use for ETS for a few days. Adjust `Config`.
@@ -203,8 +197,9 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 ### Questionable:
 
 - [ ] 'in_group_by_keys' need to work both on "and" and "or" ways.
+- [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab
+      with relevant ID in the title.
 - [ ] Add support for TODO cases in test_merger.
-- [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in config.py.
 - [ ] Extend `in_only_if_window_app` to match "title" as well, depending on the some target event "data".
 - [ ] Think about way to make configuration file not to be "too deep in sources".
 - [ ] Separate `aw_export_one_day.py` into use standalone. The same is useful with exporters as well.

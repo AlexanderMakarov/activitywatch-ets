@@ -97,6 +97,12 @@ class Strategy:
     Is applied after `in_skip_key_regexp`.
     """
 
+    in_may_be_offline: bool = False
+    """
+    True means that event won't be filtered by any AFK events. In details AFK events are produced when computer
+    works, so disable filtering by these events make sense for offline activity.
+    """
+
     in_only_not_afk: bool = False
     """
     True means that events will be cut to appear only in not-AFK intervals.
@@ -156,6 +162,7 @@ class Strategy:
         "in_activities_may_overlap",
         "in_skip_key_regexp",
         "in_only_key_regexp",
+        "in_may_be_offline",
         "in_only_not_afk",
         "in_only_if_window_app",
         "in_group_by_keys",
