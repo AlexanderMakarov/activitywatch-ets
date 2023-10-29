@@ -11,12 +11,10 @@ from .strategies import InStrategyPropertiesHandler, StrategyApplyResult
 
 
 def _add_raw_event(raw_event: AWEvent, list_to_add: List[Event], bucket_id: str, metrics: Metrics):
-    # Remove part which is less than a second.
-    resulting_event = Event(bucket_id, raw_event.timestamp.replace(microsecond=0), raw_event.duration, raw_event.data)
+    # NOTE if remove part which is less than a second then it need to do both in start and in duration
+    # + sync it with next events!
+    resulting_event = Event(bucket_id, raw_event.timestamp, raw_event.duration, raw_event.data)
     list_to_add.append(resulting_event)
-    # Note that total duration of "events to handle" may be bigger than total duration of
-    # "raw events" for Window and other buckets because of `sort_merge_convert_raw_events` logic - 
-    # if between 2 similar events there is a gat then "merged" event becomes bigger on this gap.
     metrics.incr("events to handle", resulting_event.duration.seconds)
 
 
@@ -151,10 +149,11 @@ def apply_strategies_on_events(
         strat_metrics = Metrics({})  # These Metrics are per strategy, not per bucket!
         total_raw_events = 0
         # Fetch and normilize events.
-        # TODO (performance) do in parallel, AFK and Window before all. Think about activitybs ID-s.
+        # TODO (perf) do in parallel, AFK and Window before all. Think about activitybs ID-s.
         for bucket_id in strategy_buckets:
             metrics.incr("handled buckets")
             strat_metrics.incr("total buckets")
+            # TODO (perf) cache window events.
             bucket_events: List[AWEvent] = activity_watch_client.get_events(bucket_id, start=start_time, end=end_time)
             total_raw_events += len(bucket_events)
             if bucket_events:
