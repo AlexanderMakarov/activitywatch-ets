@@ -388,6 +388,49 @@ class DebugBucketsHandler:
                 metrics.incr("debug events in " + debug_bucket_prefix, activity.duration())
 
 
+
+def find_next_uncovered_intervals(
+    candidates_tree: intervaltree.IntervalTree,
+    result_tree: intervaltree.IntervalTree,
+    start_point: datetime.datetime = None,
+) -> Tuple[datetime.datetime, datetime.datetime]:
+    """
+    Finds closest to "start_point" interval in "candidates_tree" which is not covered by "result_tree".
+    :param candidates_tree: Tree of intervals to choose from.
+    :param result_tree: Tree of intervals which are forbidden.
+    :param start_point: Point to start to search interval since.
+    :return: Tuple with next start and end points. When there is no more suitable interval returns None-s.
+    """
+    candidates_begin = candidates_tree.begin()
+    candidates_end = candidates_tree.end()
+
+    # If start_point is None, take the begin of the candidates_tree.
+    # Also check that in candidates_tree range, otherwise there are no more intervals possible.
+    if start_point is None:
+        start_point = candidates_begin
+    elif start_point < candidates_begin or start_point > candidates_end:
+        return (None, None)
+
+    # Take out start_point under result_tree by shifting it to the end of overlapping interval in result_tree.
+    while result_tree.overlaps_point(start_point) and start_point < candidates_end:
+        overlapping_intervals = sorted(result_tree[start_point])
+        # Set start_point as the end of the last overlapping interval.
+        start_point = overlapping_intervals[-1].end
+
+    # Check if we reached the end of the candidates_tree without finding an uncovered interval/gap.
+    if start_point >= candidates_end:
+        return (None, None)
+
+    # Set end_point. Need to check each interval in result_tree.
+    end_point = candidates_end
+    # If there's a result interval starting after our current start_point and before our current end_point
+    # we update the end_point to the beginning of that result interval.
+    for interval in result_tree[start_point:end_point]:
+        if start_point < interval.begin < end_point:
+            end_point = interval.begin
+    return (start_point, end_point)
+
+
 def _build_result_activity(
     ba_interval: intervaltree.Interval,
     candidates_tree: intervaltree.IntervalTree,
@@ -754,7 +797,8 @@ class MakeCandidatesTreeStep(AnalyzerStep):
 
 class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
     """
-    Makes "candidates_tree" `IntervalTree`.
+    Iterates "candidates_tree" to find good resulting activities and merges them into "result_tree".
+    Produces "analyzer_result".
     """
 
     def __init__(self, is_add_debug_buckets: bool = False, is_only_good_strategies_for_description: bool = True):
@@ -868,41 +912,6 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
             )
         return ba_interval
 
-    @staticmethod
-    def find_next_uncovered_intervals(
-        candidates_tree: intervaltree.IntervalTree,
-        result_tree: intervaltree.IntervalTree,
-        start_point: datetime.datetime = None,
-    ) -> Tuple[datetime.datetime, datetime.datetime]:
-        candidates_begin = candidates_tree.begin()
-        candidates_end = candidates_tree.end()
-
-        # If start_point is None, take the begin of the candidates_tree.
-        # Also check that in candidates_tree range, otherwise there are no more intervals possible.
-        if start_point is None:
-            start_point = candidates_begin
-        elif start_point < candidates_begin or start_point > candidates_end:
-            return (None, None)
-
-        # Take out start_point under result_tree by shifting it to the end of overlapping interval in result_tree.
-        while result_tree.overlaps_point(start_point) and start_point < candidates_end:
-            overlapping_intervals = sorted(result_tree[start_point])
-            # Set start_point as the end of the last overlapping interval.
-            start_point = overlapping_intervals[-1].end
-
-        # Check if we reached the end of the candidates_tree without finding an uncovered interval/gap.
-        if start_point >= candidates_end:
-            return (None, None)
-
-        # Set end_point. Need to check each interval in result_tree.
-        end_point = candidates_end
-        # If there's a result interval starting after our current start_point and before our current end_point
-        # we update the end_point to the beginning of that result interval.
-        for interval in result_tree[start_point:end_point]:
-            if start_point < interval.begin < end_point:
-                end_point = interval.begin
-        return (start_point, end_point)
-
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
         result_tree: intervaltree.IntervalTree = context["result_tree"]
@@ -912,7 +921,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
         # Note that very often results tree will be empty and need to make up all activities from candidates tree.
         current_start_point: datetime.datetime
         current_end_point: datetime.datetime
-        current_start_point, current_end_point = self.find_next_uncovered_intervals(
+        current_start_point, current_end_point = find_next_uncovered_intervals(
             candidates_tree=candidates_tree, result_tree=result_tree
         )
         while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
@@ -952,7 +961,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
                 debug_buckets_handler=debug_buckets_handler,
             )
             # Configure next iteration.
-            current_start_point, current_end_point = self.find_next_uncovered_intervals(
+            current_start_point, current_end_point = find_next_uncovered_intervals(
                 candidates_tree=candidates_tree,
                 result_tree=result_tree,
                 start_point=ra.end_time,
@@ -966,7 +975,7 @@ class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
         )
 
 
-class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidatesTreeIntoResultTreeStep):
+class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(AnalyzerStep):
     """
     Makes "candidates_tree" `IntervalTree`.
     :param ba_finder: BAFinder instance to use for choosing "basic" activity on each step.
@@ -981,14 +990,19 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidates
         is_add_debug_buckets: bool = False,
         is_only_good_strategies_for_description: bool = True,
     ):
-        super(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep, self).__init__(
-            is_add_debug_buckets=is_add_debug_buckets,
-            is_only_good_strategies_for_description=is_only_good_strategies_for_description,
-        )
+        self.is_only_good_strategies_for_description = is_only_good_strategies_for_description
+        self.is_add_debug_buckets = is_add_debug_buckets
         self.ba_finder = ba_finder
 
     def get_description(self) -> str:
         return "Merging 'candidates_tree' into 'result_tree'."
+
+    def check_context(self, context: Dict[str, any]) -> None:
+        assert "result_tree" in context, "Need in 'result_tree' property"
+        assert "candidates_tree" in context, "Need in 'candidates_tree' property"
+        if self.is_add_debug_buckets:
+            if "debug_buckets_handler" not in context:
+                context["debug_buckets_handler"] = DebugBucketsHandler()
 
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
@@ -999,7 +1013,7 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidates
         # Note that very often results tree will be empty and need to make up all activities from candidates tree.
         current_start_point: datetime.datetime
         current_end_point: datetime.datetime
-        current_start_point, current_end_point = self.find_next_uncovered_intervals(
+        current_start_point, current_end_point = find_next_uncovered_intervals(
             candidates_tree=candidates_tree, result_tree=result_tree
         )
         while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
@@ -1040,7 +1054,7 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(MergeCandidates
             )
             # Configure next iteration.
             # TODO (major) fails after the first "self sufficient" interval "aka" gap.
-            current_start_point, current_end_point = self.find_next_uncovered_intervals(
+            current_start_point, current_end_point = find_next_uncovered_intervals(
                 candidates_tree=candidates_tree,
                 result_tree=result_tree,
                 start_point=ra.end_time,

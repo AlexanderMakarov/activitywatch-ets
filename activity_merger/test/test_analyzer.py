@@ -1,22 +1,21 @@
 import dataclasses
+import datetime
 import logging
 import unittest
-import datetime
-from typing import List, Dict, Tuple
-from parameterized import parameterized
+from typing import Dict, List, Tuple
+
 import intervaltree
+from parameterized import parameterized
 
 from activity_merger.domain.analyzer import (
-    MergeCandidatesTreeIntoResultTreeStep,
-    _exclude_tree_intervals,
-    _include_tree_intervals,
-)
+    MergeCandidatesTreeIntoResultTreeStep, _exclude_tree_intervals,
+    _include_tree_intervals, find_next_uncovered_intervals)
 
-from . import build_datetime, build_timedelta
+from ..domain.input_entities import Event, IntervalBoundaries, Strategy
 from ..domain.metrics import Metric, Metrics
-from ..domain.input_entities import IntervalBoundaries, Event, Strategy
 from ..domain.output_entities import Activity
 from ..domain.strategies import ActivityByStrategy
+from . import build_datetime, build_timedelta
 
 BUCKET1 = "buck1"
 BUCKET2 = "buck2"
@@ -472,9 +471,6 @@ class TestAnalyzer(unittest.TestCase):
             "wrong metrics",
         )
 
-
-class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
-
     @parameterized.expand(
         [
             (
@@ -792,7 +788,7 @@ class TestMergeCandidatesTreeIntoResultTreeStep(unittest.TestCase):
     ):
         self.maxDiff = None
         # Act
-        actual_start_point, actual_end_point = MergeCandidatesTreeIntoResultTreeStep.find_next_uncovered_intervals(
+        actual_start_point, actual_end_point = find_next_uncovered_intervals(
             candidates_tree=candidates_tree,
             result_tree=result_tree,
             start_point=start_point,
