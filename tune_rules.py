@@ -4,7 +4,7 @@ import contextlib
 import datetime
 import os
 import sys
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import aw_client
 import dill  # For pickle-ing lambdas need to use 'dill' package.
@@ -27,7 +27,7 @@ except ImportError:
 from pick import pick
 import curses
 
-from activity_merger.config.config import DEBUG_BUCKETS_IMPORTER_NAME, LOG
+from activity_merger.config.config import DEBUG_BUCKETS_IMPORTER_NAME, LIMIT_OF_RESULTING_ACTIVITIES, LOG, MAX_ACTIVITY_DURATION_SEC
 from activity_merger.domain.analyzer import (
     RA_DEBUG_BUCKET_NAME,
     AnalyzerStep,
@@ -36,6 +36,9 @@ from activity_merger.domain.analyzer import (
     MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
     MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep,
+    add_activity_to_result_tree,
+    build_result_activity,
+    find_next_uncovered_intervals,
     merge_activities,
 )
 from activity_merger.domain.metrics import Metrics
@@ -154,7 +157,7 @@ class CursesTerminalUI:
 
     def ask_select_question_with_type_filter(
         self, prefix: List[str], options: List[Tuple[str, str]]
-    ) -> Tuple[str, int]:
+    ) -> Tuple[str, str, int]:
         """
         Asks user for "select" question with ability to input string to filter options list by "contains".
         :param prefix: List of lines to prepend menu. Usually contains question.
@@ -164,6 +167,7 @@ class CursesTerminalUI:
         """
         if not options:  # Avoid errors on building menu (simplifies code below)
             raise ValueError("ask_select_question_with_type_filter: Empty options are provided.")
+        legend = "Select options with ↑ and ↓, ENTER to choose, ESC to stop choosing, any text - to filter."
         # Prepare full menu.
         menu = [x[0] for x in options]
 
@@ -175,7 +179,7 @@ class CursesTerminalUI:
             chosen_item = None
             chosen_index = -1
             while True:
-                self._reprint_input_with_menu(stdscr, prefix, input_str, cursor_pos, menu)
+                self._reprint_input_with_menu(stdscr, prefix + [legend], input_str, cursor_pos, menu)
                 key = stdscr.getch()
                 if key == curses.KEY_UP and cursor_pos > 0:
                     cursor_pos -= 1
@@ -185,6 +189,7 @@ class CursesTerminalUI:
                     # Restore chosen place in options from potentially shrinked menu.
                     chosen_item = menu[cursor_pos]
                     chosen_index = next(i for i, x in enumerate(options) if x[0] == chosen_item)
+                    action = "chosen"
                     break
                 elif 32 <= key <= 126:  # printable characters
                     input_str += chr(key)
@@ -196,12 +201,13 @@ class CursesTerminalUI:
                     cursor_pos = 0
                 elif key == 27:  # ESCAPE
                     if CursesTerminalUI._ask_yes_no(stdscr, prefix + ["Do you want to break? [y/n]"]):
+                        action = "exit"
                         chosen_item = None
                         chosen_index = -1
                         break
             stdscr.clear()
             stdscr.addstr(0, 0, "You chose: " + menu[cursor_pos])
-            return [chosen_item, chosen_index]
+            return [action, chosen_item, chosen_index]
             # stdscr.refresh()
             # stdscr.getch()
 
@@ -217,9 +223,9 @@ class Context:
     FOUND_ACTIVITIES_METRIC_NAME = "found activities"
     SAVE_FILE_PATH = os.path.abspath("tune_rules-context.dill")
 
-    def __init__(self, coefs: List, intercept: List) -> None:
-        self.coefs: List = coefs
-        self.intercept: List = intercept
+    def __init__(self, **kwargs) -> None:
+        self.coefs = []
+        self.intercept = []
 
     def save(self):
         """
@@ -244,37 +250,55 @@ class Context:
         )
         return result
 
-    def to_ba_finder(self) -> "SupervisedBAFinder":
-        finder = SupervisedBAFinder(self)
+    def to_ba_finder(self) -> BAFinder:
+        finder = BAFinder()
         finder.set_coefs(self.coefs, self.intercept)
         return finder
 
 
-class SupervisedBAFinder(BAFinder):
+class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep):
     """
-    Wrapper under `BAFinder` which may train model inside by asking user for the right activity-by-strategies
-    for "next" time slots.
+    MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep which interacts with user to:
+    - ask user for "basic" activity-by-strategy,
+    - remember decisions and train BAFinder to choose right activity-by-strategy-es after on.
+    May be provided with different BAFinder-s and Context - special object to persist BAFinder data.
     """
-
-    def __init__(self, context: Context) -> None:
-        super(SupervisedBAFinder, self).__init__()
-        self.context = context
-        self.training_data: List[Tuple[IntervalFeatures, int]] = []
+    def __init__(
+        self,
+        ba_finder: BAFinder,
+        is_add_debug_buckets: bool = False,
+        is_only_good_strategies_for_description: bool = True,
+        context: Optional[Context] = None
+    ):
+        super().__init__(
+            ba_finder, is_add_debug_buckets, is_only_good_strategies_for_description
+        )
         self.leader: CursesTerminalUI = CursesTerminalUI()
+        self.context = context if context else Context()
+        self.training_data: List[Tuple[IntervalFeatures, int]] = []
+
+    def get_description(self) -> str:
+        return "Merging 'candidates_tree' into 'result_tree' by user choice and trains BAFinder."
 
     def _add_answer(self, features: List[IntervalFeatures], index_of_chosen: int):
         for i, feature in enumerate(features):
             self.training_data.append((feature, 1 if i == index_of_chosen else 0))
 
-    def find_top(
+    def dump_results(self, is_ask_user: bool = False):
+        self.context.save()
+        if not is_ask_user or self.leader.ask_yes_no(["Train by answers? [y/n]"]):
+            self.ba_finder.train(self.training_data)
+            LOG.info("Training results: coef_=%s, intercept_=%s", self.ba_finder.model.coef_, self.ba_finder.model.intercept_)
+
+    def ask_top(
         self,
+        prev_choice: Optional[str],
         candidates: List[intervaltree.Interval],
         start_point: datetime.datetime,
         end_point: datetime.datetime,
-        max_duration_seconds: float,
-    ) -> Tuple[intervaltree.Interval, float, float]:
+    ) -> Tuple[str, intervaltree.Interval, float, float]:
         # Calculate features for all intersecting intervals. Note that here may be few hundreds candidates.
-        features = self.calculate_features(candidates, start_point, end_point, max_duration_seconds)
+        features = self.ba_finder.calculate_features(candidates, start_point, end_point, MAX_ACTIVITY_DURATION_SEC)
         # Prepare candidates to show: sort them and convert into strings.
         # For sorting use "overlap_ratio"
         sorted_indices = sorted(range(len(features)), key=lambda i: features[i].overlap_ratio, reverse=True)
@@ -285,7 +309,8 @@ class SupervisedBAFinder(BAFinder):
             activity: ActivityByStrategy = candidate.data
             option_str = str(activity)
             options.append((option_str, option_str))  # Make the whole acitivity text as "searchable".
-        question = (
+        prefix_lines = [] if prev_choice is None else [prev_choice]
+        prefix_lines.append(
             f"{datetime_to_time_str(start_point)} to {datetime_to_time_str(end_point)} - choose activity-by-strategy "
             "from 'z###-*' buckets on ActivityWatch 'Timeline' page for start of this interval."
         )
@@ -293,23 +318,83 @@ class SupervisedBAFinder(BAFinder):
         # - revert previous decision
         # - show previous choice
         # - improve "decided to exit" handling
-        answer: Tuple[str, int] = self.leader.ask_select_question_with_type_filter([question], options)
-        try:
-            index_chosen_in_sorted_candidates = answer[1]
-            if index_chosen_in_sorted_candidates < 0:
-                raise ValueError("Used decided to exit")
-            result = sorted_candidates[index_chosen_in_sorted_candidates]
-            # If there were no exceptions above then add to training data.
-            self._add_answer(sorted_features, index_chosen_in_sorted_candidates)
-            return result, 1, 0
-        except (ValueError, IndexError) as e:
-            raise ValueError(f"Wrong answer/choice '{answer}': {e}") from e
+        user_response: Tuple[str, str, int] = self.leader.ask_select_question_with_type_filter(prefix_lines, options)
+        answer = user_response[0]
+        if answer == "exit":
+            return (answer, None, 0, 0)
+        elif answer == "chosen":
+            try:
+                index_chosen_in_sorted_candidates = user_response[2]
+                if index_chosen_in_sorted_candidates < 0:
+                    raise ValueError("Used decided to exit")
+                result = sorted_candidates[index_chosen_in_sorted_candidates]
+                # If there were no exceptions above then add to training data.
+                self._add_answer(sorted_features, index_chosen_in_sorted_candidates)
+                return (answer, result, 1, 0)
+            except (ValueError, IndexError) as e:
+                raise ValueError(f"Wrong answer/choice '{user_response}': {e}") from e
+        elif result[0] == "undo":
+            raise NotImplementedError("TODO need to implement")
+        else:
+            raise ValueError(f"Unsupported answer: {answer}")
 
-    def dump_results(self, is_ask_user: bool = False):
-        self.context.save()
-        if not is_ask_user or self.leader.ask_yes_no(["Train by answers? [y/n]"]):
-            self.train(self.training_data)
-            LOG.info("Training results: coef_=%s, intercept_=%s", self.model.coef_, self.model.intercept_)
+    def run(self, context: Dict[str, any], metrics: Metrics):
+        debug_buckets_handler: Optional[DebugBucketsHandler] = context.get("debug_buckets_handler")
+        result_tree: intervaltree.IntervalTree = context["result_tree"]
+        candidates_tree: intervaltree.IntervalTree = context["candidates_tree"]
+
+        # Iterate through candidates tree and try to fill up gaps in result tree with intervals from here.
+        # Note that very often results tree will be empty and need to make up all activities from candidates tree.
+        current_start_point: datetime.datetime
+        current_end_point: datetime.datetime
+        current_start_point, current_end_point = find_next_uncovered_intervals(
+            candidates_tree=candidates_tree, result_tree=result_tree
+        )
+        prev_choice = None
+        while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
+            metrics.incr("iterations to assemble remaining activities")
+            # Find "basic activity" to base "result" activity on interval of it.
+            # Find all candidates which overlap interval somehow.
+            candidates: List[intervaltree.Interval] = list(candidates_tree.overlap(current_start_point, current_end_point))
+            if not candidates:
+                break  # No more activities are possible.
+            # Check that only 1 candidate is available.
+            ba_interval = candidates[0]
+            ba_score = 1.0
+            closest_candidate_score = None
+            if len(candidates) > 1:
+                answer, ba_interval, ba_score, closest_candidate_score = self.ask_top(
+                    prev_choice, candidates, current_start_point, current_end_point
+                )
+            if answer == "chosen":
+                ra = self.convert_ba_interval_to_activity(
+                    ba_interval= ba_interval,
+                    ba_score=ba_score,
+                    closest_candidate_score=closest_candidate_score,
+                    candidates_tree=candidates_tree,
+                    result_tree=result_tree,
+                    metrics=metrics,
+                    debug_buckets_handler=debug_buckets_handler
+                )
+                prev_choice = f"{ra}"  # TODO check hot it looks like. Maybe show "basic" activity?
+                # Configure next iteration.
+                # TODO (major) fails after the first "self sufficient" interval "aka" gap.
+                current_start_point, current_end_point = find_next_uncovered_intervals(
+                    candidates_tree=candidates_tree,
+                    result_tree=result_tree,
+                    start_point=ra.end_time,
+                )
+            elif answer == "exit":
+                LOG.info("User chose to exit earlier.")
+                break
+            elif answer == "back":
+                raise NotImplementedError("TODO add support")
+        context["analyzer_result"] = AnalyzerResult(
+            sorted([x.data for x in result_tree], key=lambda x: x.start_time),
+            None,
+            metrics,
+            debug_buckets_handler.events if debug_buckets_handler else None,
+        )
 
 
 class UploadDebugBucketsAndResetStep(AnalyzerStep):
@@ -341,7 +426,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     if is_use_saved_context:
         context = Context.read_from_file()
     else:
-        context = Context([], [])
+        context = Context()
     # Build ActivitiesByStrategy list by provided events date.
     strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_date, client)
     metrics_strings = list(metrics.to_strings())
@@ -363,7 +448,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
             ChopActivitiesByResultTreeStep(True, True),
             MakeCandidatesTreeStep(True),
             UploadDebugBucketsAndResetStep(client),
-            MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(ba_finder=ba_finder, is_add_debug_buckets=True),
+            BAFinderTrainerStep(ba_finder=ba_finder, is_add_debug_buckets=True, context=context),
         ],
     )
     if analyzer_result:

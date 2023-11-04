@@ -1,7 +1,7 @@
 import collections
 import dataclasses
 import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from ..helpers.helpers import from_start_to_end_to_str, seconds_to_timedelta
 from .input_entities import Event
@@ -44,7 +44,7 @@ class AnalyzerResult:
     """Counter of seconds per event."""
     metrics: Metrics
     """Dictionary of metrics, where each metric is represented by number of intervals and duration."""
-    debug_dict: Dict[str, List[Event]]
+    debug_dict: Optional[Dict[str, List[Event]]]
     """Map of debug bucket name to list of events to report into."""
 
     def to_str(
@@ -59,7 +59,7 @@ class AnalyzerResult:
         :return: String with metrics, 'equal' activities if configured, activities.
         """
         desc = ""
-        sorted_metrics_strings = list(self.metrics.to_strings(ignore_metrics_by_substrings))
+        sorted_metrics_strings = list(self.metrics.to_strings(ignore_with_substrings=ignore_metrics_by_substrings))
         desc += "Metrics from intervals analysis (total %s):\n  %s\n" % (
             len(sorted_metrics_strings),
             "\n  ".join(sorted_metrics_strings),

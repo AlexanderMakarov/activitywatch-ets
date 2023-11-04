@@ -1,22 +1,19 @@
-from collections import namedtuple
 import datetime
+from collections import namedtuple
 from typing import List, Optional, Set, Tuple
+
 import intervaltree
-from sklearn.linear_model import LogisticRegression
 import numpy as np
+from sklearn.linear_model import LogisticRegression
+
 from activity_merger.domain.input_entities import IntervalBoundaries
 
-from activity_merger.domain.metrics import Metrics
-
-from ..config.config import (
-    LOG,
-    MIN_ACTIVITY_DURATION_SEC,
-)
-
+from ..config.config import MIN_ACTIVITY_DURATION_SEC
 
 IntervalFeatures = namedtuple(
     "IntervalFeatures",
     [
+        # Interval-dependent features.
         "matches_start_point",
         "proximity_start_point",
         "matches_end_point",
@@ -24,13 +21,17 @@ IntervalFeatures = namedtuple(
         "overlap_ratio",
         "is_fits_max",
         "duration_above_min",
+        # Constant features.
         "density",
         "is_strict_boundaries",
         "is_start_boundaries",
         "is_end_boundaries",
         "is_dim_boundaries",
         "is_not_start_end_boundaries",
-        # TODO add feature "amount of keys"
+        # TODO add feature "amount of keys" (need to know max number of keys for the strategy or events)
+        # TODO add features per strategy
+        # TODO add feature "support from windows"
+        # TODO add feature "windows application"
     ],
 )
 
@@ -62,12 +63,12 @@ class BAFinder:
             y.append(item[1])
         self.model = LogisticRegression().fit(X, y)
 
-    def calculate_features(
+    def calculate_features(  # TODO calculate features only once per activity.
         self,
         candidates: List[intervaltree.Interval],
         start_point: datetime.datetime,
         end_point: datetime.datetime,
-        max_duration_seconds: int,
+        max_duration_seconds: float,
     ) -> List[IntervalFeatures]:
         result: List[IntervalFeatures] = []
         min_duration_sec = MIN_ACTIVITY_DURATION_SEC
@@ -163,51 +164,7 @@ class BAFinder:
             positive_class_probs[top_two_indices[1]],
         )
 
-    def find_basic_activity_interval(
-        self,
-        candidates_tree: intervaltree.IntervalTree,
-        start_point: datetime.datetime,
-        end_point: datetime.datetime,
-        max_duration_seconds: float,
-        metrics: Metrics,
-    ) -> Optional[intervaltree.Interval]:
-        """
-        Finds "basic" activity among tree of candidates.
-        """
-        candidates: List[intervaltree.Interval] = list(candidates_tree.overlap(start_point, end_point))
-        if not candidates:
-            return None
-
-        ba_interval = candidates[0]
-        ba_score = 1.0
-        closest_candidate_score = None
-        if len(candidates) > 1:
-            ba_interval, ba_score, closest_candidate_score = self.find_top(
-                candidates, start_point, end_point, max_duration_seconds
-            )
-
-        # Provide metric and log about new basic activity found.
-        ba_score_description = self._score_to_desc(ba_score)
-        metrics.incr(
-            f"basic activities with {ba_score_description} score", (ba_interval.end - ba_interval.begin).total_seconds()
-        )
-        LOG.info("Found 'basic activity' with %.2f '%s' score: %s", ba_score, ba_score_description, ba_interval)
-        # Provide metric about "how distinguishable basic activity was".
-        if closest_candidate_score is not None:
-            distance_desc = self._score_to_desc(ba_score - closest_candidate_score)
-            metrics.incr(
-                f"basic activities with {distance_desc} distance from other candidates",
-                (ba_interval.end - ba_interval.begin).total_seconds(),
-            )
-        else:
-            metrics.incr(
-                "basic activities without other candidates on interval",
-                (ba_interval.end - ba_interval.begin).total_seconds(),
-            )
-        return ba_interval
-
-    @staticmethod
-    def _score_to_desc(score: float) -> str:
+    def score_to_desc(self, score: float) -> str:
         score_description = ""
         if score == 1.0:
             score_description = "highest"
