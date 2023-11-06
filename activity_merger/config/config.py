@@ -112,22 +112,49 @@ STRATEGIES = [
         in_trustable_boundaries="strict",
         in_events_density_matters = False,
         in_activities_may_overlap = False,
-        in_skip_key_values = None,
+        in_skip_key_regexp = None,
+        in_only_key_regexp = None,
+        in_may_be_offline = False,
         in_only_not_afk = False,
-        in_group_by_keys = None,
         in_only_if_window_app = None,
+        in_group_by_keys = None,
         out_self_sufficient = False,
         out_produces_good_activity_name = False,
         out_activity_name_sentence_builder=lambda _: None,  # Don't contribute to activity name.
     ),
     Strategy(
-        name="OS Windows Manager",
+        name="OS Windows Slack Huddle",
+        bucket_prefix="aw-watcher-window",
+        in_trustable_boundaries="strict",
+        in_events_density_matters=True,
+        in_only_key_regexp = {"title": "Slack - (.+?) - Huddle"},
+        in_group_by_keys=[("title",)],
+        out_self_sufficient=False,
+        out_produces_good_activity_name=True,
+        out_activity_name_sentence_builder=lambda x: f"On Slack Huddle with {x[0][1]}.",
+    ),
+    Strategy(
+        name="OS Windows Zoom meeting",
+        bucket_prefix="aw-watcher-window",
+        in_trustable_boundaries="strict",
+        in_events_density_matters=True,
+        in_only_key_regexp = {"app": "zoom", "title": "Zoom Meeting|Meeting Chat|zoom|Zoom"},
+        in_group_by_keys=[("app", "title",)],
+        out_self_sufficient=False,
+        out_produces_good_activity_name=True,
+        out_activity_name_sentence_builder=lambda _: "On Zoom Meeting",
+    ),
+    Strategy(
+        name="OS Windows Other",
         bucket_prefix="aw-watcher-window",
         in_events_density_matters=True,
         in_activities_may_overlap=True,
-        # Title may change very often, but better to keep track of apps as well.
-        in_skip_key_values={"app": "unknown"},  # "unknown" events are duplicated by more meaningful events usually.
+        # "unknown" events are useless.
+        # "Slack - (.+?) - Huddle" is used by strategy above.
+        # "Zoom Meeting|Meeting Chat|zoom|Zoom" is used by strategy above.
+        in_skip_key_regexp={"app": "unknown", "title": "Slack - (.+?) - Huddle|Zoom Meeting|Meeting Chat|zoom|Zoom"},
         in_only_not_afk=True,
+        # Title may change very often, but better to keep track of apps as well.
         in_group_by_keys=[("app",), ("app", "title",)],
         out_activity_name_sentence_builder=lambda x: f"Worked with {x[0][1]} application(s).",  # TODO sort apps by density*duration
     ),
@@ -136,6 +163,7 @@ STRATEGIES = [
         bucket_prefix="aw-watcher-watchdog",
         in_each_event_is_activity=True,
         in_trustable_boundaries="strict",
+        in_may_be_offline = True,
         out_self_sufficient=True,
         out_produces_good_activity_name=True,
         out_activity_name_sentence_builder=lambda x: x[0][1],  # The only key is possible in 'data'.
@@ -156,6 +184,7 @@ STRATEGIES = [
         in_events_density_matters=True,
         in_activities_may_overlap=True,
         in_only_not_afk=True,
+        in_only_if_window_app=None,  # Jira activity may happen everywhere, not only in browser.
         in_group_by_keys=[
             (
                 "jira_id",
@@ -163,7 +192,6 @@ STRATEGIES = [
             ),
             ("jira_id",),
         ],
-        in_only_if_window_app=None,  # Jira activity may happen everywhere, not only in browser.
         out_produces_good_activity_name=True,
         out_activity_name_sentence_builder=__jira_activity_name_sentence_builder,
     ),
@@ -181,16 +209,16 @@ STRATEGIES = [
         name="IDEA",
         bucket_prefix="aw-watcher-idea",
         # Boundaries are "start" actually, but IDEA watcher may produce events if app in the background
-        # so "in_only_if_window_app" value doesn't match event start.
+        # so if keep "start" then "in_only_if_window_app" filter will loose interval completely.
         in_trustable_boundaries="dim",
         in_events_density_matters=True,
         in_activities_may_overlap=True,
         in_only_not_afk=True,
+        in_only_if_window_app=["jetbrains-idea"],
         in_group_by_keys=[
             ("project",),
             ("file",),
         ],  # IDEA events may lack 'project' field. But 'file' contians full path.
-        in_only_if_window_app=["jetbrains-idea"],
         out_activity_name_sentence_builder=partial(__ide_activity_name_sentence_builder, "IDEA"),
     ),
     Strategy(
