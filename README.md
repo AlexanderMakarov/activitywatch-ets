@@ -48,6 +48,7 @@ time-aware tools like:
 - Jira Cloud events ([get_jira_events.py](/get_jira_events.py)),
 - MS Exchange Calendar ([get_outlook_events.py](/get_outlook_events.py)) - aka OWA, Office 365 Mail,
 - Git commits ([get_git_events.py](/get_git_events.py))
+
 and combine total ~2500 events per day
 (depends on number of watchers/importers and style of work) into 5-12 activities by the set of predefined rules.
 It is impossible to generate activities with human-friendly description on the bare heuristic without using
@@ -63,7 +64,6 @@ See [get_activities.py](/get_activities.py) script, run it with `--help` for the
 Default (i.e. configurable if need) restrictions for "assembling activities" logic are:
 - Activity can't be longer than 2 hours and duration is rounded to 0.25 hour.
 - Events shorter than 1 second are skipped (it doesn't affect resulting activities intervals).
-- All timestamps are rounded to seconds.
 
 Everything is configurable in [config.py](/activity_merger/config/config.py) file.
 
@@ -72,11 +72,11 @@ mentioned above in a way:
 1. Name of activity is assembled from events data, not from predefined names of categories.
 2. Behavior of interpreting events from the each bucket is configured separately and not just
     "category A" or "category B" but as generic activity with generic name.
-3. Each bucket is configured perconaly to be related to "AFK" or not.
+3. Each bucket is configured personaly to be related to "AFK" or not.
 4. "Uncategorisable" events may be skipped or be "outweighted" by events from the other bucket.
 5. Activities are assembled basing on the all bucket's events.
     Moreover - one bucket may provide different activities suggestions for the same interval.
-6. At least 3 sources of data/events (Jira, Outlook calendar, Git) are added.
+6. At least 3 new sources of data/events (Jira, Outlook calendar, Git) are added.
 
 ## Setup
 
@@ -98,7 +98,7 @@ To add Jira and MS Exchange Calendar events was decided to use "on-demand import
     But in case of Linux operating system and configured MFA on the server WEB (browser based) UI is the only option.
     Note that Office365 doesn't support IMAP/POP3 connection with enabled MFA and doesn't provide some API-token-like
     authentication options.
-    As an option [aw-import-ical](https://github.com/ActivityWatch/aw-import-ical) may be used instead.
+    As an alternative [aw-import-ical](https://github.com/ActivityWatch/aw-import-ical) may be used instead.
 
 ### Jira
 
