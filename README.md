@@ -181,14 +181,12 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [ ] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
 - [ ] Add more features into BAFinder.
 - [ ] Find a way to aggregate "short" "result activities" into bigger chunks.
-- [ ] Add ability to cut by AFK both events and activities (example?).
-- [ ] Keep exact events in result activities (example?).
-- [ ] Add Google Calendar importer.
+- [ ] Add Google Calendar importer. See https://github.com/ActivityWatch/aw-import-ical (which is on poetry :( )).
 - [ ] Add CI with tests coverage.
-- [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in config.py.
+- [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in "config.py".
 - [ ] Prepare script to run all event importers and get_activities.py for the specific date.
-- [ ] Try it for myself. Adjust `Config` and code if need.
-- [ ] Use for ETS for a few days. Adjust `Config`.
+- [ ] Try it for myself. Adjust "config.py and code if need.
+- [ ] Use for meself for a few days. Adjust "config.py".
 - [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
 - [ ] Prepare for distribution (decide how it would look like).
 - [ ] Importers - support parsing few days at once.
@@ -197,13 +195,13 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 ### Questionable:
 
 - [ ] 'in_group_by_keys' need to work both on "and" and "or" ways.
+- [ ] Add ability to cut by AFK both events and activities (example?).
 - [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab
       with relevant ID in the title.
 - [ ] Add support for TODO cases in test_merger.
-- [ ] Extend `in_only_if_window_app` to match "title" as well, depending on the some target event "data".
 - [ ] Think about way to make configuration file not to be "too deep in sources".
-- [ ] Separate `aw_export_one_day.py` into use standalone. The same is useful with exporters as well.
+- [ ] Separate `aw_export_one_day.py` to use standalone. The same is useful with exporters as well.
   [ ] Improve "windows to activities" (`analyzer._window_to_activity`) with parallel sliding windows.
-- [ ] Wrap into the web server - send JSON with day data - get activities.
-- [ ] Interactive way to merge activities.
+- [ ] Wrap into the web server: send JSON with day data - get activities.
+- [ ] Interactive way to merge activities - see [tune_rules.py](/tune_rules.py)
 - [ ] Support remained "combinations of "in_" settings in `handle_events` (TODO-s in strategies.py)
