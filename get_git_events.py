@@ -49,8 +49,8 @@ def commits_to_events(commits: Dict[str, List[Commit]], day: datetime.datetime) 
                 (commit.date - start_time),
                 {
                     "message": commit.message,
-                    "lines_changed": commit.total_lines_changed,
                     "repo": repo,
+                    "lines_changed": str(commit.total_lines_changed),
                     "files": commit.files,
                 },
             )

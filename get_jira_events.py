@@ -120,7 +120,7 @@ def _parse_events_from_story_without_duration(
                     "jira_id": jira_id,
                     "title": summary,
                     "field": field,
-                    "symbols_count": symbols_count,
+                    "symbols_count": str(symbols_count),
                     "change_desc": change_desc,
                 },
             )
