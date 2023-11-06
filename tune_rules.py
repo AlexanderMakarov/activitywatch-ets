@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import contextlib
 import datetime
 import os
 import sys
@@ -20,10 +19,10 @@ try:
 except ImportError:
     pass
 # For Windows terminal:
-try:
-    import msvcrt
-except ImportError:
-    pass
+# try:
+#     import msvcrt
+# except ImportError:
+#     pass
 from pick import pick
 import curses
 
@@ -36,8 +35,6 @@ from activity_merger.domain.analyzer import (
     MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
     MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep,
-    add_activity_to_result_tree,
-    build_result_activity,
     find_next_uncovered_intervals,
     merge_activities,
 )
@@ -200,6 +197,11 @@ class CursesTerminalUI:
                     menu = [x[0] for x in options if len(input_str) == 0 or input_str in x[1]]
                     cursor_pos = 0
                 elif key == 27:  # ESCAPE
+                    # TODO (bug): clear screen
+                    #0:24:25.890000 (09:39:02..10:03:28) ....
+                    #10:03:28 to 13:00:00 - choose activity-by-strategy from 'z###-*' buckets on ActivityWatch 'Timeline' page for start of this interval.
+                    #Do you want to break? [y/n], ENTER to choose, ESC to stop choosing, any text - to filter.
+                    #filter by:
                     if CursesTerminalUI._ask_yes_no(stdscr, prefix + ["Do you want to break? [y/n]"]):
                         action = "exit"
                         chosen_item = None
@@ -284,12 +286,6 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
         for i, feature in enumerate(features):
             self.training_data.append((feature, 1 if i == index_of_chosen else 0))
 
-    def dump_results(self, is_ask_user: bool = False):
-        self.context.save()
-        if not is_ask_user or self.leader.ask_yes_no(["Train by answers? [y/n]"]):
-            self.ba_finder.train(self.training_data)
-            LOG.info("Training results: coef_=%s, intercept_=%s", self.ba_finder.model.coef_, self.ba_finder.model.intercept_)
-
     def ask_top(
         self,
         prev_choice: Optional[str],
@@ -316,8 +312,8 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
         )
         # TODO (impr) need interactions to:
         # - revert previous decision
-        # - show previous choice
         # - improve "decided to exit" handling
+        # - need ability to extend to the specific other a-b-s, i.e. make longer? Or just better quality of a-b-s.
         user_response: Tuple[str, str, int] = self.leader.ask_select_question_with_type_filter(prefix_lines, options)
         answer = user_response[0]
         if answer == "exit":
@@ -376,9 +372,8 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
                     metrics=metrics,
                     debug_buckets_handler=debug_buckets_handler
                 )
-                prev_choice = f"{ra}"  # TODO check hot it looks like. Maybe show "basic" activity?
+                prev_choice = f"{ba_interval.data.id}: {ra}"
                 # Configure next iteration.
-                # TODO (major) fails after the first "self sufficient" interval "aka" gap.
                 current_start_point, current_end_point = find_next_uncovered_intervals(
                     candidates_tree=candidates_tree,
                     result_tree=result_tree,
@@ -441,6 +436,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
 
     # Start to decide activities with last step involving user interactions.
     ba_finder = context.to_ba_finder()
+    trainer_step = BAFinderTrainerStep(ba_finder=ba_finder, is_add_debug_buckets=True, context=context)
     analyzer_result: AnalyzerResult = merge_activities(
         strategy_apply_result=strategy_apply_result,
         steps=[
@@ -448,7 +444,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
             ChopActivitiesByResultTreeStep(True, True),
             MakeCandidatesTreeStep(True),
             UploadDebugBucketsAndResetStep(client),
-            BAFinderTrainerStep(ba_finder=ba_finder, is_add_debug_buckets=True, context=context),
+            trainer_step,
         ],
     )
     if analyzer_result:
@@ -463,7 +459,10 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
                 client=client,
             )
         )
-        ba_finder.dump_results(is_ask_user=True)
+        context.save()
+        if trainer_step.leader.ask_yes_no(["Train by answers? [y/n]"]):
+            ba_finder.train(trainer_step.training_data)
+            LOG.info("Training results: coef_=%s, intercept_=%s", ba_finder.model.coef_, ba_finder.model.intercept_)
     else:
         LOG.error("Haven't received analyzer results!")
     return analyzer_result
@@ -508,31 +507,6 @@ def main():
     if args.back_days and args.back_days > 0:
         events_date = events_date - datetime.timedelta(days=args.back_days)
     tune_rules(events_date, args.is_use_saved)
-
-
-@contextlib.contextmanager  # TODO remove after fixing all terminal issues
-def raw_mode(file):
-    old_attrs = termios.tcgetattr(file.fileno())
-    new_attrs = old_attrs[:]
-    new_attrs[3] = new_attrs[3] & ~(termios.ECHO | termios.ICANON)
-    try:
-        termios.tcsetattr(file.fileno(), termios.TCSADRAIN, new_attrs)
-        yield
-    finally:
-        termios.tcsetattr(file.fileno(), termios.TCSADRAIN, old_attrs)
-
-
-def main2():  # TODO remove after fixing all terminal issues
-    print("exit with ^C or ^D")
-    with raw_mode(sys.stdin):
-        try:
-            while True:
-                ch = sys.stdin.read(1)
-                if not ch or ch == chr(4):
-                    break
-                print("%02x" % ord(ch))
-        except (KeyboardInterrupt, EOFError):
-            pass
 
 
 if __name__ == "__main__":

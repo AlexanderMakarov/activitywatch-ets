@@ -774,6 +774,9 @@ class InStrategyPropertiesHandler:
         Otherwise splits events by gaps longer than `MIN_ACTIVITY_DURATION_SEC` and makes acitivity-by-strategy-es
         from these chunks.
         """
+        # TODO (bugs):
+        # - IDEA events aren't cut by AFK - 421, 9:39...
+        # - Window event 10:05:02... (66 seconds) is out of any a-b-s.
         metrics = self.current_metrics
         windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
         # Analyse gaps in each window.

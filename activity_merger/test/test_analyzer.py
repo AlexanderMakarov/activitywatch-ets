@@ -8,8 +8,10 @@ import intervaltree
 from parameterized import parameterized
 
 from activity_merger.domain.analyzer import (
-    MergeCandidatesTreeIntoResultTreeStep, _exclude_tree_intervals,
-    _include_tree_intervals, find_next_uncovered_intervals)
+    _exclude_tree_intervals,
+    _include_tree_intervals,
+    find_next_uncovered_intervals,
+)
 
 from ..domain.input_entities import Event, IntervalBoundaries, Strategy
 from ..domain.metrics import Metric, Metrics

@@ -407,7 +407,7 @@ def find_next_uncovered_intervals(
     # Also check that in candidates_tree range, otherwise there are no more intervals possible.
     if start_point is None:
         start_point = candidates_begin
-    elif start_point < candidates_begin or start_point > candidates_end:
+    elif start_point > candidates_end:
         return (None, None)
 
     # Take out start_point under result_tree by shifting it to the end of overlapping interval in result_tree.

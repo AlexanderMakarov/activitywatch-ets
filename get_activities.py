@@ -115,22 +115,24 @@ def convert_aw_events_to_activities(
         "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in strategy_apply_result),
     )
 
-    ba_finder = BAFinder()  # TODO populate with coefficients.
+    # TODO populate with coefficients.
+    # ba_finder = BAFinder()
     analyzer_result = merge_activities(
         strategy_apply_result=strategy_apply_result,
         steps=[
             MakeResultTreeFromSelfSufficientActivitiesStep(is_add_debug_buckets=True),
             ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),
             MakeCandidatesTreeStep(is_add_debug_buckets=is_import_debug_buckets),
-            # MergeCandidatesTreeIntoResultTreeStep(
-            #     is_add_debug_buckets=is_import_debug_buckets,
-            #     is_only_good_strategies_for_description=is_only_good_strategies_for_description,
-            # ),
-            MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(
-                ba_finder=ba_finder,
+            MergeCandidatesTreeIntoResultTreeStep(
                 is_add_debug_buckets=is_import_debug_buckets,
                 is_only_good_strategies_for_description=is_only_good_strategies_for_description,
             ),
+            # TODO: switch to MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep
+            # MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(
+            #     ba_finder=ba_finder,
+            #     is_add_debug_buckets=is_import_debug_buckets,
+            #     is_only_good_strategies_for_description=is_only_good_strategies_for_description,
+            # ),
         ],
         ignore_substrings=ignore_substrings,
     )
