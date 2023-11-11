@@ -329,11 +329,11 @@ class DebugBucketsHandler:
             data = {
                 "id": str(event_id),
                 "desc": description,
-                "events_cnt": str(events_count),
+                "events": str(events_count),
                 "density": f"{density:.2f}",
             }
         else:
-            data = {"id": str(event_id), "desc": description, "events_cnt": str(events_count)}
+            data = {"id": str(event_id), "desc": description, "events": str(events_count)}
         self.events.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
 
     def add_debug_events_to_not_overlap(
