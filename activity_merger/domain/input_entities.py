@@ -69,14 +69,14 @@ class Strategy:
     in_events_density_matters: bool = False
     """
     Flag that need to separate events by density.
-    Like if there is big time gap between equal (by data) events then they represent different activities,
+    Like if there is a big time gap between equal by data events then they represent different activities,
     but if such events are close to each other then it is the same activity.
     """
 
     in_activities_may_overlap: bool = False
     """
-    Flag that events from different activities may alternate with each other but still represent few
-    overlapping activities. Note that "out_*" parameters and logic around them will make activities
+    Flag that events from different activities (i.e. with the same data) may alternate with each other but still
+    represent few overlapping activities. Note that "out_*" parameters and logic around them will make activities
     not overlapping later on, but on the "in_*" stage better to have as much as possible guesses about
     probable activities.
     """

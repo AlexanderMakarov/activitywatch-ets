@@ -289,6 +289,43 @@ def calculate_interval_density(
     return duration / (end_time - start_time).total_seconds()
 
 
+class EventChangeHandler():
+    """
+    Manages single event tranformation persistence and decoding.
+    """
+    __slots__ = ["changes"]
+
+    def __init__(self):
+        self.changes = []
+
+    def add_change(self, desc, is_start_cut=False, is_end_cut=False, is_data_changed=False):
+        fields = ""
+        if is_start_cut:
+            fields += "-start"
+        if is_end_cut:
+            fields = "-end"
+        if is_data_changed:
+            fields += "*data"
+        self.changes.append(f"{desc}:{fields}")
+
+    def is_changed(self) -> bool:
+        return bool(self.changes)
+
+    def __repr__(self) -> str:
+        return ", ".join(self.changes)
+    
+    def update_event_data(self, event_data: dict):
+        if self.changes:
+            event_data['changes'] = ", ".join(self.changes)
+
+    @staticmethod
+    def get_event_boundaries_changes(event_data: dict) -> Tuple[bool, bool]:
+        changes = event_data.get('changes')
+        if not changes:
+            return False, False
+        return "-start" in changes, "-end" in changes
+
+
 class InStrategyPropertiesHandler:
     """
     Statefull object to convert list of events by building `ActivitiesByStrategy` from them
@@ -318,6 +355,7 @@ class InStrategyPropertiesHandler:
         """
         Both checks that event may be used for building `ActivityByStrategy` and cuts it accordingly to
         "in_only_not_afk" and "in_only_if_window_app" parameters of the strategy.
+        Adds information where and how event was transformed if it was.
         """
         # Skip event entirely by "black list" or "white list".
         metrics = self.current_metrics
@@ -325,7 +363,7 @@ class InStrategyPropertiesHandler:
         event_duration = event.duration
         event_end = event_start + event_duration
         event_data = event.data
-        changers = []
+        change_handler = EventChangeHandler()
         for key, pattern in self.current_strategy_skip_key_pattern_list:
             key_value = event_data.get(key, None)
             if pattern.match(key_value):
@@ -344,7 +382,7 @@ class InStrategyPropertiesHandler:
                 )
                 return None
             else:
-                changers.append("in_only_key_regexp")
+                change_handler.add_change("in_only_key_regexp", is_data_changed=True)
                 event_data[key] = match.group(1) if match.groups() else match.group(0)
 
         strategy = self.current_strategy
@@ -368,7 +406,11 @@ class InStrategyPropertiesHandler:
                 metrics.incr("events cut out by 'relevant app active'", event_duration.total_seconds())
                 return None
             elif is_changed:
-                changers.append("in_only_if_window_app")
+                change_handler.add_change(
+                    "in_only_if_window_app",
+                    is_start_cut=(event_start != new_interval[0]),
+                    is_end_cut=(event_end != new_interval[1]),
+                )
                 event_start = new_interval[0]
                 event_end = new_interval[1]
                 metrics.incr(
@@ -387,7 +429,11 @@ class InStrategyPropertiesHandler:
                 metrics.incr("events cut out by 'not-AFK'", event_duration.total_seconds())
                 return None
             elif is_changed:
-                changers.append("in_only_not_afk")
+                change_handler.add_change(
+                    "in_only_not_afk",
+                    is_start_cut=(event_start != new_interval[0]),
+                    is_end_cut=(event_end != new_interval[1]),
+                )
                 event_start = new_interval[0]
                 event_end = new_interval[1]
                 metrics.incr(
@@ -401,7 +447,11 @@ class InStrategyPropertiesHandler:
                 metrics.incr("events cut out by 'any-AFK'", event_duration.total_seconds())
                 return None
             elif is_changed:
-                changers.append("in_may_be_offline")
+                change_handler.add_change(
+                    "in_may_be_offline",
+                    is_start_cut=(event_start != new_interval[0]),
+                    is_end_cut=(event_end != new_interval[1]),
+                )
                 event_start = new_interval[0]
                 event_end = new_interval[1]
                 metrics.incr(
@@ -409,8 +459,8 @@ class InStrategyPropertiesHandler:
                 )
 
         # Transform event if need.
-        if changers:
-            event_data["changedBy"] = ", ".join(changers)
+        if change_handler.is_changed():
+            change_handler.update_event_data(event_data)
             event = Event(
                 bucket_id=event.bucket_id, timestamp=event_start, duration=event_end - event_start, data=event.data
             )
@@ -587,6 +637,7 @@ class InStrategyPropertiesHandler:
             if event is None:
                 continue
             event_data = event.data
+            # Collect key-value pairs from event data.
             kv_pairs: Set[Tuple[str, str]] = set()
             if strategy.in_group_by_keys:
                 # For each tuple of keys in the list check if all are placed in event's data and
@@ -810,8 +861,8 @@ class InStrategyPropertiesHandler:
         from these chunks.
         """
         # TODO (bugs):
-        # - IDEA events aren't cut by AFK - 421, 9:39...
-        # - Window event 10:05:02... (66 seconds) is out of any a-b-s.
+        # - A-b-s spans throught AFK events and with low density while should be reduced.
+        # - Window event 10:05:02... (66 seconds, libreoffice) is out of any a-b-s.
         metrics = self.current_metrics
         windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
         # Analyse gaps in each window.
@@ -826,13 +877,16 @@ class InStrategyPropertiesHandler:
                     if gap > 0:
                         gaps.append((i, gap))
                 prev_event = event
+            # If there are no gaps then just create one activity-by-strategy from all events.
             if len(gaps) <= 0:
-                # If there are no gaps then just create one activity-by-strategy from all events.
                 activitybs = self._make_activitybs_between_events(window_events, key)
                 if activitybs is not None:
                     activitiesbs.append(activitybs)
                 metrics.incr("1 separated by density activity-by-strategy-es with same data")
                 continue
+            # Convert events into activities-by-strategy-es relative to trustable boundaries:
+            # - START, END without recursive clusters search - just by MIN_ACTIVITY_DURATION_SEC gap.
+            # - remained boundaries with recursive clusters search using divider = 2.
             recursion_max_gap_divider = (
                 2
                 if self.current_strategy.in_trustable_boundaries
