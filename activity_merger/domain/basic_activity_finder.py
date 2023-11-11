@@ -63,7 +63,7 @@ class BAFinder:
             y.append(item[1])
         self.model = LogisticRegression().fit(X, y)
 
-    def calculate_features(  # TODO calculate features only once per activity.
+    def calculate_features(
         self,
         candidates: List[intervaltree.Interval],
         start_point: datetime.datetime,

@@ -61,7 +61,7 @@ class Strategy:
     Flag that each event is the separate activity. Overrides all other "in_*" flags.
     """
 
-    in_trustable_boundaries: IntervalBoundaries = "dim"
+    in_trustable_boundaries: IntervalBoundaries = "strict"
     """
     Means which boundaries of events are trustable. Supports: "strict", "start", "end", "dim" values.
     """

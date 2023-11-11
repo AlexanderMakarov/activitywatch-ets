@@ -130,7 +130,7 @@ class StrategyApplyResult:
         return self.to_string()
 
 
-def get_cut_by_tree_interval(
+def cut_by_interval_tree(
     event_start: datetime.datetime,
     event_end: datetime.datetime,
     tree: intervaltree.IntervalTree,
@@ -142,11 +142,12 @@ def get_cut_by_tree_interval(
 ) -> Tuple[bool, Optional[Tuple[datetime.datetime, datetime.datetime]]]:
     """
     Calculates event boundaries to be on the intervals in the given tree taking into account boundaries.
-    If boundaries and way of overlapping with tree are incompatible then either returns None or raises ValueError.
+    If boundaries and way of overlapping with tree are incompatible then either returns `None` or raises `ValueError`.
     List of incompatible cases:
     - "strict" boundaries and there is no overlaps in the tree at least for one piece of event.
     - "start" boundaries and there is no overlapping with event start.
     - "end" boundaries and there is no overlapping with event end.
+    Intervals in tree are expected to be not overlapping.
     May return 3 types of result:
     1. Event interval is OK as is - in this case first item in result is False.
     2. Event should disappear completely - in this case second item in result is None.
@@ -188,7 +189,6 @@ def get_cut_by_tree_interval(
             else:
                 return (False, None)
         # If there is a gap in "tree overlapping" then need to cut event to the shortest interval from the start.
-        # Note that intervals in tree are expected to be not overlapping.
         if first_overlap.end < event_end:
             is_changed = True
             event_end = first_overlap.end
@@ -203,33 +203,66 @@ def get_cut_by_tree_interval(
             else:
                 return (False, None)
         # If there is a gap in "tree overlapping" then need to cut event to the shortest interval from the end.
-        # Note that intervals in tree are expected to be not overlapping.
         if last_overlap.begin > event_start:
             is_changed = True
             event_start = last_overlap.begin
     elif boundaries == IntervalBoundaries.DIM:
-        # If there is a gap in "tree overlapping" then need to cut event to the shortest interval.
-        last_end = first_overlap.end
-        max_overlap_start = first_overlap.begin
-        min_overlap_end = last_overlap.end
-        # Iterate all overlaps and find the longest overlapped part of the event.
-        for overlap in overlaps[1:]:
-            if overlap.begin == last_end:
-                last_end = overlap.end
-                if (last_end - max_overlap_start) > (min_overlap_end - max_overlap_start):
-                    min_overlap_end = last_end
+        # In a case of DIM boundaries we may get into situation when need to split event on few.
+        # But few events from one is a thing which need to avoid because it doesn't make sense - event begin or end
+        # or both should be supported by some interval in tree (assuming that strategy config is right).
+        # But due to author of strategy chose DIM they are not sure in exact boundaries.
+        # It happens when:
+        # 1. Events are generated without real support. For example Outlook events may end up earlier or later.
+        #    In this case need cut event to shortest overlapping interval from the start - extending event
+        #    duration is job of more high level logic.
+        # 2. Events are sometimes generated wronlgy. For example IDEA generates events on app start or
+        #    "wake up from sleep" motivators. Or "today's first" GIT/Jira events start from the start of the day.
+        #    But due to these activities may happen over night then it may accidentally intersect with real activity.
+        #    Anywat we need to cut by shortest overlapping interval from the end.
+        # What to choose? The best idea is to find shortest overlaps for start and end then choose longest from them.
+
+        first_interval_start = event_start if first_overlap.begin <= event_start else None
+        first_interval_end = min(first_overlap.end, event_end)
+        last_interval_start = max(last_overlap.begin, event_start) if last_overlap.end >= event_end else None
+        last_interval_end = event_end
+        # Compare overlapped intervals. Check by *_start variables!
+        if first_interval_start is None and last_interval_start is None:
+            # Skip event entirely - it is overlapped only somewhere in the middle.
+            metrics.incr(
+                f"DIM events skipped because edges aren't overlapped by {tree_name} events",
+                initial_duration.total_seconds(),
+            )
+            return (False, None)
+        elif first_interval_start and last_interval_start:
+            # Choose longest overlapped interval.
+            if (first_interval_end - first_interval_start) >= (last_interval_end - last_interval_start):
+                metrics.incr(
+                    f"DIM events overlapped by {tree_name} events better at start",
+                    (first_interval_end - first_interval_start).total_seconds(),
+                )
+                event_start = first_interval_start
+                event_end = first_interval_end
             else:
-                if (last_end - max_overlap_start) > (min_overlap_end - max_overlap_start):
-                    min_overlap_end = last_end
-                max_overlap_start = overlap.begin
-                last_end = overlap.end
-        # Check if the longest overlapped part is out of event boundaries.
-        if max_overlap_start > event_start:
-            is_changed = True
-            event_start = max_overlap_start
-        if min_overlap_end < event_end:
-            is_changed = True
-            event_end = min_overlap_end
+                metrics.incr(
+                    f"DIM events overlapped by {tree_name} events better at end",
+                    (last_interval_end - last_interval_start).total_seconds(),
+                )
+                event_start = last_interval_start
+                event_end = last_interval_end
+        elif first_interval_start:
+            metrics.incr(
+                f"DIM events overlapped by {tree_name} events only at start",
+                (first_interval_end - first_interval_start).total_seconds(),
+            )
+            event_start = first_interval_start
+            event_end = first_interval_end
+        else:
+            metrics.incr(
+                f"DIM events overlapped by {tree_name} events better at end",
+                (last_interval_end - last_interval_start).total_seconds(),
+            )
+            event_start = last_interval_start
+            event_end = last_interval_end
 
     # Check that the resulting duration is not greater than initial as simple sanity check.
     if event_end - event_start > initial_duration:
@@ -314,44 +347,14 @@ class InStrategyPropertiesHandler:
                 changers.append("in_only_key_regexp")
                 event_data[key] = match.group(1) if match.groups() else match.group(0)
 
-        # Cut event by AFK if need.
-        # Note that if we need "only within not-AFK" then "only within any AFK" is applied automatically.
         strategy = self.current_strategy
         boundaries = strategy.in_trustable_boundaries
-        if strategy.in_only_not_afk:
-            # Cut event by to be only in "not-AFK" intervals.
-            is_changed, new_interval = get_cut_by_tree_interval(
-                event_start, event_end, self.not_afk_tree, boundaries, "not-AFK", metrics, strategy.name, False
-            )
-            if new_interval is None:
-                metrics.incr("events cut out by 'not-AFK'", event_duration.total_seconds())
-                return None
-            elif is_changed:
-                changers.append("in_only_not_afk")
-                event_start = new_interval[0]
-                event_end = new_interval[1]
-                metrics.incr(
-                    "events chopped by 'not-AFK'", (event_duration - (event_end - event_start)).total_seconds()
-                )
-        elif not strategy.in_may_be_offline:
-            is_changed, new_interval = get_cut_by_tree_interval(
-                event_start, event_end, self.any_afk_tree, boundaries, "any-AFK", metrics, strategy.name, False
-            )
-            if new_interval is None:
-                metrics.incr("events cut out by 'any-AFK'", event_duration.total_seconds())
-                return None
-            elif is_changed:
-                changers.append("in_may_be_offline")
-                event_start = new_interval[0]
-                event_end = new_interval[1]
-                metrics.incr(
-                    "events chopped by 'any-AFK'", (event_duration - (event_end - event_start)).total_seconds()
-                )
 
         # Cut event by windows watcher "app=" events if need.
+        # Should be before AFK chopping because we don't want to get random piece of event.
         if strategy.in_only_if_window_app:
             # Cut event by to be only in "relevant app active" intervals.
-            is_changed, new_interval = get_cut_by_tree_interval(
+            is_changed, new_interval = cut_by_interval_tree(
                 event_start,
                 event_end,
                 self.current_window_tree,
@@ -371,6 +374,38 @@ class InStrategyPropertiesHandler:
                 metrics.incr(
                     "events chopped by 'relevant app active'",
                     (event_duration - (event_end - event_start)).total_seconds(),
+                )
+
+        # Cut event by AFK if need.
+        # Note that if we need "only within not-AFK" then "only within any AFK" is applied automatically.
+        if strategy.in_only_not_afk:
+            # Cut event by to be only in "not-AFK" intervals.
+            is_changed, new_interval = cut_by_interval_tree(
+                event_start, event_end, self.not_afk_tree, boundaries, "not-AFK", metrics, strategy.name, False
+            )
+            if new_interval is None:
+                metrics.incr("events cut out by 'not-AFK'", event_duration.total_seconds())
+                return None
+            elif is_changed:
+                changers.append("in_only_not_afk")
+                event_start = new_interval[0]
+                event_end = new_interval[1]
+                metrics.incr(
+                    "events chopped by 'not-AFK'", (event_duration - (event_end - event_start)).total_seconds()
+                )
+        elif not strategy.in_may_be_offline:
+            is_changed, new_interval = cut_by_interval_tree(
+                event_start, event_end, self.any_afk_tree, boundaries, "any-AFK", metrics, strategy.name, False
+            )
+            if new_interval is None:
+                metrics.incr("events cut out by 'any-AFK'", event_duration.total_seconds())
+                return None
+            elif is_changed:
+                changers.append("in_may_be_offline")
+                event_start = new_interval[0]
+                event_end = new_interval[1]
+                metrics.incr(
+                    "events chopped by 'any-AFK'", (event_duration - (event_end - event_start)).total_seconds()
                 )
 
         # Transform event if need.
