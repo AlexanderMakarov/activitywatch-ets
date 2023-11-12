@@ -1,13 +1,19 @@
 import dataclasses
 import datetime
 import re
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 import intervaltree
-from sklearn.cluster import DBSCAN
 import numpy as np
+from sklearn.cluster import DBSCAN
 
-from ..config.config import LOG, MIN_ACTIVITY_DURATION_SEC, TOO_SMALL_INTERVAL_SEC
+from ..config.config import (
+    EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+    LOG,
+    MIN_ACTIVITY_DURATION_SEC,
+    MIN_DENSITY_FOR_SPARCE_INTERVALS,
+    TOO_SMALL_INTERVAL_SEC,
+)
 from ..helpers.helpers import datetime_to_time_str, event_to_str, from_start_to_end_to_str, seconds_to_timedelta
 from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
@@ -289,10 +295,11 @@ def calculate_interval_density(
     return duration / (end_time - start_time).total_seconds()
 
 
-class EventChangeHandler():
+class EventChangeHandler:
     """
     Manages single event tranformation persistence and decoding.
     """
+
     __slots__ = ["changes"]
 
     def __init__(self):
@@ -313,14 +320,14 @@ class EventChangeHandler():
 
     def __repr__(self) -> str:
         return ", ".join(self.changes)
-    
+
     def update_event_data(self, event_data: dict):
         if self.changes:
-            event_data['changes'] = ", ".join(self.changes)
+            event_data["changes"] = ", ".join(self.changes)
 
     @staticmethod
     def get_event_boundaries_changes(event_data: dict) -> Tuple[bool, bool]:
-        changes = event_data.get('changes')
+        changes = event_data.get("changes")
         if not changes:
             return False, False
         return "-start" in changes, "-end" in changes
@@ -534,7 +541,10 @@ class InStrategyPropertiesHandler:
             return self._convert_each_event_into_activitybs()
         if strategy.in_events_density_matters:
             if strategy.in_activities_may_overlap:  # Jira, Window, Web, IDEA, VSCode, Git.
-                return self._aggregate_events_with_few_sliding_windows_by_density()
+                return self._aggregate_events_with_few_sliding_windows_by_density_threshold()
+                # A-b-s-es span throught AFK events which leads to low density.
+                # return self._aggregate_events_with_few_sliding_windows_by_recursive_gaps_comparison()
+                # Inconsistent between small and large windows.
                 # return self._aggregate_events_with_few_sliding_windows_by_optics()
             else:  # No examples yet.
                 return self._aggregate_events_with_one_sliding_window()
@@ -806,76 +816,82 @@ class InStrategyPropertiesHandler:
         """
         Converts list of events and relevant gaps between them (list with length less at least on one item) into
         activities-by-strategy recursiverly (if need). Returns the number of created activity-by-strategy-es.
-        Idea is to iterate over all gaps to clusterise events with some big gaps. Next set gap to the fraction of
-        initial gap (half) and iterate events in each cluster one more time. Do it recursively until there are
-        big enough gaps to separate clusters.
+        Idea is to choose some gap which is too big and iterate over all gaps to clusterise events with it.
+        Next in the each cluster choose gap as the fraction (half) of the lesser value from:
+        - initial gap,
+        - resulting covered by events interval,
+        and separate by cluster until left no more big enough gaps to separate events into clusters.
         Remained clusters would be dense enough to make activity-by-strategy-es from them.
         """
         # If there are no gaps then just create single activity-by-strategy.
         activitiesbs = []
-        if len(gaps) < 1:
+        if len(gaps) < 1 or gaps_indexes[1] - gaps_indexes[0] < 1:
             activitybs = self._make_activitybs_between_events(events[events_indexes[0] : events_indexes[1]], key)
             return [activitybs] if activitybs is not None else []
         # Otherwise iterate over all gaps to find gaps bigger than max_gap_sec recursively.
+        finish_gaps_index = gaps_indexes[1]
         start_index = events_indexes[0]
         start_gaps_index = gaps_indexes[0]
-        for i in range(gaps_indexes[0], gaps_indexes[1]):
-            gap = gaps[i]
-            # Check that gap is big enough to make separate cluster.
-            if gap[1] >= max_gap_sec:
-                end_index = gap[0]
-                # Check that need seach clusters recursively.
-                if recursion_max_gap_divider > 0:
+        # Iterate 1 extra time to write recursion once (check finish by `end_gaps_index == finish_gap_index`).
+        for end_gaps_index in range(gaps_indexes[0], finish_gaps_index + 1):
+            gap = gaps[end_gaps_index] if end_gaps_index < finish_gaps_index else None
+            # Check that gaps are over or current gap is big enough to separate cluster.
+            if end_gaps_index >= finish_gaps_index or gap[1] >= max_gap_sec:
+                # Note that 'end_index' is exclusive.
+                end_index = gap[0] if end_gaps_index < finish_gaps_index else events_indexes[1]
+                # Check that need to search clusters recursively.
+                if recursion_max_gap_divider > 0 and (start_gaps_index, end_gaps_index) != gaps_indexes:
+                    last_event = events[end_index] if end_gaps_index < finish_gaps_index else events[-1]
+                    under_events_interval_duration_sec = (
+                        last_event.timestamp + last_event.duration - events[start_index].timestamp
+                    ).total_seconds()
                     # Run recursion with slice of events and relevant gaps.
                     local_activitiesbs = self._convert_events_with_gaps_to_activitiesbs(
                         key,
                         events,
                         gaps,
-                        max_gap_sec / recursion_max_gap_divider,
+                        min(max_gap_sec, under_events_interval_duration_sec) / recursion_max_gap_divider,
                         recursion_max_gap_divider,
                         (start_index, end_index),
-                        (start_gaps_index, i),  # Note that gaps list may be much less than events list.
+                        (start_gaps_index, end_gaps_index),  # Note that gaps list may be much less than events list.
                     )
                     activitiesbs += local_activitiesbs
                 else:
-                    # If don't need seach clusters recursively then convert cluster to activity-by-strategy.
+                    # If don't need seach clusters recursively then just convert cluster to activity-by-strategy.
                     activitybs = self._make_activitybs_between_events(events[start_index:end_index], key)
                     if activitybs is not None:
                         activitiesbs.append(activitybs)
                 start_index = end_index
-                start_gaps_index = i + 1  # Need to shift gaps index because we are skipping it.
-        # Check that remain some events in cluster to make last activity-by-strategy.
-        if events_indexes[1] - 1 > start_index:
-            activitybs = self._make_activitybs_between_events(events[start_index : events_indexes[1]], key)
-            if activitybs is not None:
-                activitiesbs.append(activitybs)
+                start_gaps_index = end_gaps_index + 1  # Need to shift gaps index because we are skipping it.
         return activitiesbs
 
-    def _aggregate_events_with_few_sliding_windows_by_density(self) -> StrategyApplyResult:
+    def _aggregate_events_with_few_sliding_windows_by_recursive_gaps_comparison(self) -> StrategyApplyResult:
         """
-        Produces overlapping activity-by-strategy-es basing on theirs density on time scale.
+        Produces overlapping activity-by-strategy-es basing on a gaps between events.
         In details it first separates events with "same data" into windows (as big as needed).
         Next in each window iterates events to collect list of gaps between events.
         If there are no gaps then collects acitivity-by-strategy.
-        Otherwise splits events by gaps longer than `MIN_ACTIVITY_DURATION_SEC` and makes acitivity-by-strategy-es
-        from these chunks.
+        Chooses some gap which is too big and iterate over all gaps to clusterise events with it.
+        Next in the each cluster choose gap as the fraction (half) of the lesser value from:
+        - initial gap,
+        - resulting covered by events interval,
+        and separate by cluster until left no more big enough gaps to separate events into clusters.
         """
-        # TODO (bugs):
-        # - A-b-s spans throught AFK events and with low density while should be reduced.
-        # - Window event 10:05:02... (66 seconds, libreoffice) is out of any a-b-s.
         metrics = self.current_metrics
         windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
         # Analyse gaps in each window.
         activitiesbs: List[ActivityByStrategy] = []
         for key, window_events in windows.items():
-            # Measure all gaps.
+            # Measure all gaps in seconds.
+            # Because 1 second for human is pretty small interval and may be treated as an continous activity.
             gaps: List[Tuple[int, float]] = []
             prev_event = None
             for i, event in enumerate(window_events):
                 if prev_event:
-                    gap = (event.timestamp - (prev_event.timestamp + prev_event.duration)).seconds
-                    if gap > 0:
-                        gaps.append((i, gap))
+                    gap_seconds = (event.timestamp - (prev_event.timestamp + prev_event.duration)).seconds
+                    # Add only big enough gaps - for performance.
+                    if gap_seconds > EVENTS_COMPARE_TOLERANCE_TIMEDELTA.seconds:
+                        gaps.append((i, gap_seconds))
                 prev_event = event
             # If there are no gaps then just create one activity-by-strategy from all events.
             if len(gaps) <= 0:
@@ -893,6 +909,7 @@ class InStrategyPropertiesHandler:
                 not in [IntervalBoundaries.START, IntervalBoundaries.END]
                 else 0
             )
+            # PROBLEM: A-b-s spans throught AFK events and with low density while should be reduced.
             activitiesbs += self._convert_events_with_gaps_to_activitiesbs(
                 key=key,
                 events=window_events,
@@ -902,6 +919,62 @@ class InStrategyPropertiesHandler:
                 events_indexes=(0, len(window_events)),
                 gaps_indexes=(0, len(gaps)),
             )
+            metrics.incr(f"{len(activitiesbs)} separated by density activity-by-strategy-es with same data")
+        return StrategyApplyResult(self.current_strategy, activitiesbs, self.current_metrics, self.current_id)
+
+    def _aggregate_events_with_few_sliding_windows_by_density_threshold(self) -> StrategyApplyResult:
+        """
+        Produces overlapping activity-by-strategy-es basing on theirs density on time scale.
+        In details it first separates events with "same data" into windows (as big as needed).
+        Next in each window iterates events with calculating density of the resulting events cluster with inlcuding
+        the next event. If gap between events is bigger than 'MIN_ACTIVITY_DURATION_SEC' or resulting density is less
+        than 'MIN_DENSITY_FOR_SPARCE_INTERVALS' then cuts new activity-by-strategy.
+        """
+        metrics = self.current_metrics
+        windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
+        activitiesbs: List[ActivityByStrategy] = []
+        for key, window_events in windows.items():
+            # If it is the only event then make activity-by-strategy from it right now.
+            if len(window_events) == 1:
+                activitybs = self._make_activitybs_between_events(window_events, key)
+                if activitybs is not None:
+                    activitiesbs.append(activitybs)
+                metrics.incr("1 separated by density activity-by-strategy-es with same data")
+                continue
+            # Prepare to iterate events to separate a-b-s-es.
+            cluster = []
+            len_events = len(window_events)
+
+            for i, event in enumerate(window_events):
+                cluster.append(event)
+
+                # Calculate gap to next event, if there is a next event.
+                if i < len_events - 1:
+                    next_event = window_events[i + 1]
+                    gap_duration = next_event.timestamp - (event.timestamp + event.duration)
+                    # Decide that cluster is big enough if gap is bigger than min activity duration or density is low.
+                    is_large_gap = gap_duration.seconds > MIN_ACTIVITY_DURATION_SEC
+                    if not is_large_gap:
+                        # Calculate projected density of the current cluster i.e. like if the next event added.
+                        projected_duration = (
+                            sum(x.duration.total_seconds() for x in cluster) + next_event.duration.total_seconds()
+                        )
+                        projected_time_span = (
+                            (next_event.timestamp + next_event.duration) - cluster[0].timestamp
+                        ).total_seconds()
+                        projected_density = projected_duration / projected_time_span
+                        is_large_gap = projected_density < MIN_DENSITY_FOR_SPARCE_INTERVALS
+                    # If gap with the next event is too big then convert cluster to a-b-s and start new cluster.
+                    if is_large_gap:
+                        activitybs = self._make_activitybs_between_events(cluster, key)
+                        if activitybs is not None:
+                            activitiesbs.append(activitybs)
+                        cluster = []
+            # Add the last cluster if not empty.
+            if cluster:
+                activitybs = self._make_activitybs_between_events(cluster, key)
+                if activitybs is not None:
+                    activitiesbs.append(activitybs)
             metrics.incr(f"{len(activitiesbs)} separated by density activity-by-strategy-es with same data")
         return StrategyApplyResult(self.current_strategy, activitiesbs, self.current_metrics, self.current_id)
 
@@ -927,13 +1000,11 @@ class InStrategyPropertiesHandler:
                 continue
             # Convert list of events into 1D list of midpoints.
             dist_matrix = np.zeros((len(window_events), len(window_events)))
-            for i in range(len(window_events)):
-                for j in range(len(window_events)):
+            for i, e1 in enumerate(window_events):
+                for j, e2 in enumerate(window_events):
                     if i == j:
                         dist_matrix[i][j] = 0
                         continue
-                    e1 = window_events[i]
-                    e2 = window_events[j]
                     if e1.timestamp < e2.timestamp:
                         dist_matrix[i][j] = (e2.timestamp - (e1.timestamp + e1.duration)).total_seconds()
                     else:
