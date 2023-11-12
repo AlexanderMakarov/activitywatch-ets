@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import intervaltree
 
 from activity_merger.domain.basic_activity_finder import BAFinder
+from activity_merger.helpers.helpers import event_to_str, from_start_to_end_to_str
 
 from ..config.config import (
     DEBUG_BUCKET_PREFIX,
@@ -16,8 +17,7 @@ from ..config.config import (
 from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
-from .strategies import BUCKET_AFK_PREFIX, StrategyApplyResult, ActivityByStrategy, calculate_interval_density
-
+from .strategies import BUCKET_AFK_PREFIX, ActivityByStrategy, StrategyApplyResult, calculate_interval_density
 
 RA_DEBUG_BUCKET_NAME = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
 
@@ -314,26 +314,28 @@ class DebugBucketsHandler:
         self.cnt += 1
         return result
 
-    def add_event(
+    def add_debug_event(
         self,
         bucket_id: str,
-        event_id: int,
+        debug_event_id: int,
         timestamp: datetime.datetime,
         duration: datetime.timedelta,
         description: str,
         density: float,
-        events_count: int,
+        aw_events: List[Event],
     ):
-        # Note that ActivityWatch UI shows only strings.
+        events = ", ".join(from_start_to_end_to_str(x.timestamp, x.timestamp + x.duration) for x in aw_events)
+        events_cnt = str(len(aw_events))  # Note that ActivityWatch UI shows only strings
         if density:
             data = {
-                "id": str(event_id),
+                "id": str(debug_event_id),
                 "desc": description,
-                "events": str(events_count),
-                "density": f"{density:.2f}",
+                "density": f"{density:.2f}",  # Density is more important than events information, should be earlier.
+                "events_cnt": events_cnt,
+                "events": events,
             }
         else:
-            data = {"id": str(event_id), "desc": description, "events": str(events_count)}
+            data = {"id": str(debug_event_id), "desc": description, "events_cnt": events_cnt, "events": events}
         self.events.setdefault(bucket_id, []).append(Event(bucket_id, timestamp, duration, data))
 
     def add_debug_events_to_not_overlap(
@@ -374,16 +376,16 @@ class DebugBucketsHandler:
         for group in groups:
             debug_bucket_prefix = self.build_new_bucket_id(bucket_suffix)
             for activity in group:
-                self.add_event(
+                self.add_debug_event(
                     bucket_id=debug_bucket_prefix,
-                    event_id=activity.id,
+                    debug_event_id=activity.id,
                     timestamp=activity.suggested_start_time,
                     # For debug events need to use end-start time, not duration by events.
                     duration=activity.suggested_end_time - activity.suggested_start_time,
                     # Build description in easiest way.
                     description=", ".join(f"{k}={v}" for k, v in activity.grouping_data.get_kv_pairs()),
                     density=activity.density,
-                    events_count=len(activity.events),
+                    aw_events=activity.events,
                 )
                 metrics.incr("debug events in " + debug_bucket_prefix, activity.duration())
 
@@ -632,14 +634,14 @@ def add_activity_to_result_tree(
     # Add RA to debug bucket if need.
     if is_add_debug_buckets:
         # Use the only debug bucket here because events should be consequtive.
-        debug_buckets_handler.add_event(
+        debug_buckets_handler.add_debug_event(
             bucket_id=RA_DEBUG_BUCKET_NAME,
-            event_id=0,  # Don't set ID for events which shouldn't be pointed.
+            debug_event_id=0,  # Don't set ID for events which shouldn't be pointed.
             timestamp=ra.start_time,
             duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
             description=ra.description,
             density=0,  # Don't set density for "resulting" activities.
-            events_count=len(ra.events),
+            aw_events=ra.events,
         )
 
 
@@ -804,7 +806,7 @@ class MakeCandidatesTreeStep(AnalyzerStep):
             if self.is_add_debug_buckets:
                 debug_buckets_handler.add_debug_events_to_not_overlap(
                     activites=strategy_result.activities,
-                    bucket_suffix=strategy_result.strategy.bucket_prefix + "_candidate",
+                    bucket_suffix=strategy_result.strategy.name.replace(" ", "-") + "_candidate",
                     metrics=metrics,
                 )
         metrics.override("last activity id", last_id, 0)

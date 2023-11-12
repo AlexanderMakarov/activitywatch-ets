@@ -181,6 +181,8 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [ ] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
 - [ ] Add more features into BAFinder.
 - [ ] Find a way to aggregate "short" "result activities" into bigger chunks.
+- [ ] Find a way to avoid gaps between "expected adjusted" intervals.
+- [ ] Try to aggregate "result" activities with help of ChatGPT.
 - [ ] Add Google Calendar importer. See https://github.com/ActivityWatch/aw-import-ical (which is on poetry :( )).
 - [ ] Add CI with tests coverage.
 - [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in "config.py".
