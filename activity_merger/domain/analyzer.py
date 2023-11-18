@@ -383,7 +383,7 @@ class DebugBucketsHandler:
                     # For debug events need to use end-start time, not duration by events.
                     duration=activity.suggested_end_time - activity.suggested_start_time,
                     # Build description in easiest way.
-                    description=", ".join(f"{k}={v}" for k, v in activity.grouping_data.get_kv_pairs()),
+                    description=", ".join(f"{k}={v}" for k, v in activity.grouping_data.get_data().items()),
                     density=activity.density,
                     aw_events=activity.events,
                 )
@@ -585,34 +585,33 @@ def _build_activity_name(
     # Process each group of activities to build sentence.
     resulting_names: List[str] = []
     for grouped_activity_list in sorted_grouped_activities:
-        common_kv_pairs = collections.defaultdict(set)
+        # TODO: (bug) fix below
+        # Note that mixing all of the a-b-s 'get_kv_pairs' results into the one dictionary would cause data loosing.
+        # For example if 2 Windows activities with {app=Slack, title=Meeting} and {app=Code, title=MyProject} are
+        # grouped here then resulting dictionary would look like {app=[Slack, Code], title=[Meeting, MyProject]}
+        common_key_to_values_set = collections.defaultdict(set)
 
         # Collect the common key-value pairs from grouping_data
         activity: ActivityByStrategy
         for activity in grouped_activity_list:
-            for pair in activity.grouping_data.get_kv_pairs():
-                common_kv_pairs[pair[0]].add(pair[1])
-
-        # Convert all values to comma-separated string.
-        common_kv_list = [(k, ", ".join(sorted(v))) for k, v in common_kv_pairs.items()]
+            common_key_to_values_set.update(activity.grouping_data.get_data())
 
         # Use the strategy's out_activity_name_builder to get the name, or use a default logic.
         strategy = strategy_to_name[grouped_activity_list[0].strategy.name]
         name_builder = (
             strategy.out_activity_name_sentence_builder
             if strategy.out_activity_name_sentence_builder
-            else lambda kv_pairs: ", ".join([f"{k}: {v}" for k, v in kv_pairs])
+            else lambda x: ", ".join([f"{k}={v}" for k, v in x.items()])
         )
 
         # Append to resulting names if the strategy produces a good activity name
-        generated_name = name_builder(common_kv_list)
+        generated_name = name_builder(common_key_to_values_set)
         if generated_name:
             resulting_names.append(generated_name)
         if not include_all and not strategy.out_produces_good_activity_name:
             metrics.incr("result activities with good name", duration_sec)
             break
     metrics.incr(f"result activities with name combined from {len(sorted_grouped_activities)} strategies", duration_sec)
-
     return " ".join(resulting_names)
 
 

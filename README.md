@@ -178,10 +178,11 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
       If it is texting to specific user or channel title is "UserName - WorkspaceName - Slack".
       For Firefox titles it is possible to parse Jira ID or some webapp name.
       I.e. add ability to separate into "activity" not only by the whole "title" but by fraction.
-- [ ] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
+- [x] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
+- [ ] Find a way to aggregate "short" activity-by-strategy-es into bigger chunks 
+      Find a way to avoid gaps between "expected adjusted" intervals.
+- [ ] Find a way to choose better description for many different events.
 - [ ] Add more features into BAFinder.
-- [ ] Find a way to aggregate "short" "result activities" into bigger chunks.
-- [ ] Find a way to avoid gaps between "expected adjusted" intervals.
 - [ ] Try to aggregate "result" activities with help of ChatGPT.
 - [ ] Add Google Calendar importer. See https://github.com/ActivityWatch/aw-import-ical (which is on poetry :( )).
 - [ ] Add CI with tests coverage.
@@ -196,14 +197,11 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 
 ### Questionable:
 
-- [ ] 'in_group_by_keys' need to work both on "and" and "or" ways.
+- [ ] 'in_group_by_keys' need to work both on "and" and "or" ways (example?).
 - [ ] Add ability to cut by AFK both events and activities (example?).
 - [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab
       with relevant ID in the title.
-- [ ] Add support for TODO cases in test_merger.
 - [ ] Think about way to make configuration file not to be "too deep in sources".
 - [ ] Separate `aw_export_one_day.py` to use standalone. The same is useful with exporters as well.
-  [ ] Improve "windows to activities" (`analyzer._window_to_activity`) with parallel sliding windows.
 - [ ] Wrap into the web server: send JSON with day data - get activities.
 - [ ] Interactive way to merge activities - see [tune_rules.py](/tune_rules.py)
-- [ ] Support remained "combinations of "in_" settings in `handle_events` (TODO-s in strategies.py)

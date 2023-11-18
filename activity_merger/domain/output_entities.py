@@ -48,7 +48,7 @@ class AnalyzerResult:
     """Map of debug bucket name to list of events to report into."""
 
     def to_str(
-        self, append_equal_intervals_longer_that: float = -1.0, ignore_metrics_by_substrings: List[str] = None
+        self, append_equal_intervals_longer_that: float = -1.0, ignore_metrics_by_substrings: Optional[List[str]] = None
     ) -> str:
         """
         Converts not debug data into human-friendly representation.

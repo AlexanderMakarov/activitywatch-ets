@@ -1,7 +1,9 @@
 import dataclasses
 import collections
 import enum
-from typing import Dict, Tuple, Callable, List, Union
+from typing import Dict, Optional, Tuple, Callable, List, Union
+
+from pick import Option
 
 
 Event = collections.namedtuple("Event", ["bucket_id", "timestamp", "duration", "data"])
@@ -61,7 +63,7 @@ class Strategy:
     Flag that each event is the separate activity. Overrides all other "in_*" flags.
     """
 
-    in_trustable_boundaries: IntervalBoundaries = "strict"
+    in_trustable_boundaries: Union[str, IntervalBoundaries] = "strict"
     """
     Means which boundaries of events are trustable. Supports: "strict", "start", "end", "dim" values.
     """
@@ -81,14 +83,14 @@ class Strategy:
     probable activities.
     """
 
-    in_skip_key_regexp: Dict[str, str] = None
+    in_skip_key_regexp: Optional[Dict[str, str]] = None
     """
     Map of keys to regexp to skip (black list) events with such data and don't make activities from.
     Useful to filter out "unknown" events (which are bad source of information and may be duplicated by more
     meaningful events/activities) and to filter out events handled by previous strategies with the same bucket prefix.
     """
 
-    in_only_key_regexp: Dict[str, str] = None
+    in_only_key_regexp: Optional[Dict[str, str]] = None
     """
     Map of keys to regexp to use only (white list) events with such data and don't make activities from others.
     Useful to create custom strategies on specific events in "common" buckets.
@@ -109,7 +111,7 @@ class Strategy:
     Is applied after both `in_skip_key_regexp` and `in_only_key_regexp`.
     """
 
-    in_only_if_window_app: List[str] = None
+    in_only_if_window_app: Optional[List[str]] = None
     """
     List of values in "app" key of OS Windows Manager events to cut current events to appear only inside.
     For example IDEA events are reported all time but real work in IDEA may happen
@@ -118,7 +120,7 @@ class Strategy:
     and `in_skip_key_regexp`/`in_only_key_regexp` doesn't filter out required values.
     """
 
-    in_group_by_keys: List[Tuple[str]] = None
+    in_group_by_keys: Optional[List[Tuple]] = None
     """
     Specific keys to separate events into the windows/activities when related values are similar.
     By default events are grouped together if set of keys and values for all keys (i.e. whole data) are identical.
@@ -140,11 +142,13 @@ class Strategy:
     Flag that strategy events may provide good resulting activity name.
     """
 
-    out_activity_name_sentence_builder: Callable[[List[Tuple[str, str]]], str] = None
+    out_activity_name_sentence_builder: Optional[Callable[[List[Tuple[str, str]]], str]] = None
     """
     Function which builds one sentence for the resulting activity name from the list of
     key-value pairs aggregated from ActivityWatch event's "data" dictionaries which were used to merge
-    multiple events into one activity. Should start from upper case letter and end with the point.
+    multiple events into one activity.
+    So example of input data is `[("app", "slack"), ("title", "), ("app", "Code")]`
+    Should start from upper case letter and end with the point.
     If `None` then uses simple "dict to string" logic.
     If function returns `None` or empty string then strategy won't contribute to the resulting activity name.
     """

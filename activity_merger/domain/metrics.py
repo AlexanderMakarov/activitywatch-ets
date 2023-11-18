@@ -1,6 +1,6 @@
 import collections
 import datetime
-from typing import Dict, List, Optional, Set, Callable
+from typing import Dict, Generator, List, Optional, Set, Callable
 
 
 Metric = collections.namedtuple("Metric", ["cnt", "duration"])
@@ -18,7 +18,7 @@ class Metrics:
     Also ther is an ability to suppress some metrics in "reporting" methods.
     """
 
-    def __init__(self, handler_per_metric: Dict[str, Callable], skip_metrics: Set[str] = None):
+    def __init__(self, handler_per_metric: Dict[str, Callable], skip_metrics: Optional[Set[str]] = None):
         """
         :param handler_per_metric: Dictionary with name of metric and associated handler to call in case if
         `increment_and_call_handler` is used. Shouldn't be None.
@@ -38,14 +38,14 @@ class Metrics:
         self.metrics = metrics
         return self
 
-    def incr(self, metric_name: str, duration: float = 0.0) -> Metric:
+    def incr(self, metric_name: str, duration: float = 0.0) -> Optional[Metric]:
         """
         Increment metric on one event with given duration. May add new metrics and skip None intervals.
         :param metric_name: Name of metric to increment.
         :param duration: Duration in seconds to add. May be 0.
         """
         if metric_name in self.skip_metrics:
-            return
+            return None
         metric = self.metrics.get(metric_name, Metric(0, 0.0))
         metric = Metric(metric.cnt + 1, metric.duration + duration)
         self.metrics[metric_name] = metric
@@ -83,8 +83,11 @@ class Metrics:
         return self.metrics.get(metric_name)
 
     def to_strings(
-        self, is_exclude_empty: bool = True, is_exclude_duration=False, ignore_with_substrings: List[str] = None
-    ) -> List[str]:
+        self,
+        is_exclude_empty: bool = True,
+        is_exclude_duration=False,
+        ignore_with_substrings: Optional[List[str]] = None,
+    ) -> Generator:
         """
         Returns generator of sorted (first by duration, next by count) metric descriptions.
         :param is_exclude_zero: Flag to return only metrics with only positive count.

@@ -5,7 +5,7 @@ import os
 import sys
 from typing import Dict, List, Optional, Set, Tuple
 
-import aw_client
+from aw_client import ActivityWatchClient
 import dill  # For pickle-ing lambdas need to use 'dill' package.
 import intervaltree
 
@@ -393,7 +393,7 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
 
 
 class UploadDebugBucketsAndResetStep(AnalyzerStep):
-    def __init__(self, client: aw_client.ActivityWatchClient):
+    def __init__(self, client: ActivityWatchClient):
         super(UploadDebugBucketsAndResetStep, self).__init__()
         self.client = client
 
@@ -403,7 +403,7 @@ class UploadDebugBucketsAndResetStep(AnalyzerStep):
     def check_context(self, context: Dict[str, any]) -> None:
         assert "debug_buckets_handler" in context, "Need in 'debug_buckets_handler' property"
 
-    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
+    def run(self, context: Dict[str, any], metrics: Metrics):
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
         reload_debug_buckets(debug_buckets_handler.events, self.client)
 
@@ -417,7 +417,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     :param is_use_saved_context: Flag to read data saved from previous run.
     :return: 'AnalyzerResult' object or 'None' if no intervals to analyze were found.
     """
-    client = aw_client.ActivityWatchClient(os.path.basename(__file__))
+    client = ActivityWatchClient(os.path.basename(__file__))
     if is_use_saved_context:
         context = Context.read_from_file()
     else:
@@ -460,9 +460,11 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
             )
         )
         context.save()
+        # TODO (bug): # Shows `Train by answers? [y/n]1 x0.83, 18:08:24..18:12:06 (min 18:08:24..18:12:06),  12 Windows `
         if trainer_step.leader.ask_yes_no(["Train by answers? [y/n]"]):
             ba_finder.train(trainer_step.training_data)
             LOG.info("Training results: coef_=%s, intercept_=%s", ba_finder.model.coef_, ba_finder.model.intercept_)
+            # TODO (bug): result is not saved!
     else:
         LOG.error("Haven't received analyzer results!")
     return analyzer_result
