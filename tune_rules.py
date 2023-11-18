@@ -26,7 +26,7 @@ except ImportError:
 from pick import pick
 import curses
 
-from activity_merger.config.config import DEBUG_BUCKETS_IMPORTER_NAME, LIMIT_OF_RESULTING_ACTIVITIES, LOG, MAX_ACTIVITY_DURATION_SEC
+import activity_merger.config.config as config
 from activity_merger.domain.analyzer import (
     RA_DEBUG_BUCKET_NAME,
     AnalyzerStep,
@@ -42,6 +42,9 @@ from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.helpers.helpers import datetime_to_time_str, setup_logging, upload_events, valid_date
 from get_activities import clean_debug_buckets_and_apply_strategies_on_one_day_events, reload_debug_buckets
+
+
+LOG = setup_logging()
 
 
 class PickTerminalUI:
@@ -113,10 +116,11 @@ class CursesTerminalUI:
 
     @staticmethod
     def _ask_yes_no(stdscr, prefix_with_yn: List[str]) -> bool:
+        stdscr.clear()
+        stdscr.refresh()
         while True:
             for i, line in enumerate(prefix_with_yn):
                 stdscr.addstr(i, 0, line)
-            stdscr.refresh()
             char = stdscr.getch()
             if char in [ord("y"), ord("Y")]:
                 return True
@@ -197,11 +201,6 @@ class CursesTerminalUI:
                     menu = [x[0] for x in options if len(input_str) == 0 or input_str in x[1]]
                     cursor_pos = 0
                 elif key == 27:  # ESCAPE
-                    # TODO (bug): clear screen
-                    #0:24:25.890000 (09:39:02..10:03:28) ....
-                    #10:03:28 to 13:00:00 - choose activity-by-strategy from 'z###-*' buckets on ActivityWatch 'Timeline' page for start of this interval.
-                    #Do you want to break? [y/n], ENTER to choose, ESC to stop choosing, any text - to filter.
-                    #filter by:
                     if CursesTerminalUI._ask_yes_no(stdscr, prefix + ["Do you want to break? [y/n]"]):
                         action = "exit"
                         chosen_item = None
@@ -226,8 +225,8 @@ class Context:
     SAVE_FILE_PATH = os.path.abspath("tune_rules-context.dill")
 
     def __init__(self, **kwargs) -> None:
-        self.coefs = []
-        self.intercept = []
+        self.coefs = config.BAFinder_LogisticRegression_coef
+        self.intercept = config.BAFinder_LogisticRegression_intercept
 
     def save(self):
         """
@@ -263,16 +262,15 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
     - remember decisions and train BAFinder to choose right activity-by-strategy-es after on.
     May be provided with different BAFinder-s and Context - special object to persist BAFinder data.
     """
+
     def __init__(
         self,
         ba_finder: BAFinder,
         is_add_debug_buckets: bool = False,
         is_only_good_strategies_for_description: bool = True,
-        context: Optional[Context] = None
+        context: Optional[Context] = None,
     ):
-        super().__init__(
-            ba_finder, is_add_debug_buckets, is_only_good_strategies_for_description
-        )
+        super().__init__(ba_finder, is_add_debug_buckets, is_only_good_strategies_for_description)
         self.leader: CursesTerminalUI = CursesTerminalUI()
         self.context = context if context else Context()
         self.training_data: List[Tuple[IntervalFeatures, int]] = []
@@ -292,7 +290,9 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
         end_point: datetime.datetime,
     ) -> Tuple[str, intervaltree.Interval, float, float]:
         # Calculate features for all intersecting intervals. Note that here may be few hundreds candidates.
-        features = self.ba_finder.calculate_features(candidates, start_point, end_point, MAX_ACTIVITY_DURATION_SEC)
+        features = self.ba_finder.calculate_features(
+            candidates, start_point, end_point, config.MAX_ACTIVITY_DURATION_SEC
+        )
         # Prepare candidates to show: sort them and convert into strings.
         # For sorting use "overlap_ratio"
         sorted_indices = sorted(range(len(features)), key=lambda i: features[i].overlap_ratio, reverse=True)
@@ -345,11 +345,13 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
             candidates_tree=candidates_tree, result_tree=result_tree
         )
         prev_choice = None
-        while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
+        while current_start_point and len(result_tree) < config.LIMIT_OF_RESULTING_ACTIVITIES:
             metrics.incr("iterations to assemble remaining activities")
             # Find "basic activity" to base "result" activity on interval of it.
             # Find all candidates which overlap interval somehow.
-            candidates: List[intervaltree.Interval] = list(candidates_tree.overlap(current_start_point, current_end_point))
+            candidates: List[intervaltree.Interval] = list(
+                candidates_tree.overlap(current_start_point, current_end_point)
+            )
             if not candidates:
                 break  # No more activities are possible.
             # Check that only 1 candidate is available.
@@ -362,13 +364,13 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
                 )
             if answer == "chosen":
                 ra = self.convert_ba_interval_to_activity(
-                    ba_interval= ba_interval,
+                    ba_interval=ba_interval,
                     ba_score=ba_score,
                     closest_candidate_score=closest_candidate_score,
                     candidates_tree=candidates_tree,
                     result_tree=result_tree,
                     metrics=metrics,
-                    debug_buckets_handler=debug_buckets_handler
+                    debug_buckets_handler=debug_buckets_handler,
                 )
                 prev_choice = f"{ba_interval.data.id}: {ra}"
                 # Configure next iteration.
@@ -451,18 +453,24 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
         LOG.info(
             upload_events(
                 events=analyzer_result.debug_dict[RA_DEBUG_BUCKET_NAME],
-                event_type=DEBUG_BUCKETS_IMPORTER_NAME,
+                event_type=config.DEBUG_BUCKETS_IMPORTER_NAME,
                 bucket_id=RA_DEBUG_BUCKET_NAME,
                 is_replace=True,
                 client=client,
             )
         )
-        context.save()
-        # TODO (bug): # Shows `Train by answers? [y/n]1 x0.83, 18:08:24..18:12:06 (min 18:08:24..18:12:06),  12 Windows `
         if trainer_step.leader.ask_yes_no(["Train by answers? [y/n]"]):
             ba_finder.train(trainer_step.training_data)
-            LOG.info("Training results: coef_=%s, intercept_=%s", ba_finder.model.coef_, ba_finder.model.intercept_)
-            # TODO (bug): result is not saved!
+            LOG.info(
+                "Training results - SAVE THEM:\nBAFinder_LogisticRegression_coef_=%s"
+                "\nBAFinder_LogisticRegression_intercept=%s",
+                ba_finder.model.coef_,
+                ba_finder.model.intercept_,
+            )
+            # Save training results via context.
+            context.coefs = ba_finder.model.coef_
+            context.intercept = ba_finder.model.intercept_
+            context.save()
     else:
         LOG.error("Haven't received analyzer results!")
     return analyzer_result
@@ -510,5 +518,4 @@ def main():
 
 
 if __name__ == "__main__":
-    LOG = setup_logging()
     main()

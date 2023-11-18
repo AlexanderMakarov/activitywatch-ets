@@ -1111,7 +1111,6 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(AnalyzerStep):
                 debug_buckets_handler=debug_buckets_handler,
             )
             # Configure next iteration.
-            # TODO (major) fails after the first "self sufficient" interval "aka" gap.
             current_start_point, current_end_point = find_next_uncovered_intervals(
                 candidates_tree=candidates_tree,
                 result_tree=result_tree,
