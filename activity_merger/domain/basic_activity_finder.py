@@ -47,13 +47,16 @@ class BAFinder:
     def __init__(self) -> None:
         self.model: LogisticRegression = None
 
-    def set_coefs(self, coefs, intercept):
-        # assert len(coefs) == len(
-        #     IntervalFeatures.count
-        # ), f"Wrong number of coefs {len(coefs)} it should match number of fields in IntervalFeatures."
+    def with_coefs(self, coefs: List[np.double], intercept: np.double) -> "BAFinder":
+        num_of_features = len(IntervalFeatures._fields)
+        assert len(coefs) == num_of_features, (
+            f"Wrong number of coefs {len(coefs)}:"
+            f" it should match number of fields {num_of_features} in IntervalFeatures."
+        )
         self.model = LogisticRegression()
-        self.model.coef_ = [coefs]
-        self.model.intercept_ = [intercept]
+        self.model.coef_ = np.array([coefs])
+        self.model.intercept_ = np.array([intercept])
+        return self
 
     def train(self, data: List[Tuple[IntervalFeatures, int]]):
         X = []

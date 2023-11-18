@@ -6,13 +6,8 @@ from typing import Dict, List, Tuple
 
 import aw_client
 
-from activity_merger.config.config import (
-    DEBUG_BUCKET_PREFIX,
-    DEBUG_BUCKETS_IMPORTER_NAME,
-    EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
-    LOG,
-    STRATEGIES,
-)
+import activity_merger.config.config as config
+
 from activity_merger.domain.analyzer import (
     ChopActivitiesByResultTreeStep,
     MakeCandidatesTreeStep,
@@ -27,7 +22,11 @@ from activity_merger.domain.merger import apply_strategies_on_events
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.domain.strategies import StrategyApplyResult
+
 from activity_merger.helpers.helpers import setup_logging, upload_events, valid_date
+
+
+LOG = setup_logging()
 
 
 def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
@@ -35,7 +34,7 @@ def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
     try:
         buckets = client.get_buckets()
         for bucket_id in buckets:
-            if bucket_id.startswith(DEBUG_BUCKET_PREFIX):
+            if bucket_id.startswith(config.DEBUG_BUCKET_PREFIX):
                 client.delete_bucket(bucket_id, True)
                 result.append(bucket_id)
     except Exception as ex:
@@ -71,8 +70,8 @@ def clean_debug_buckets_and_apply_strategies_on_one_day_events(
         events_date.date(),
         events_date.date() + datetime.timedelta(days=1),
         client.get_buckets(),
-        STRATEGIES,
-        EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+        config.STRATEGIES,
+        config.EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
     )
 
 
@@ -85,7 +84,7 @@ def reload_debug_buckets(debug_dict: Dict[str, List[Event]], client: aw_client.A
     """
     delete_debug_buckets(client)
     for bucket_id, events in debug_dict.items():
-        LOG.info(upload_events(events, DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
+        LOG.info(upload_events(events, config.DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
 
 
 def convert_aw_events_to_activities(
@@ -116,23 +115,25 @@ def convert_aw_events_to_activities(
     )
 
     # TODO populate with coefficients.
-    # ba_finder = BAFinder()
+    ba_finder = BAFinder().with_coefs(
+        config.BAFinder_LogisticRegression_coef, config.BAFinder_LogisticRegression_intercept
+    )
     analyzer_result = merge_activities(
         strategy_apply_result=strategy_apply_result,
         steps=[
             MakeResultTreeFromSelfSufficientActivitiesStep(is_add_debug_buckets=True),
             ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),
             MakeCandidatesTreeStep(is_add_debug_buckets=is_import_debug_buckets),
-            MergeCandidatesTreeIntoResultTreeStep(
-                is_add_debug_buckets=is_import_debug_buckets,
-                is_only_good_strategies_for_description=is_only_good_strategies_for_description,
-            ),
-            # TODO: switch to MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep
-            # MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(
-            #     ba_finder=ba_finder,
+            # MergeCandidatesTreeIntoResultTreeStep(
             #     is_add_debug_buckets=is_import_debug_buckets,
             #     is_only_good_strategies_for_description=is_only_good_strategies_for_description,
             # ),
+            # TODO: switch to MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep
+            MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(
+                ba_finder=ba_finder,
+                is_add_debug_buckets=is_import_debug_buckets,
+                is_only_good_strategies_for_description=is_only_good_strategies_for_description,
+            ),
         ],
         ignore_substrings=ignore_substrings,
     )
@@ -180,7 +181,7 @@ def main():
         dest="is_import_debug_buckets",
         action="store_true",
         help="Flag to import debugging buckets into ActivityWatch which allows to debug analyzing"
-        f" behavior. All such bucket ID's starts with' {DEBUG_BUCKET_PREFIX}' string."
+        f" behavior. All such bucket ID's starts with' {config.DEBUG_BUCKET_PREFIX}' string."
         " They are very handy on http://localhost:5600/#/timeline page "
         " (in ActivityWatch v0.12.1 need to refresh browser page to see them)."
         " Note that these debugging buckets are pre-removed (for the whole time)"
@@ -207,5 +208,4 @@ def main():
 
 
 if __name__ == "__main__":
-    LOG = setup_logging()
     main()

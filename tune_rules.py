@@ -253,9 +253,7 @@ class Context:
         return result
 
     def to_ba_finder(self) -> BAFinder:
-        finder = BAFinder()
-        finder.set_coefs(self.coefs, self.intercept)
-        return finder
+        return BAFinder().with_coefs(self.coefs, self.intercept)
 
 
 class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep):

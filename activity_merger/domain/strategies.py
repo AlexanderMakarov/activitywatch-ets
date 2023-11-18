@@ -26,7 +26,7 @@ BUCKET_WINDOW_PREFIX = "aw-watcher-window"
 class GroupingDescriptior:
     """
     Object representing way of grouping a list of events into a single activity.
-    Is used as a key for dictionary.
+    Is used as a key for dictionary so should be hashable unlike raw dict.
     """
 
     def __hash__(self):
@@ -35,32 +35,28 @@ class GroupingDescriptior:
     def __eq__(self, other):
         raise NotImplementedError("__eq__ is not implemented")
 
-    def get_kv_pairs(self) -> List[Tuple[str, str]]:
+    def get_data(self) -> Dict[str, str]:
         """
-        Returns a list of key-value pairs representing ActivityWatch event's 'data' parts
+        Returns a dictionary representing ActivityWatch event's 'data' parts
         which were common for the events in the relevant group of events, aka Activity.
         """
-        raise NotImplementedError("get_kv_pairs is not implemented")
+        raise NotImplementedError("get_data is not implemented")
 
 
 @dataclasses.dataclass
-class ListOfPairsDescriptor(GroupingDescriptior):
+class DictGroupingDescriptor(GroupingDescriptior):
     """
-    Group desctriptor from a list of key-value pairs.
+    Group desctriptor from a dictionary.
     """
 
-    pairs: List[Tuple[str, str]]
+    data: Dict[str, str]
 
-    def __hash__(self):
-        return hash(frozenset(self.pairs))
+    def __hash__(self) -> int:
+        # We don't need survive Python interpreter restart but do need to ignore order.
+        return hash(frozenset(self.data.items()))
 
-    def __eq__(self, other):
-        if not isinstance(other, ListOfPairsDescriptor):
-            return False
-        return frozenset(self.pairs) == frozenset(other.pairs)
-
-    def get_kv_pairs(self) -> List[Tuple[str, str]]:
-        return self.pairs
+    def get_data(self) -> Dict[str, str]:
+        return self.data
 
 
 @dataclasses.dataclass(frozen=True)
@@ -114,7 +110,7 @@ class StrategyApplyResult:
     metrics: Metrics
     last_id: int
 
-    def to_string(self, ignore_metrics_by_substrings: List[str] = None) -> str:
+    def to_string(self, ignore_metrics_by_substrings: Optional[List[str]] = None) -> str:
         """
         Converts content into human-friendly representation.
         :param append_equal_intervals_longer_that: If equal or more than 0 then result would contain 'equal'
@@ -265,9 +261,9 @@ def cut_by_interval_tree(
         else:
             metrics.incr(
                 f"DIM events overlapped by {tree_name} events better at end",
-                (last_interval_end - last_interval_start).total_seconds(),
+                (last_interval_end - last_interval_start).total_seconds(), # type: ignore
             )
-            event_start = last_interval_start
+            event_start = last_interval_start # type: ignore
             event_end = last_interval_end
 
     # Check that the resulting duration is not greater than initial as simple sanity check.
@@ -358,7 +354,7 @@ class InStrategyPropertiesHandler:
             tree.addi(event.timestamp, event.timestamp + event.duration, event)
         return tree
 
-    def _transform_event(self, event: Event) -> Event:
+    def _transform_event(self, event: Event) -> Optional[Event]:
         """
         Both checks that event may be used for building `ActivityByStrategy` and cuts it accordingly to
         "in_only_not_afk" and "in_only_if_window_app" parameters of the strategy.
@@ -578,7 +574,7 @@ class InStrategyPropertiesHandler:
                 min_end_time=end_time,
                 events=[event],
                 density=density,
-                grouping_data=ListOfPairsDescriptor([(k, str(v)) for k, v in event.data.items()]),
+                grouping_data=DictGroupingDescriptor(event.data.copy()),
                 strategy=self.current_strategy,
             )
             self.current_metrics.incr("activities", event.duration.seconds)
@@ -682,7 +678,7 @@ class InStrategyPropertiesHandler:
                 continue
             # Otherwise if window exists then create Activity from it.
             if window:
-                window_key = ListOfPairsDescriptor(list(window_kv_pairs))
+                window_key = DictGroupingDescriptor(dict(window_kv_pairs))
                 activitybs = self._make_activitybs_between_events(window, window_key)
                 if activitybs is not None:
                     activities.append(activitybs)
@@ -692,7 +688,7 @@ class InStrategyPropertiesHandler:
             window.append(event)
         # Handle last window.
         if window:
-            activitybs = self._make_activitybs_between_events(window, ListOfPairsDescriptor(list(window_kv_pairs)))
+            activitybs = self._make_activitybs_between_events(window, DictGroupingDescriptor(dict(window_kv_pairs)))
             if activitybs is not None:
                 activities.append(activitybs)
         return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
@@ -724,15 +720,17 @@ class InStrategyPropertiesHandler:
                 # If way to make windows is specified they make window per each group of keys.
                 event_data = event.data
                 added_times = 0
-                # For each tuple of keys in the list try to build ListOfPairsDescriptor, skip and continue if
+                # For each tuple of keys in the list try to build GroupingDescriptor, skip and continue if
                 # exception was raised. We need in as many windows as possible.
                 for key_tuple in strategy.in_group_by_keys:
-                    try:
-                        window_key = ListOfPairsDescriptor([(key, event_data[key]) for key in key_tuple])
-                        self._add_event_to_window(event, window_key, windows)
-                        added_times += 1
-                    except KeyError:
-                        continue  # There is no such key.
+                    # Check if all keys in key_tuple are in event_data
+                    if not all(key in event_data for key in key_tuple):
+                        continue
+                    # Create a dictionary for DictGroupingDescriptor using the keys from key_tuple
+                    window_key_dict = {key: event_data[key] for key in key_tuple}
+                    window_key = DictGroupingDescriptor(window_key_dict)
+                    self._add_event_to_window(event, window_key, windows)
+                    added_times += 1
                 # If wasn't added then it is either warning about misconfiguration or warning about bad event data.
                 if added_times > 0:
                     metrics.incr(
@@ -745,7 +743,7 @@ class InStrategyPropertiesHandler:
                 if event is None:
                     continue
                 event_data = event.data
-                window_key = ListOfPairsDescriptor([(k, str(v)) for k, v in event_data])
+                window_key = DictGroupingDescriptor([(k, str(v)) for k, v in event_data])
                 self._add_event_to_window(event, window_key, windows)
 
         # Some windows may have the same interval/events because differnt "descriptor"-s build from the same events.
@@ -763,7 +761,7 @@ class InStrategyPropertiesHandler:
             )
             existing_descriptior = windows_with_interval.get(key, None)
             if existing_descriptior is not None:
-                length_diff = len(descriptor.get_kv_pairs()) - len(existing_descriptior.get_kv_pairs())
+                length_diff = len(descriptor.get_data()) - len(existing_descriptior.get_data())
                 if length_diff > 0:
                     # Current descriptor is longer, replace.
                     windows_with_interval[key] = descriptor
