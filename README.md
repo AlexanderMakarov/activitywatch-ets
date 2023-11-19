@@ -185,13 +185,12 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [ ] Add more features into BAFinder.
 - [ ] Try to aggregate "result" activities with help of ChatGPT.
 - [ ] Add Google Calendar importer. See https://github.com/ActivityWatch/aw-import-ical (which is on poetry :( )).
-- [ ] Add CI with tests coverage.
 - [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in "config.py".
 - [ ] Prepare script to run all event importers and get_activities.py for the specific date.
-- [ ] Try it for myself. Adjust "config.py and code if need.
-- [ ] Use for meself for a few days. Adjust "config.py".
-- [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
+- [ ] Try it for myself. Adjust "config.py and code if needed.
 - [ ] Prepare for distribution (decide how it would look like).
+- [ ] Add CI with tests coverage.
+- [ ] Support case when Stopwatch events intersect with other ones like [0<-SW->2][1<-AFK->4][3<-SW->4]
 - [ ] Importers - support parsing few days at once.
 - [ ] OWA importer - adopt Chrome as well.
 

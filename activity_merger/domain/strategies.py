@@ -7,6 +7,8 @@ import intervaltree
 import numpy as np
 from sklearn.cluster import DBSCAN
 
+from activity_merger.helpers.event_helpers import activity_by_strategy_to_str
+
 from ..config.config import (
     EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
     LOG,
@@ -14,91 +16,20 @@ from ..config.config import (
     MIN_DENSITY_FOR_SPARCE_INTERVALS,
     TOO_SMALL_INTERVAL_SEC,
 )
-from ..helpers.helpers import datetime_to_time_str, event_to_str, from_start_to_end_to_str, seconds_to_timedelta
-from .input_entities import Event, IntervalBoundaries, Strategy
+from ..helpers.helpers import datetime_to_time_str
+from .input_entities import (
+    ActivityByStrategy,
+    DictGroupingDescriptor,
+    Event,
+    GroupingDescriptior,
+    IntervalBoundaries,
+    Strategy,
+)
 from .metrics import Metrics
 
 BUCKET_AFK_PREFIX = "aw-watcher-afk"
 BUCKET_STOPWATCH_PREFIX = "aw-stopwatch"
 BUCKET_WINDOW_PREFIX = "aw-watcher-window"
-
-
-class GroupingDescriptior:
-    """
-    Object representing way of grouping a list of events into a single activity.
-    Is used as a key for dictionary so should be hashable unlike raw dict.
-    """
-
-    def __hash__(self):
-        raise NotImplementedError("__hash__ is not implemented")
-
-    def __eq__(self, other):
-        raise NotImplementedError("__eq__ is not implemented")
-
-    def get_data(self) -> Dict[str, str]:
-        """
-        Returns a dictionary representing ActivityWatch event's 'data' parts
-        which were common for the events in the relevant group of events, aka Activity.
-        """
-        raise NotImplementedError("get_data is not implemented")
-
-
-@dataclasses.dataclass
-class DictGroupingDescriptor(GroupingDescriptior):
-    """
-    Group desctriptor from a dictionary.
-    """
-
-    data: Dict[str, str]
-
-    def __hash__(self) -> int:
-        # We don't need survive Python interpreter restart but do need to ignore order.
-        return hash(frozenset(self.data.items()))
-
-    def get_data(self) -> Dict[str, str]:
-        return self.data
-
-
-@dataclasses.dataclass(frozen=True)
-class ActivityByStrategy:
-    """
-    Group of events aggregated for the specific strategy.
-    """
-
-    id: int
-    """Identifier for the activity-by-strategy"""
-    suggested_start_time: datetime.datetime
-    """Suggested start time of the activity-by-strategy."""
-    suggested_end_time: datetime.datetime
-    """Suggested end time of the activity-by-strategy."""
-    max_start_time: datetime.datetime
-    """Maximum start time of the activity-by-strategy possible. Equal or later then 'start time'."""
-    min_end_time: datetime.datetime
-    """Minimum end time of the activity-by-strategy possible. Equal or earlier then 'end time'."""
-    events: List[Event]
-    """List of (dominant) events the activity-by-strategy consists of."""
-    density: float
-    """
-    Density of the activity-by-strategy in [0..1] measured by duration of the events inside and taking into account
-    boundaries of the parent strategy.
-    I.e. if strategy's 'in_trustable_boundaries' is "START" or "END" then value will be zero.
-    """
-    grouping_data: GroupingDescriptior
-    """Object describing why enclosed events are aggregated into activity-by-strategy."""
-    strategy: Strategy
-    """Strategy used to create this activity-by-strategy."""
-
-    def duration(self) -> float:
-        """Returns duration from suggest start to suggest end in seconds."""
-        return (self.suggested_end_time - self.suggested_start_time).total_seconds()
-
-    def __repr__(self) -> str:
-        return (
-            f"{self.id:>4}: {seconds_to_timedelta(self.duration())} x{self.density:.2f},"
-            f" {from_start_to_end_to_str(self.suggested_start_time, self.suggested_end_time)}"
-            f" (min {from_start_to_end_to_str(self.max_start_time, self.min_end_time)}),"
-            f" {len(self.events):>3} {self.strategy.name} events grouped by {self.grouping_data}."
-        )
 
 
 @dataclasses.dataclass
@@ -122,7 +53,7 @@ class StrategyApplyResult:
         # Note that Metrics.to_strings append 2 spaces indent.
         metrics_strings = list(self.metrics.to_strings(ignore_with_substrings=ignore_metrics_by_substrings))
         metrics = "\n  ".join(metrics_strings)
-        activities = "\n    ".join(str(x) for x in sorted(self.activities, key=lambda x: x.suggested_start_time))
+        activities = "\n    ".join(activity_by_strategy_to_str(x) for x in sorted(self.activities, key=lambda x: x.suggested_start_time))
         return (
             f"{self.strategy}\n  Metrics ({len(metrics_strings)}):\n  {metrics}"
             f"\n  ActivityByStrategy-es ({len(self.activities)}):\n    {activities}"
@@ -261,9 +192,9 @@ def cut_by_interval_tree(
         else:
             metrics.incr(
                 f"DIM events overlapped by {tree_name} events better at end",
-                (last_interval_end - last_interval_start).total_seconds(), # type: ignore
+                (last_interval_end - last_interval_start).total_seconds(),  # type: ignore
             )
-            event_start = last_interval_start # type: ignore
+            event_start = last_interval_start  # type: ignore
             event_end = last_interval_end
 
     # Check that the resulting duration is not greater than initial as simple sanity check.
@@ -302,6 +233,13 @@ class EventChangeHandler:
         self.changes = []
 
     def add_change(self, desc, is_start_cut=False, is_end_cut=False, is_data_changed=False):
+        """
+        Adds description of a change.
+        :param desc: The change description.
+        :param is_start_cut: Whether event interval start was cut.
+        :param is_end_cut: Whether event interval end was cut.
+        :param is_data_changed: Whether event data was changed.
+        """
         fields = ""
         if is_start_cut:
             fields += "-start"
@@ -312,17 +250,26 @@ class EventChangeHandler:
         self.changes.append(f"{desc}:{fields}")
 
     def is_changed(self) -> bool:
+        """
+        Checks if there were any changes.
+        """
         return bool(self.changes)
 
     def __repr__(self) -> str:
         return ", ".join(self.changes)
 
     def update_event_data(self, event_data: dict):
+        """
+        Updates provided event data dictionary with accumulated changes description.
+        """
         if self.changes:
             event_data["changes"] = ", ".join(self.changes)
 
     @staticmethod
     def get_event_boundaries_changes(event_data: dict) -> Tuple[bool, bool]:
+        """
+        Returns tuple of 2 booleans indicating whether event interval was cut on start or/and end correspondingly.
+        """
         changes = event_data.get("changes")
         if not changes:
             return False, False

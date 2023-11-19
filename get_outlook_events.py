@@ -1,29 +1,25 @@
 #!/usr/bin/env python3
-import datetime
-from typing import List, Callable, Any, Tuple
 import argparse
 import contextlib
+import datetime
 import unittest
-from selenium import webdriver
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.remote.webelement import WebElement
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.common.exceptions import NoSuchElementException
+from typing import Any, Callable, List, Tuple
+
 import parameterized
+from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.remote.webelement import WebElement
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
-from activity_merger.config.config import (
-    LOG,
-    FIREFOX_PROFILE_PATH,
-    OWA_SCRAPER_NAME,
-    OWA_URL,
-    OWA_BUCKET_ID,
-    OWA_MAX_SCROLL_BACK,
-)
-from activity_merger.helpers.helpers import setup_logging, valid_date, upload_events
+from activity_merger.config.config import (FIREFOX_PROFILE_PATH, LOG,
+                                           OWA_BUCKET_ID, OWA_MAX_SCROLL_BACK,
+                                           OWA_SCRAPER_NAME, OWA_URL)
 from activity_merger.domain.input_entities import Event
-
+from activity_merger.helpers.event_helpers import upload_events
+from activity_merger.helpers.helpers import setup_logging, valid_date
 
 SCREENSHOT_NAME = f"{OWA_SCRAPER_NAME}-events-screenshot.png"
 SCREENSHOT_FAIL_NAME = f"{OWA_SCRAPER_NAME}-fail-screenshot.png"

@@ -7,24 +7,20 @@ from typing import Dict, List, Tuple
 import aw_client
 
 import activity_merger.config.config as config
-
 from activity_merger.domain.analyzer import (
-    ChopActivitiesByResultTreeStep,
-    MakeCandidatesTreeStep,
+    ChopActivitiesByResultTreeStep, MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
     MergeCandidatesTreeIntoResultTreeStep,
     MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep,
-    merge_activities,
-)
+    merge_activities)
 from activity_merger.domain.basic_activity_finder import BAFinder
 from activity_merger.domain.input_entities import Event
 from activity_merger.domain.merger import apply_strategies_on_events
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.domain.strategies import StrategyApplyResult
-
-from activity_merger.helpers.helpers import setup_logging, upload_events, valid_date
-
+from activity_merger.helpers.event_helpers import upload_events
+from activity_merger.helpers.helpers import setup_logging, valid_date
 
 LOG = setup_logging()
 

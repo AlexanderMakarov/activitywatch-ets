@@ -1,15 +1,85 @@
-import dataclasses
 import collections
+import dataclasses
+import datetime
 import enum
-from typing import Dict, Optional, Tuple, Callable, List, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
-from pick import Option
-
+# from activity_merger.helpers.helpers import (from_start_to_end_to_str,
+#                                              seconds_to_timedelta)
 
 Event = collections.namedtuple("Event", ["bucket_id", "timestamp", "duration", "data"])
 """
 Lightweight representation of ActivityWatcher event without "id" field but with "bucket_it" field to trach source.
 """
+
+
+class GroupingDescriptior:
+    """
+    Object representing way of grouping a list of events into a single activity.
+    Is used as a key for dictionary so should be hashable unlike raw dict.
+    """
+
+    def __hash__(self):
+        raise NotImplementedError("__hash__ is not implemented")
+
+    def get_data(self) -> Dict[str, str]:
+        """
+        Returns a dictionary representing ActivityWatch event's 'data' parts
+        which were common for the events in the relevant group of events, aka Activity.
+        """
+        raise NotImplementedError("get_data is not implemented")
+
+
+@dataclasses.dataclass
+class DictGroupingDescriptor(GroupingDescriptior):
+    """
+    Group desctriptor based on a dictionary.
+    """
+    data: Dict[str, str]
+
+    def __hash__(self) -> int:
+        # We don't need survive Python interpreter restart but do need to ignore order.
+        return hash(frozenset(self.data.items()))
+
+    def get_data(self) -> Dict[str, str]:
+        return self.data
+
+    def __repr__(self) -> str:
+        return str(self.data)
+
+
+@dataclasses.dataclass(frozen=True)
+class ActivityByStrategy:
+    """
+    Group of events aggregated for the specific strategy.
+    """
+
+    id: int
+    """Identifier for the activity-by-strategy"""
+    suggested_start_time: datetime.datetime
+    """Suggested start time of the activity-by-strategy."""
+    suggested_end_time: datetime.datetime
+    """Suggested end time of the activity-by-strategy."""
+    max_start_time: datetime.datetime
+    """Maximum start time of the activity-by-strategy possible. Equal or later then 'start time'."""
+    min_end_time: datetime.datetime
+    """Minimum end time of the activity-by-strategy possible. Equal or earlier then 'end time'."""
+    events: List[Event]
+    """List of (dominant) events the activity-by-strategy consists of."""
+    density: float
+    """
+    Density of the activity-by-strategy in [0..1] measured by duration of the events inside and taking into account
+    boundaries of the parent strategy.
+    I.e. if strategy's 'in_trustable_boundaries' is "START" or "END" then value will be zero.
+    """
+    grouping_data: GroupingDescriptior
+    """Object describing why enclosed events are aggregated into activity-by-strategy."""
+    strategy: 'Strategy'
+    """Strategy used to create this activity-by-strategy."""
+
+    def duration(self) -> float:
+        """Returns duration from suggest start to suggest end in seconds."""
+        return (self.suggested_end_time - self.suggested_start_time).total_seconds()
 
 
 class IntervalBoundaries(enum.Enum):
@@ -142,12 +212,12 @@ class Strategy:
     Flag that strategy events may provide good resulting activity name.
     """
 
-    out_activity_name_sentence_builder: Optional[Callable[[List[Tuple[str, str]]], str]] = None
+    out_activity_name_sentence_builder: Optional[Callable[[List[Dict[str, str]]], str]] = None
     """
     Function which builds one sentence for the resulting activity name from the list of
-    key-value pairs aggregated from ActivityWatch event's "data" dictionaries which were used to merge
+    dictonaries aggregated from ActivityWatch event's "data" dictionaries which were used to merge
     multiple events into one activity.
-    So example of input data is `[("app", "slack"), ("title", "), ("app", "Code")]`
+    So example of input data is `[{"app": "Slack"}, {"app": "Code", "title": "app.py"}]`
     Should start from upper case letter and end with the point.
     If `None` then uses simple "dict to string" logic.
     If function returns `None` or empty string then strategy won't contribute to the resulting activity name.

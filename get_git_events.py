@@ -6,15 +6,12 @@ import os
 import subprocess
 from typing import Dict, List, Union
 
-from activity_merger.config.config import (
-    GIT_BUCKET_ID,
-    GIT_DEPTH_IN_FOLDER,
-    GIT_FOLDERS_WITH_REPOS,
-    GIT_SCRAPER_NAME,
-    LOG,
-)
+from activity_merger.config.config import (GIT_BUCKET_ID, GIT_DEPTH_IN_FOLDER,
+                                           GIT_FOLDERS_WITH_REPOS,
+                                           GIT_SCRAPER_NAME, LOG)
 from activity_merger.domain.input_entities import Event
-from activity_merger.helpers.helpers import ensure_datetime, event_to_str, setup_logging, upload_events, valid_date
+from activity_merger.helpers.event_helpers import event_to_str, upload_events
+from activity_merger.helpers.helpers import ensure_datetime, setup_logging, valid_date
 
 
 @dataclasses.dataclass

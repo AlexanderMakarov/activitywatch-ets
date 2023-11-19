@@ -5,12 +5,14 @@ import os
 import sys
 from typing import Dict, List, Optional, Set, Tuple
 
-from aw_client import ActivityWatchClient
 import dill  # For pickle-ing lambdas need to use 'dill' package.
 import intervaltree
+from aw_client import ActivityWatchClient
 
-from activity_merger.domain.basic_activity_finder import BAFinder, IntervalFeatures
+from activity_merger.domain.basic_activity_finder import (BAFinder,
+                                                          IntervalFeatures)
 from activity_merger.domain.strategies import ActivityByStrategy
+from activity_merger.helpers.event_helpers import activity_by_strategy_to_str, upload_events
 
 # Don't use convenient pyinput because https://pynput.readthedocs.io/en/latest/limitations.html#platform-limitations
 # For Unix terminal:
@@ -18,31 +20,29 @@ try:
     import termios
 except ImportError:
     pass
+import curses
+
 # For Windows terminal:
 # try:
 #     import msvcrt
 # except ImportError:
 #     pass
 from pick import pick
-import curses
 
 import activity_merger.config.config as config
 from activity_merger.domain.analyzer import (
-    RA_DEBUG_BUCKET_NAME,
-    AnalyzerStep,
-    ChopActivitiesByResultTreeStep,
-    DebugBucketsHandler,
-    MakeCandidatesTreeStep,
+    RA_DEBUG_BUCKET_NAME, AnalyzerStep, ChopActivitiesByResultTreeStep,
+    DebugBucketsHandler, MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
     MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep,
-    find_next_uncovered_intervals,
-    merge_activities,
-)
+    find_next_uncovered_intervals, merge_activities)
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
-from activity_merger.helpers.helpers import datetime_to_time_str, setup_logging, upload_events, valid_date
-from get_activities import clean_debug_buckets_and_apply_strategies_on_one_day_events, reload_debug_buckets
-
+from activity_merger.helpers.helpers import (datetime_to_time_str,
+                                             setup_logging, valid_date)
+from get_activities import (
+    clean_debug_buckets_and_apply_strategies_on_one_day_events,
+    reload_debug_buckets)
 
 LOG = setup_logging()
 
@@ -301,7 +301,7 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
         options = []
         for candidate in sorted_candidates:
             activity: ActivityByStrategy = candidate.data
-            option_str = str(activity)
+            option_str = activity_by_strategy_to_str(activity)
             options.append((option_str, option_str))  # Make the whole acitivity text as "searchable".
         prefix_lines = [] if prev_choice is None else [prev_choice]
         prefix_lines.append(

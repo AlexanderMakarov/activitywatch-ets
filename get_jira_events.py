@@ -7,26 +7,16 @@ from typing import List, Set, Tuple
 
 import jira
 
-from activity_merger.config.config import (
-    EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
-    JIRA_BUCKET_ID,
-    JIRA_ISSUES_MAX,
-    JIRA_LOGIN_API_TOKEN,
-    JIRA_LOGIN_EMAIL,
-    JIRA_PROJECTS,
-    JIRA_SCRAPER_NAME,
-    JIRA_URL,
-    LOG,
-)
+from activity_merger.config.config import (EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+                                           JIRA_BUCKET_ID, JIRA_ISSUES_MAX,
+                                           JIRA_LOGIN_API_TOKEN,
+                                           JIRA_LOGIN_EMAIL, JIRA_PROJECTS,
+                                           JIRA_SCRAPER_NAME, JIRA_URL, LOG)
 from activity_merger.domain.input_entities import Event
-from activity_merger.helpers.helpers import (
-    datetime_to_time_str,
-    ensure_datetime,
-    event_to_str,
-    setup_logging,
-    upload_events,
-    valid_date,
-)
+from activity_merger.helpers.event_helpers import event_to_str, upload_events
+from activity_merger.helpers.helpers import (datetime_to_time_str,
+                                             ensure_datetime, setup_logging,
+                                             valid_date)
 
 JIRA_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"
 JIRA_TICKET_FIELDS_VARIABLE_UPDATE_COMPLEXITY = {"description", "summary", "labels", "Component"}
