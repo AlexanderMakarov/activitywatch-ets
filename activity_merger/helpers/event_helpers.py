@@ -88,5 +88,5 @@ def upload_events(
         result += delete_buckets(bucket_id, client)
     client.create_bucket(bucket_id, event_type=event_type)  # Will return 304 if bucket exists.
     client.insert_events(bucket_id, aw_events)  # Actually returns None.
-    result += f"Uploaded {len(aw_events)} events into local ActivityWatch '{bucket_id}' bucket."
+    result += f"Uploaded {len(aw_events)} events into ActivityWatch '{bucket_id}' bucket."
     return result
