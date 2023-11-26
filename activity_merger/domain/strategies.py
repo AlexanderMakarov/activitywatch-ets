@@ -16,7 +16,7 @@ from ..config.config import (
     MIN_DENSITY_FOR_SPARCE_INTERVALS,
     TOO_SMALL_INTERVAL_SEC,
 )
-from ..helpers.helpers import datetime_to_time_str
+from ..helpers.helpers import from_start_to_end_to_str
 from .input_entities import (
     ActivityByStrategy,
     DictGroupingDescriptor,
@@ -107,7 +107,7 @@ def cut_by_interval_tree(
                 if is_fail_incompatible:
                     raise ValueError(
                         f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
-                        f" intervals for event in [{event_start}-{event_end}]"
+                        f" intervals for event in [{from_start_to_end_to_str(event_start, event_end)}]"
                     )
                 else:
                     return (False, None)
@@ -117,7 +117,7 @@ def cut_by_interval_tree(
             if is_fail_incompatible:
                 raise ValueError(
                     f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
-                    f" intervals for event in [{event_start}-{event_end}]"
+                    f" intervals for event in [{from_start_to_end_to_str(event_start, event_end)}]"
                 )
             else:
                 return (False, None)
@@ -131,7 +131,7 @@ def cut_by_interval_tree(
             if is_fail_incompatible:
                 raise ValueError(
                     f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
-                    f" intervals for event in [{event_start}-{event_end}]"
+                    f" intervals for event in [{from_start_to_end_to_str(event_start, event_end)}]"
                 )
             else:
                 return (False, None)
@@ -201,7 +201,7 @@ def cut_by_interval_tree(
     if event_end - event_start > initial_duration:
         raise AssertionError(
             f"Issue with calculating points to chop by '{tree_name}' tree: initial duration {initial_duration}"
-            f" is less than resulting [{datetime_to_time_str(event_start)}..{datetime_to_time_str(event_end)}]"
+            f" is less than resulting [{from_start_to_end_to_str(event_start, event_end)}]"
         )
     return (is_changed, (event_start, event_end))
 
@@ -341,19 +341,20 @@ class InStrategyPropertiesHandler:
         # Cut event by windows watcher "app=" events if need.
         # Should be before AFK chopping because we don't want to get random piece of event.
         if strategy.in_only_if_window_app:
+            tree_name = f"'{strategy.in_only_if_window_app}' app(s) active"
             # Cut event by to be only in "relevant app active" intervals.
             is_changed, new_interval = cut_by_interval_tree(
                 event_start,
                 event_end,
                 self.current_window_tree,
                 boundaries,
-                "relevant app active",
+                tree_name,
                 metrics,
                 strategy.name,
                 True,
             )
             if new_interval is None:
-                metrics.incr("events cut out by 'relevant app active'", event_duration.total_seconds())
+                metrics.incr(f"events removed by {tree_name}", event_duration.total_seconds())
                 return None
             elif is_changed:
                 change_handler.add_change(
@@ -364,7 +365,7 @@ class InStrategyPropertiesHandler:
                 event_start = new_interval[0]
                 event_end = new_interval[1]
                 metrics.incr(
-                    "events chopped by 'relevant app active'",
+                    f"events chopped by {tree_name}",
                     (event_duration - (event_end - event_start)).total_seconds(),
                 )
 
@@ -473,7 +474,7 @@ class InStrategyPropertiesHandler:
         if strategy.in_only_if_window_app and self.current_window_tree is None:
             tree = intervaltree.IntervalTree()
             for event in self.window_events:
-                app_name = event.data["app"]
+                app_name = event.data["app"].lower()
                 if app_name in strategy.in_only_if_window_app:
                     tree.addi(event.timestamp, event.timestamp + event.duration, event)
             self.current_window_tree = tree
@@ -644,7 +645,7 @@ class InStrategyPropertiesHandler:
         self, event: Event, key: GroupingDescriptior, windows: Dict[GroupingDescriptior, List[Event]]
     ):
         window = windows.setdefault(key, [])
-        # TODO revert self.current_metrics.incr(f"events with data {key}", event.duration.seconds)
+        self.current_metrics.incr(f"events with data {key}", event.duration.seconds)
         window.append(event)
 
     def _separate_events_per_windows(self, events: List[Event]) -> Dict[GroupingDescriptior, List[Event]]:
@@ -684,13 +685,12 @@ class InStrategyPropertiesHandler:
                         f"events with data containing {added_times} in_group_by_keys", event.duration.total_seconds()
                     )
         else:
-            # If way to make windows is not specified then build window key as tuple of data key-value pairs.
+            # If way to make windows is not specified then build window key from all values in event's "data".
             for event in events:
                 event = self._transform_event(event)
                 if event is None:
                     continue
-                event_data = event.data
-                window_key = DictGroupingDescriptor([(k, str(v)) for k, v in event_data])
+                window_key = DictGroupingDescriptor(event.data)
                 self._add_event_to_window(event, window_key, windows)
 
         # Some windows may have the same interval/events because differnt "descriptor"-s build from the same events.

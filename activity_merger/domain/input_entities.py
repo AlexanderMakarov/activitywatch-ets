@@ -183,7 +183,7 @@ class Strategy:
 
     in_only_if_window_app: Optional[List[str]] = None
     """
-    List of values in "app" key of OS Windows Manager events to cut current events to appear only inside.
+    List of lower-cased values in "app" key of OS Windows Manager events to cut current events to appear only inside.
     For example IDEA events are reported all time but real work in IDEA may happen
     only if currently active app is "jetbrains-idea".
     NOTE that this setting would work only if there is `("app",)` entry in `in_group_by_keys` property

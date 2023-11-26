@@ -181,8 +181,10 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
 - [ ] Find a way to aggregate "short" activity-by-strategy-es into bigger chunks 
       Find a way to avoid gaps between "expected adjusted" intervals.
-- [ ] Find a way to choose better description for many different events.
+- [ ] Find a way to mark some events as "source of description" and other as "source of interval".
+      Git/Jira events are good for description, Window/IDEA - for interval, Browser/Outlook - both.
 - [ ] Add more features into BAFinder.
+- [ ] Shift "day border" to 6AM and make it configurable.
 - [ ] Try to aggregate "result" activities with help of ChatGPT.
 - [ ] Add Google Calendar importer. See https://github.com/ActivityWatch/aw-import-ical (which is on poetry :( )).
 - [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in "config.py".
