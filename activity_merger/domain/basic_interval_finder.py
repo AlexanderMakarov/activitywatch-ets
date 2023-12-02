@@ -71,21 +71,15 @@ class FromCandidateActivitiesByScoreBIFinder(BIFinder):
             score: float = 0.0
             # NOTE: keep max score = 1 to translate into percentage.
             boundaries: IntervalBoundaries = candidate.data.strategy.in_trustable_boundaries
-            # Reward start point or proximity.
-            top = 0.3
+            # Reward start point proximity.
+            top = 0.5
             proximity_sec = abs(candidate.begin - start_point).seconds
             if proximity_sec < 10:
                 score += top
             elif proximity_sec < 60:
                 score += top * 0.75
-            elif proximity_sec < 120:
-                score += top * 0.5
             elif proximity_sec < MIN_ACTIVITY_DURATION_SEC:
-                score += top * 0.1
-            # Reward end point proximity.
-            top = 0.1
-            if abs(candidate.end - end_point).seconds < 60 and boundaries != IntervalBoundaries.START:
-                score += top
+                score += top * 0.5
             # Reward density.
             top = 0.1
             score += candidate.data.density * top
@@ -97,7 +91,7 @@ class FromCandidateActivitiesByScoreBIFinder(BIFinder):
                 if overlap_ratio > 0:
                     score += top * overlap_ratio
             # Reward being in the [MIN_ACTIVITY_DURATION_SEC..max_duration_seconds].
-            top = 0.3
+            top = 0.2
             if MIN_ACTIVITY_DURATION_SEC <= overlap_sec <= max_duration_seconds and boundaries not in [
                 IntervalBoundaries.START,
                 IntervalBoundaries.END,
