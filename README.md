@@ -183,7 +183,7 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
       Find a way to avoid gaps between "expected adjusted" intervals.
 - [ ] Find a way to mark some events as "source of description" and other as "source of interval".
       Git/Jira events are good for description, Window/IDEA - for interval, Browser/Outlook - both.
-- [ ] Add more features into BAFinder.
+- [ ] Add more features into FromCandidatesByLogisticRegressionBIFinder.
 - [ ] Shift "day border" to 6AM and make it configurable.
 - [ ] Try to aggregate "result" activities with help of ChatGPT.
 - [ ] Add Google Calendar importer. See https://github.com/ActivityWatch/aw-import-ical (which is on poetry :( )).

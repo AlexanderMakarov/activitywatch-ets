@@ -8,12 +8,16 @@ import aw_client
 
 import activity_merger.config.config as config
 from activity_merger.domain.analyzer import (
-    ChopActivitiesByResultTreeStep, MakeCandidatesTreeStep,
+    ChopActivitiesByResultTreeStep,
+    MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
-    MergeCandidatesTreeIntoResultTreeStep,
-    MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep,
-    merge_activities)
-from activity_merger.domain.basic_activity_finder import BAFinder
+    MergeCandidatesTreeIntoResultTreeWithBIFinderStep,
+    aggregate_strategies_results_to_activities,
+)
+from activity_merger.domain.basic_interval_finder import (
+    FromCandidateActivitiesByScoreBIFinder,
+    FromCandidatesByLogisticRegressionBIFinder,
+)
 from activity_merger.domain.input_entities import Event
 from activity_merger.domain.merger import apply_strategies_on_events
 from activity_merger.domain.metrics import Metrics
@@ -110,25 +114,22 @@ def convert_aw_events_to_activities(
         "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in strategy_apply_result),
     )
 
-    # ba_finder = BAFinder().with_coefs(
+    # TODO: provide a way to switch bi_finder-s easily.
+    # bi_finder = FromCandidatesByLogisticRegressionBIFinder().with_coefs(
     #     config.BAFinder_LogisticRegression_coef, config.BAFinder_LogisticRegression_intercept
     # )
-    analyzer_result = merge_activities(
-        strategy_apply_result=strategy_apply_result,
+    bi_finder = FromCandidateActivitiesByScoreBIFinder()
+    analyzer_result = aggregate_strategies_results_to_activities(
+        strategy_apply_results=strategy_apply_result,
         steps=[
             MakeResultTreeFromSelfSufficientActivitiesStep(is_add_debug_buckets=True),
             ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),
             MakeCandidatesTreeStep(is_add_debug_buckets=is_import_debug_buckets),
-            MergeCandidatesTreeIntoResultTreeStep(
+            MergeCandidatesTreeIntoResultTreeWithBIFinderStep(
+                bi_finder=bi_finder,
                 is_add_debug_buckets=is_import_debug_buckets,
                 is_only_good_strategies_for_description=is_only_good_strategies_for_description,
             ),
-            # TODO: switch to MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep
-            # MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(
-            #     ba_finder=ba_finder,
-            #     is_add_debug_buckets=is_import_debug_buckets,
-            #     is_only_good_strategies_for_description=is_only_good_strategies_for_description,
-            # ),
         ],
         ignore_substrings=ignore_substrings,
     )

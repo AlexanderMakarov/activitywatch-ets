@@ -7,8 +7,137 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 
 from activity_merger.domain.input_entities import IntervalBoundaries
+from activity_merger.domain.metrics import Metrics
+from activity_merger.helpers.event_helpers import activity_by_strategy_to_str
 
-from ..config.config import MIN_ACTIVITY_DURATION_SEC
+from ..config.config import (LOG, MIN_ACTIVITY_DURATION_SEC)
+
+
+class BIFinder:
+    """
+    Base class to search "basic interval" for resulting activity starting from specified "start point".
+    By-default finds nothing.
+    """
+
+    def find_top(
+        self,
+        candidates: List[intervaltree.Interval],
+        start_point: datetime.datetime,
+        end_point: datetime.datetime,
+        max_duration_seconds: float,
+        metrics: Metrics,
+    ) -> Tuple[intervaltree.Interval, float, float]:
+        """
+        Finds 2 top candidates of "basic interval" and returns in order: top candidate, score of it, score of 2nd candidate.
+        Assumes that len of candidates and features are equal and more than one.
+        :param candidates: List of candidates.
+        :param features: List of features ordered in the same way as candidates.
+        :return: Tuple of (top_candidate, top_candidate_score, pre_top_candidate_score).
+        """
+        raise NotImplementedError("Not implemented")
+
+    def score_to_desc(self, score: float) -> str:
+        """
+        Converts score to human readable representation with 4 levels.
+        """
+        score_description = ""
+        if score == 1.0:
+            score_description = "highest"
+        elif score > 0.6:
+            score_description = "high"
+        elif score > 0.3:
+            score_description = "good"
+        else:
+            score_description = "low"
+        return score_description
+
+
+class FromCandidateActivitiesByScoreBIFinder(BIFinder):
+    """
+    Finds basic interval in 'candidates_tree' with calculating score by custom features and hardcoded weights.
+    """
+
+    def find_top(
+        self,
+        candidates: List[intervaltree.Interval],
+        start_point: datetime.datetime,
+        end_point: datetime.datetime,
+        max_duration_seconds: float,
+        metrics: Metrics,
+    ) -> Tuple[intervaltree.Interval, float, float]:
+        perfect_duration_sec = min(max_duration_seconds, (end_point - start_point).total_seconds())
+        candidate_scores: List[Tuple[int, intervaltree.Interval]] = []
+        for candidate in candidates:
+            score: float = 0.0
+            # NOTE: keep max score = 1 to translate into percentage.
+            boundaries: IntervalBoundaries = candidate.data.strategy.in_trustable_boundaries
+            # Reward start point or proximity.
+            top = 0.3
+            proximity_sec = abs(candidate.begin - start_point).seconds
+            if proximity_sec < 10:
+                score += top
+            elif proximity_sec < 60:
+                score += top * 0.75
+            elif proximity_sec < 120:
+                score += top * 0.5
+            elif proximity_sec < MIN_ACTIVITY_DURATION_SEC:
+                score += top * 0.1
+            # Reward end point proximity.
+            top = 0.1
+            if abs(candidate.end - end_point).seconds < 60 and boundaries != IntervalBoundaries.START:
+                score += top
+            # Reward density.
+            top = 0.1
+            score += candidate.data.density * top
+            # Reward duration on the intersected interval. Only if overlap is big enough.
+            top = 0.2
+            overlap_sec = candidate.overlap_size(start_point, end_point).total_seconds()
+            if overlap_sec > MIN_ACTIVITY_DURATION_SEC:
+                overlap_ratio = 1.0 - abs(perfect_duration_sec - overlap_sec) / perfect_duration_sec
+                if overlap_ratio > 0:
+                    score += top * overlap_ratio
+            # Reward being in the [MIN_ACTIVITY_DURATION_SEC..max_duration_seconds].
+            top = 0.3
+            if MIN_ACTIVITY_DURATION_SEC <= overlap_sec <= max_duration_seconds and boundaries not in [
+                IntervalBoundaries.START,
+                IntervalBoundaries.END,
+            ]:
+                score += top
+            # Store score in the list.
+            candidate_scores.append((score, candidate))
+
+        # Take candidate with highest score.
+        sorted_results = sorted(candidate_scores, key=lambda x: x[0], reverse=True)
+        # Check that interval is valid.
+        ba_interval = sorted_results[0][1]
+        assert ba_interval.end > ba_interval.begin, f"Inner error with choosing as basic: {ba_interval.data}"
+        score = sorted_results[0][0]
+        # Provide metric and log about new basic interval found.
+        score_description = self.score_to_desc(score)
+        metrics.incr(
+            f"basic intervals with {score_description} score", (ba_interval.end - ba_interval.begin).total_seconds()
+        )
+        LOG.info(
+            "Found 'basic interval' with %.0f '%s' score: %s",
+            score,
+            score_description,
+            activity_by_strategy_to_str(ba_interval.data),
+        )
+        # Provide metric about "how distinguishable basic interval was".
+        if len(sorted_results) > 1:
+            closest_candidate_score = sorted_results[1][0]
+            distance_desc = self.score_to_desc(score - closest_candidate_score)
+            metrics.incr(
+                f"basic intervals with {distance_desc} distance from other candidates",
+                (ba_interval.end - ba_interval.begin).total_seconds(),
+            )
+        else:
+            metrics.incr(
+                "basic intervals without other candidates on interval",
+                (ba_interval.end - ba_interval.begin).total_seconds(),
+            )
+        return (ba_interval, score, closest_candidate_score)
+
 
 IntervalFeatures = namedtuple(
     "IntervalFeatures",
@@ -36,9 +165,9 @@ IntervalFeatures = namedtuple(
 )
 
 
-class BAFinder:
+class FromCandidatesByLogisticRegressionBIFinder(BIFinder):
     """
-    Dedicated finder of "basic activities-by-strategy". "Basic" it is when time interval under it fits
+    Dedicated finder of "basic interval". "Basic" it is when time interval under it fits
     good into dedicated slot and the activity-by-strategy itself may be used as a good representative of
     activity made by user during interesting time interval.
     Uses Logistic Regression (aka logit, MaxEnt) classifier inside and requires in coefficients and "intercept" values.
@@ -47,7 +176,7 @@ class BAFinder:
     def __init__(self) -> None:
         self.model: LogisticRegression = None
 
-    def with_coefs(self, coefs: List[np.double], intercept: np.double) -> "BAFinder":
+    def with_coefs(self, coefs: List[np.double], intercept: np.double) -> "FromCandidatesByLogisticRegressionBIFinder":
         num_of_features = len(IntervalFeatures._fields)
         assert len(coefs) == num_of_features, (
             f"Wrong number of coefs {len(coefs)}:"
@@ -145,13 +274,6 @@ class BAFinder:
         end_point: datetime.datetime,
         max_duration_seconds: float,
     ) -> Tuple[intervaltree.Interval, float, float]:
-        """
-        Finds 2 top candidates for the position and returns in order: top candidate, score of it, score of 2nd candidate.
-        Assumes that len of candidates and features are equal and more than one.
-        :param candidates: List of candidates.
-        :param features: List of features ordered in the same way as candidates.
-        :return: Tuple of (top_candidate, top_candidate_score, pre_top_candidate_score).
-        """
         # Calculate features for all intersecting intervals.
         features = self.calculate_features(candidates, start_point, end_point, max_duration_seconds)
 
@@ -166,15 +288,3 @@ class BAFinder:
             positive_class_probs[top_two_indices[0]],
             positive_class_probs[top_two_indices[1]],
         )
-
-    def score_to_desc(self, score: float) -> str:
-        score_description = ""
-        if score == 1.0:
-            score_description = "highest"
-        elif score > 0.6:
-            score_description = "high"
-        elif score > 0.3:
-            score_description = "good"
-        else:
-            score_description = "low"
-        return score_description

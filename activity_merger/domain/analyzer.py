@@ -4,17 +4,11 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import intervaltree
 
-from activity_merger.domain.basic_activity_finder import BAFinder
+from activity_merger.domain.basic_interval_finder import BIFinder
 from activity_merger.helpers.event_helpers import activity_by_strategy_to_str
 from activity_merger.helpers.helpers import from_start_to_end_to_str
 
-from ..config.config import (
-    DEBUG_BUCKET_PREFIX,
-    LIMIT_OF_RESULTING_ACTIVITIES,
-    LOG,
-    MAX_ACTIVITY_DURATION_SEC,
-    MIN_ACTIVITY_DURATION_SEC,
-)
+from ..config.config import DEBUG_BUCKET_PREFIX, LIMIT_OF_RESULTING_ACTIVITIES, LOG, MAX_ACTIVITY_DURATION_SEC
 from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
@@ -317,6 +311,9 @@ class DebugBucketsHandler:
         self.cnt = 0  # Will be set to 1 in `build_new_bucket_id`.
 
     def build_new_bucket_id(self, bucket_name: str) -> str:
+        """
+        Builds a new debug bucket.
+        """
         result = f"{DEBUG_BUCKET_PREFIX}{self.cnt:03}_{bucket_name}"
         self.cnt += 1
         return result
@@ -328,9 +325,19 @@ class DebugBucketsHandler:
         timestamp: datetime.datetime,
         duration: datetime.timedelta,
         description: str,
-        density: float,
         aw_events: List[Event],
+        density: float,
     ):
+        """
+        Adds a new event into the specified debug bucket.
+        :param bucket_id: Name of the bucket to add new event to.
+        :param debug_event_id: ID of the event. Should be unique.
+        :param timestamp: Event start.
+        :param duration: Event duration.
+        :param description: Event description.
+        :param aw_events: List of ActivityWatch events this event consists of.
+        :param density: Event density based on the ActivityWatch events it consists of.
+        """
         events = ", ".join(from_start_to_end_to_str(x.timestamp, x.timestamp + x.duration) for x in aw_events)
         events_cnt = str(len(aw_events))  # Note that ActivityWatch UI shows only strings
         if density:
@@ -391,8 +398,8 @@ class DebugBucketsHandler:
                     duration=activity.suggested_end_time - activity.suggested_start_time,
                     # Build description in easiest way.
                     description=", ".join(f"{k}={v}" for k, v in activity.grouping_data.get_data().items()),
-                    density=activity.density,
                     aw_events=activity.events,
+                    density=activity.density,
                 )
                 metrics.incr("debug events in " + debug_bucket_prefix, activity.duration())
 
@@ -455,9 +462,9 @@ def build_result_activity(
     :param metrics: Metrics instance.
     :return: "Result" activity.
     """
-    # Find all overlapping activities.
-    overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)  # Includes BA.
-    LOG.info("Basic activity is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
+    # Find all overlapping activities, even including those which was used for "basic interval".
+    overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)
+    LOG.info("Basic interval is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
     ra_events = ba_interval.data.events
     overlapping_activities: List[ActivityByStrategy] = [ba_interval.data]
     for interval in overlapping_intervals:
@@ -471,7 +478,7 @@ def build_result_activity(
             ra_events.extend(activitybs.events)
             overlapping_activities.append(activitybs)
             candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
-            metrics.incr("activities placed completely inside basic activities", interval.length().total_seconds())
+            metrics.incr("activities placed completely inside basic interval", interval.length().total_seconds())
             continue
         elif boundaries == IntervalBoundaries.STRICT:
             # We can't use part of STRICT activity so just report attempt and skip.
@@ -481,7 +488,7 @@ def build_result_activity(
                 activity_by_strategy_to_str(activitybs),
             )
             metrics.incr(
-                f"activities with {IntervalBoundaries.STRICT} boundaries skipped completely from basic activities",
+                f"activities with {IntervalBoundaries.STRICT} boundaries skipped completely from basic intervals",
                 interval.length().total_seconds(),
             )
             continue
@@ -492,17 +499,17 @@ def build_result_activity(
                 ra_events.extend(activitybs.events)
                 overlapping_activities.append(activitybs)
                 candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
-                metrics.incr("activities absorbed by basic activity at the start", interval.length().total_seconds())
+                metrics.incr("activities absorbed by basic interval at the start", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
                 # Split activity and concatenate last part with BA. First part is not needed anyway.
                 split_activity = _cut_activity_end(activitybs, ba_interval.end)
                 ra_events.extend(split_activity.events)
                 overlapping_activities.append(split_activity)
-                metrics.incr("activities enhancing basic activity by the start", split_activity.duration())
+                metrics.incr("activities enhancing basic interval by the start", split_activity.duration())
             else:
                 # If activity is `in_trustable_boundaries=end` then skip it.
                 metrics.incr(
-                    "activities unable to enhance basic activity by the start", interval.length().total_seconds()
+                    "activities unable to enhance basic interval by the start", interval.length().total_seconds()
                 )
             continue
         # 3. Handle case when BA overlaps the end of activity.
@@ -512,18 +519,18 @@ def build_result_activity(
                 ra_events.extend(activitybs.events)
                 overlapping_activities.append(activitybs)
                 candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
-                metrics.incr("activities absorbed by basic activity at the end", interval.length().total_seconds())
+                metrics.incr("activities absorbed by basic interval at the end", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
                 # If activity is `in_trustable_boundaries=whole` then split activity,
                 # and concatenate first part with BA.
                 split_activity = _cut_activity_start(activitybs, ba_interval.begin)
                 ra_events.extend(split_activity.events)
                 overlapping_activities.append(split_activity)
-                metrics.incr("activities enhancing basic activity by the end", split_activity.duration())
+                metrics.incr("activities enhancing basic interval by the end", split_activity.duration())
             else:
                 # If activity is `in_trustable_boundaries=start` then skip it.
                 metrics.incr(
-                    "activities unable to enhance basic activity by the end", interval.length().total_seconds()
+                    "activities unable to enhance basic interval by the end", interval.length().total_seconds()
                 )
             continue
         # 4 Handle case when BA itself is placed inside actvity.
@@ -532,7 +539,7 @@ def build_result_activity(
             tmp = _cut_activity_end(tmp, ba_interval.end)
             ra_events.extend(tmp.events)
             overlapping_activities.append(tmp)
-            metrics.incr("activities enhancing basic activity by the middle", ba_interval.length().total_seconds())
+            metrics.incr("activities enhancing basic interval by the middle", ba_interval.length().total_seconds())
             continue
         else:
             # Otherwise BA is in the middle of activity with START or END boundaries.
@@ -644,8 +651,8 @@ def add_activity_to_result_tree(
             timestamp=ra.start_time,
             duration=ra.end_time - ra.start_time,  # Use end-start time, not duration by events.
             description=ra.description,
-            density=0,  # Don't set density for "resulting" activities.
             aw_events=ra.events,
+            density=0,  # Don't set density for "resulting" activities.
         )
 
 
@@ -818,194 +825,10 @@ class MakeCandidatesTreeStep(AnalyzerStep):
         context["candidates_tree"] = candidates_tree
 
 
-class MergeCandidatesTreeIntoResultTreeStep(AnalyzerStep):
-    """
-    Iterates "candidates_tree" to find good resulting activities and merges them into "result_tree".
-    Produces "analyzer_result".
-    """
-
-    def __init__(self, is_add_debug_buckets: bool = False, is_only_good_strategies_for_description: bool = True):
-        super(MergeCandidatesTreeIntoResultTreeStep, self).__init__()
-        self.is_only_good_strategies_for_description = is_only_good_strategies_for_description
-        self.is_add_debug_buckets = is_add_debug_buckets
-
-    def get_description(self) -> str:
-        return "Merging 'candidates_tree' into 'result_tree'."
-
-    def check_context(self, context: Dict[str, any]) -> None:
-        assert "result_tree" in context, "Need in 'result_tree' property"
-        assert "candidates_tree" in context, "Need in 'candidates_tree' property"
-        if self.is_add_debug_buckets:
-            if "debug_buckets_handler" not in context:
-                context["debug_buckets_handler"] = DebugBucketsHandler()
-
-    @staticmethod
-    def _score_to_desc(score: int) -> str:
-        score_description = ""
-        if score == 100:
-            score_description = "highest"
-        elif score > 60:
-            score_description = "high"
-        elif score > 30:
-            score_description = "good"
-        else:
-            score_description = "low"
-        return score_description
-
-    def find_basic_activity_interval(
-        self,
-        candidates_tree: intervaltree.IntervalTree,
-        start_point: datetime.datetime,
-        end_point: datetime.datetime,
-        max_duration_seconds: float,
-        metrics: Metrics,
-    ) -> Optional[intervaltree.Interval]:
-        """
-        Finds "basic" activity among tree of candidates.
-        """
-        candidates: Set[intervaltree.Interval] = candidates_tree.overlap(start_point, end_point)
-        if not candidates:
-            return None
-
-        perfect_duration_sec = min(max_duration_seconds, (end_point - start_point).total_seconds())
-        candidate_scores: List[Tuple[int, intervaltree.Interval]] = []
-        for candidate in candidates:
-            score: float = 0.0
-            # NOTE: keep max score = 100 to translate into percentage.
-            boundaries: IntervalBoundaries = candidate.data.strategy.in_trustable_boundaries
-            # Reward start point or proximity.
-            top = 30
-            proximity_sec = abs(candidate.begin - start_point).seconds
-            if proximity_sec < 10:
-                score += top
-            elif proximity_sec < 60:
-                score += top * 0.75
-            elif proximity_sec < 120:
-                score += top * 0.5
-            elif proximity_sec < MIN_ACTIVITY_DURATION_SEC:
-                score += top * 0.1
-            # Reward end point proximity.
-            top = 10
-            if abs(candidate.end - end_point).seconds < 60 and boundaries != IntervalBoundaries.START:
-                score += top
-            # Reward density.
-            top = 10
-            score += candidate.data.density * top
-            # Reward duration on the intersected interval. Only if overlap is big enough.
-            top = 20
-            overlap_sec = candidate.overlap_size(start_point, end_point).total_seconds()
-            if overlap_sec > MIN_ACTIVITY_DURATION_SEC:
-                overlap_ratio = 1.0 - abs(perfect_duration_sec - overlap_sec) / perfect_duration_sec
-                if overlap_ratio > 0:
-                    score += 20 * overlap_ratio
-            # Reward being in the [MIN_ACTIVITY_DURATION_SEC..max_duration_seconds].
-            top = 30
-            if MIN_ACTIVITY_DURATION_SEC <= overlap_sec <= max_duration_seconds and boundaries not in [
-                IntervalBoundaries.START,
-                IntervalBoundaries.END,
-            ]:
-                score += top
-            # Store score in the list.
-            candidate_scores.append((score, candidate))
-
-        # Take candidate with highest score.
-        sorted_results = sorted(candidate_scores, key=lambda x: x[0], reverse=True)
-        # Check that interval is valid.
-        ba_interval = sorted_results[0][1]
-        assert ba_interval.end > ba_interval.begin, f"Inner error with choosing as basic: {ba_interval.data}"
-        score = sorted_results[0][0]
-        # Provide metric and log about new basic activity found.
-        score_description = self._score_to_desc(score)
-        metrics.incr(
-            f"basic activities with {score_description} score", (ba_interval.end - ba_interval.begin).total_seconds()
-        )
-        LOG.info(
-            "Found 'basic activity' with %.0f '%s' score: %s",
-            score,
-            score_description,
-            activity_by_strategy_to_str(ba_interval.data),
-        )
-        # Provide metric about "how distinguishable basic activity was".
-        if len(sorted_results) > 1:
-            closest_candidate_score = sorted_results[1][0]
-            distance_desc = self._score_to_desc(score - closest_candidate_score)
-            metrics.incr(
-                f"basic activities with {distance_desc} distance from other candidates",
-                (ba_interval.end - ba_interval.begin).total_seconds(),
-            )
-        else:
-            metrics.incr(
-                "basic activities without other candidates on interval",
-                (ba_interval.end - ba_interval.begin).total_seconds(),
-            )
-        return ba_interval
-
-    def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
-        debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
-        result_tree: intervaltree.IntervalTree = context["result_tree"]
-        candidates_tree: intervaltree.IntervalTree = context["candidates_tree"]
-
-        # Iterate through candidates tree and try to fill up gaps in result tree with intervals from here.
-        # Note that very often results tree will be empty and need to make up all activities from candidates tree.
-        current_start_point: datetime.datetime
-        current_end_point: datetime.datetime
-        current_start_point, current_end_point = find_next_uncovered_intervals(
-            candidates_tree=candidates_tree, result_tree=result_tree
-        )
-        while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
-            metrics.incr("iterations to assemble remaining activities")
-            # Find "basic activity" to base "result" activity on interval of it.
-            ba_interval = self.find_basic_activity_interval(
-                candidates_tree,
-                current_start_point,
-                current_end_point,
-                MAX_ACTIVITY_DURATION_SEC,
-                metrics,
-            )
-            if ba_interval is None:
-                break  # No more activities are possible.
-            # Find all overlapping activities and make new `result` activity (RA).
-            ra = build_result_activity(
-                ba_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics
-            )
-            # Check RA doesn't overlaps with existing result activities at the end.
-            result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
-            # If we had interval in `result_tree` when added RA then we need to search next gap.
-            # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
-            for existing_interval in result_tree_overlapped_with_ra_end:
-                if existing_interval.begin < ra.end_time:
-                    # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
-                    ra.end_time = existing_interval.begin
-                    ra.events = [x for x in ra.events if x.timestamp < ra.end_time]
-                    metrics.incr(
-                        "result activities shrinked because it overlaps by end with alredy existing",
-                        (ra.end_time - existing_interval.begin).total_seconds(),
-                    )
-            # Add RA into the result tree.
-            add_activity_to_result_tree(
-                ra=ra,
-                result_tree=result_tree,
-                is_add_debug_buckets=self.is_add_debug_buckets,
-                debug_buckets_handler=debug_buckets_handler,
-            )
-            # Configure next iteration.
-            current_start_point, current_end_point = find_next_uncovered_intervals(
-                candidates_tree=candidates_tree,
-                result_tree=result_tree,
-                start_point=ra.end_time,
-            )
-        context["analyzer_result"] = AnalyzerResult(
-            sorted([x.data for x in result_tree], key=lambda x: x.start_time),
-            None,
-            metrics,
-            debug_buckets_handler.events if debug_buckets_handler else None,
-        )
-
-
-class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(AnalyzerStep):
+class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
     """
     Makes "candidates_tree" `IntervalTree`.
-    :param ba_finder: BAFinder instance to use for choosing "basic" activity on each step.
+    :param bi_finder: `BIFinder` instance to use for choosing "base interval" on each step.
     :param is_add_debug_buckets: Flag to build events into "debug" buckets.
     :param is_only_good_strategies_for_description: Flag to use only activities from "good" strategies to
     build description of result activities.
@@ -1013,16 +836,16 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(AnalyzerStep):
 
     def __init__(
         self,
-        ba_finder: BAFinder,
+        bi_finder: BIFinder,
         is_add_debug_buckets: bool = False,
         is_only_good_strategies_for_description: bool = True,
     ):
         self.is_only_good_strategies_for_description = is_only_good_strategies_for_description
         self.is_add_debug_buckets = is_add_debug_buckets
-        self.ba_finder = ba_finder
+        self.bi_finder = bi_finder
 
     def get_description(self) -> str:
-        return "Merging 'candidates_tree' into 'result_tree'."
+        return f"Merging 'candidates_tree' into 'result_tree' with {self.bi_finder}."
 
     def check_context(self, context: Dict[str, any]) -> None:
         assert "result_tree" in context, "Need in 'result_tree' property"
@@ -1031,41 +854,45 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(AnalyzerStep):
             if "debug_buckets_handler" not in context:
                 context["debug_buckets_handler"] = DebugBucketsHandler()
 
-    def convert_ba_interval_to_activity(
+    def convert_basic_interval_to_ra(
         self,
-        ba_interval: intervaltree.Interval,
-        ba_score: float,
+        bi_interval: intervaltree.Interval,
+        bi_score: float,
         closest_candidate_score: float,
         candidates_tree: intervaltree.IntervalTree,
         result_tree: intervaltree.IntervalTree,
         metrics: Metrics,
         debug_buckets_handler: DebugBucketsHandler,
     ) -> Activity:
-        # Provide metric and log about new basic activity found.
-        ba_score_description = self.ba_finder.score_to_desc(ba_score)
+        """
+        Constructs a new Activity in the provided interval from the provided 'candidates_tree' and
+        embeds it into 'result_tree'.
+        """
+        # Provide metric and log about new base interval found.
+        bi_score_description = self.bi_finder.score_to_desc(bi_score)
         metrics.incr(
-            f"basic activities with {ba_score_description} score", (ba_interval.end - ba_interval.begin).total_seconds()
+            f"base intervals with {bi_score_description} score", (bi_interval.end - bi_interval.begin).total_seconds()
         )
         LOG.info(
-            "Found 'basic activity' with %.2f '%s' score: %s",
-            ba_score,
-            ba_score_description,
-            activity_by_strategy_to_str(ba_interval.data),
+            "Found 'base interval' with %.2f '%s' score: %s",
+            bi_score,
+            bi_score_description,
+            activity_by_strategy_to_str(bi_interval.data),
         )
-        # Provide metric about "how distinguishable basic activity was".
+        # Provide metric about "how distinguishable basic interval was".
         if closest_candidate_score is not None:
-            distance_desc = self.ba_finder.score_to_desc(ba_score - closest_candidate_score)
+            distance_desc = self.bi_finder.score_to_desc(bi_score - closest_candidate_score)
             metrics.incr(
-                f"basic activities with {distance_desc} distance from other candidates",
-                (ba_interval.end - ba_interval.begin).total_seconds(),
+                f"base intervals with {distance_desc} distance from other candidates",
+                (bi_interval.end - bi_interval.begin).total_seconds(),
             )
         else:
             metrics.incr(
-                "basic activities without other candidates on interval",
-                (ba_interval.end - ba_interval.begin).total_seconds(),
+                "base intervals without other candidates on interval",
+                (bi_interval.end - bi_interval.begin).total_seconds(),
             )
         # Find all overlapping activities and make new `result` activity (RA).
-        ra = build_result_activity(ba_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics)
+        ra = build_result_activity(bi_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics)
         # Check RA doesn't overlaps with existing result activities at the end.
         result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
         # If we had interval in `result_tree` when added RA then we need to search next gap.
@@ -1102,24 +929,25 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(AnalyzerStep):
         )
         while current_start_point and len(result_tree) < LIMIT_OF_RESULTING_ACTIVITIES:
             metrics.incr("iterations to assemble remaining activities")
-            # Find "basic activity" to base "result" activity on interval of it.
-            # Find all candidates which overlap interval somehow.
+            # Find all candidates which overlap "interval to make activity in" somehow.
             candidates: List[intervaltree.Interval] = list(
                 candidates_tree.overlap(current_start_point, current_end_point)
             )
             if not candidates:
-                break  # No more activities are possible.
-            # Check that only 1 candidate is available.
-            ba_interval = candidates[0]
-            ba_score = 1.0
+                # If no more activities are possible the stop loop.
+                break
+            bi_interval = candidates[0]
+            bi_score = 1.0
             closest_candidate_score = None
+            # Check if more than 1 candidate is available (most common case).
             if len(candidates) > 1:
-                ba_interval, ba_score, closest_candidate_score = self.ba_finder.find_top(
-                    candidates, current_start_point, current_end_point, MAX_ACTIVITY_DURATION_SEC
+                # Find "base interval" to base "result activity" on.
+                bi_interval, bi_score, closest_candidate_score = self.bi_finder.find_top(
+                    candidates, current_start_point, current_end_point, MAX_ACTIVITY_DURATION_SEC, metrics
                 )
-            ra = self.convert_ba_interval_to_activity(
-                ba_interval=ba_interval,
-                ba_score=ba_score,
+            ra = self.convert_basic_interval_to_ra(
+                bi_interval=bi_interval,
+                bi_score=bi_score,
                 closest_candidate_score=closest_candidate_score,
                 candidates_tree=candidates_tree,
                 result_tree=result_tree,
@@ -1140,18 +968,21 @@ class MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep(AnalyzerStep):
         )
 
 
-def merge_activities(
-    strategy_apply_result: List[StrategyApplyResult],
+def aggregate_strategies_results_to_activities(
+    strategy_apply_results: List[StrategyApplyResult],
     steps: List[AnalyzerStep],
     ignore_substrings: List[str] = None,
 ) -> AnalyzerResult:
     """
-    Merges activities into `AnalyzerResult` with the given steps.
+    Merges `StrategyApplyResult`-s into `AnalyzerResult` (which includes aggregated activities) by the given steps.
+    :param strategy_apply_results: List of events aggregated by strategies.
+    :param steps: List of operations to apply on `StrategyApplyResult`-s.
+    :param ignore_sugstrings: List of things to suppress in logs.
+    :return: Result of analysing events which includes aggregated activities, metrics and debug events.
     """
-
     context = {
-        "strategy_apply_result": strategy_apply_result,
-        "last_id": max(x.last_id for x in strategy_apply_result),
+        "strategy_apply_result": strategy_apply_results,
+        "last_id": max(x.last_id for x in strategy_apply_results),
     }
     for step in steps:
         metrics = Metrics({})

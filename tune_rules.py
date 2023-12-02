@@ -9,7 +9,7 @@ import dill  # For pickle-ing lambdas need to use 'dill' package.
 import intervaltree
 from aw_client import ActivityWatchClient
 
-from activity_merger.domain.basic_activity_finder import (BAFinder,
+from activity_merger.domain.basic_interval_finder import (FromCandidatesByLogisticRegressionBIFinder,
                                                           IntervalFeatures)
 from activity_merger.domain.strategies import ActivityByStrategy
 from activity_merger.helpers.event_helpers import activity_by_strategy_to_str, upload_events
@@ -34,8 +34,8 @@ from activity_merger.domain.analyzer import (
     RA_DEBUG_BUCKET_NAME, AnalyzerStep, ChopActivitiesByResultTreeStep,
     DebugBucketsHandler, MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
-    MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep,
-    find_next_uncovered_intervals, merge_activities)
+    MergeCandidatesTreeIntoResultTreeWithBIFinderStep,
+    find_next_uncovered_intervals, aggregate_strategies_results_to_activities)
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.helpers.helpers import (datetime_to_time_str,
@@ -43,6 +43,7 @@ from activity_merger.helpers.helpers import (datetime_to_time_str,
 from get_activities import (
     clean_debug_buckets_and_apply_strategies_on_one_day_events,
     reload_debug_buckets)
+
 
 LOG = setup_logging()
 
@@ -251,11 +252,11 @@ class Context:
         )
         return result
 
-    def to_ba_finder(self) -> BAFinder:
-        return BAFinder().with_coefs(self.coefs, self.intercept)
+    def to_bi_finder(self) -> FromCandidatesByLogisticRegressionBIFinder:
+        return FromCandidatesByLogisticRegressionBIFinder().with_coefs(self.coefs, self.intercept)
 
 
-class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep):
+class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithBIFinderStep):
     """
     MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinderStep which interacts with user to:
     - ask user for "basic" activity-by-strategy,
@@ -265,12 +266,12 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
 
     def __init__(
         self,
-        ba_finder: BAFinder,
+        bi_finder: FromCandidatesByLogisticRegressionBIFinder,
         is_add_debug_buckets: bool = False,
         is_only_good_strategies_for_description: bool = True,
         context: Optional[Context] = None,
     ):
-        super().__init__(ba_finder, is_add_debug_buckets, is_only_good_strategies_for_description)
+        super().__init__(bi_finder, is_add_debug_buckets, is_only_good_strategies_for_description)
         self.leader: CursesTerminalUI = CursesTerminalUI()
         self.context = context if context else Context()
         self.training_data: List[Tuple[IntervalFeatures, int]] = []
@@ -290,7 +291,7 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
         end_point: datetime.datetime,
     ) -> Tuple[str, intervaltree.Interval, float, float]:
         # Calculate features for all intersecting intervals. Note that here may be few hundreds candidates.
-        features = self.ba_finder.calculate_features(
+        features = self.bi_finder.calculate_features(
             candidates, start_point, end_point, config.MAX_ACTIVITY_DURATION_SEC
         )
         # Prepare candidates to show: sort them and convert into strings.
@@ -347,7 +348,7 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
         prev_choice = None
         while current_start_point and len(result_tree) < config.LIMIT_OF_RESULTING_ACTIVITIES:
             metrics.incr("iterations to assemble remaining activities")
-            # Find "basic activity" to base "result" activity on interval of it.
+            # Find "basic interval" to base "result" activity on interval of it.
             # Find all candidates which overlap interval somehow.
             candidates: List[intervaltree.Interval] = list(
                 candidates_tree.overlap(current_start_point, current_end_point)
@@ -355,24 +356,24 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithDedicatedBAFinder
             if not candidates:
                 break  # No more activities are possible.
             # Check that only 1 candidate is available.
-            ba_interval = candidates[0]
-            ba_score = 1.0
+            basic_interval = candidates[0]
+            bi_score = 1.0
             closest_candidate_score = None
             if len(candidates) > 1:
-                answer, ba_interval, ba_score, closest_candidate_score = self.ask_top(
+                answer, basic_interval, bi_score, closest_candidate_score = self.ask_top(
                     prev_choice, candidates, current_start_point, current_end_point
                 )
             if answer == "chosen":
-                ra = self.convert_ba_interval_to_activity(
-                    ba_interval=ba_interval,
-                    ba_score=ba_score,
+                ra = self.convert_basic_interval_to_ra(
+                    bi_interval=basic_interval,
+                    bi_score=bi_score,
                     closest_candidate_score=closest_candidate_score,
                     candidates_tree=candidates_tree,
                     result_tree=result_tree,
                     metrics=metrics,
                     debug_buckets_handler=debug_buckets_handler,
                 )
-                prev_choice = f"{ba_interval.data.id}: {ra}"
+                prev_choice = f"{basic_interval.data.id}: {ra}"
                 # Configure next iteration.
                 current_start_point, current_end_point = find_next_uncovered_intervals(
                     candidates_tree=candidates_tree,
@@ -435,10 +436,10 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
         return None
 
     # Start to decide activities with last step involving user interactions.
-    ba_finder = context.to_ba_finder()
-    trainer_step = BAFinderTrainerStep(ba_finder=ba_finder, is_add_debug_buckets=True, context=context)
-    analyzer_result: AnalyzerResult = merge_activities(
-        strategy_apply_result=strategy_apply_result,
+    bi_finder = context.to_bi_finder()
+    trainer_step = BAFinderTrainerStep(bi_finder=bi_finder, is_add_debug_buckets=True, context=context)
+    analyzer_result: AnalyzerResult = aggregate_strategies_results_to_activities(
+        strategy_apply_results=strategy_apply_result,
         steps=[
             MakeResultTreeFromSelfSufficientActivitiesStep(True),
             ChopActivitiesByResultTreeStep(True, True),
@@ -460,16 +461,16 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
             )
         )
         if trainer_step.leader.ask_yes_no(["Train by answers? [y/n]"]):
-            ba_finder.train(trainer_step.training_data)
+            bi_finder.train(trainer_step.training_data)
             LOG.info(
                 "Training results - SAVE THEM:\nBAFinder_LogisticRegression_coef_=%s"
                 "\nBAFinder_LogisticRegression_intercept=%s",
-                ba_finder.model.coef_,
-                ba_finder.model.intercept_,
+                bi_finder.model.coef_,
+                bi_finder.model.intercept_,
             )
             # Save training results via context.
-            context.coefs = ba_finder.model.coef_
-            context.intercept = ba_finder.model.intercept_
+            context.coefs = bi_finder.model.coef_
+            context.intercept = bi_finder.model.intercept_
             context.save()
     else:
         LOG.error("Haven't received analyzer results!")
@@ -479,12 +480,12 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
 def main():
     parser = argparse.ArgumentParser(
         description="Makes the same as 'get_activities' but together with providing result asks user about "
-        "what they expect in order to tune inner 'find basic activity' model for user data.\n"
+        "what they expect in order to tune inner 'find basic interval' model for user data.\n"
         "Always populates 'debug buckets' to allow user to choose from.\n"
         "In details script work looks like:\n"
         f"1. If configured it reads previous session from '{Context.SAVE_FILE_PATH}' file if it exists.\n"
         "2. Reads events for specified day, makes all required steps to build activities.\n"
-        "3. When starts to find basic activities it asks user for each place - what to add. "
+        "3. When starts to find basic intervals it asks user for each place - what to add. "
         "Options are sorted basing on existing coefficients.\n"
         "4. Basing on user answers it changes model coefficients to use them on next days.\n"
         "5. If need to correct results scrip may be executed on the few days.\n",
