@@ -49,11 +49,11 @@ def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
 
 
 def clean_debug_buckets_and_apply_strategies_on_one_day_events(
-    events_date: datetime.datetime, client: aw_client.ActivityWatchClient
+    start_datetime: datetime.datetime, client: aw_client.ActivityWatchClient
 ) -> Tuple[List[StrategyApplyResult], Metrics]:
     """
     Connects to ActivityWatch, gets list of buckets and applies all strategies on all events in them.
-    :param events_date: Date to get events for.
+    :param events_date: Date and time to get events for.
     :param client: ActivityWatch client to use.
     :return: Linked list of `Interval`-s.
     """
@@ -70,8 +70,8 @@ def clean_debug_buckets_and_apply_strategies_on_one_day_events(
     LOG.info("Buckets to analyze: [%s]", ", ".join(buckets.keys()))
     return apply_strategies_on_events(
         client,
-        events_date.date(),
-        events_date.date() + datetime.timedelta(days=1),
+        start_datetime,
+        start_datetime + datetime.timedelta(days=1),
         client.get_buckets(),
         config.STRATEGIES,
         config.EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
@@ -99,7 +99,7 @@ BI_FINDER_NAMES = {
 
 
 def convert_aw_events_to_activities(
-    events_date: datetime.datetime,
+    events_datetime: datetime.datetime,
     bi_finder_name: str,
     ignore_substrings: List[str],
     is_only_good_strategies_for_description: bool,
@@ -109,7 +109,7 @@ def convert_aw_events_to_activities(
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
     analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
     prints them into output.
-    :param events_date: Date to get events on.
+    :param events_datetime: Date and time to get events on.
     :param ignore_substrings: List of substrings to ignore in logs (metrics substrings).
     :param is_use_all_strategies_for_description: Flag to use all strategies to build resulting activities description.
     :param is_import_debug_buckets: Flag to assemble and import into ActivityWatch debugging information as events for
@@ -118,7 +118,7 @@ def convert_aw_events_to_activities(
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
     LOG.info("Starting to build activities per strategy...")
-    strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_date, client)
+    strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_datetime, client)
     metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
     LOG.info("Analyzed all buckets separately, metrics:\n  %s", "\n  ".join(metrics_strings))
     LOG.info(
@@ -159,8 +159,9 @@ def main():
         "date",
         nargs="?",
         type=valid_date,
-        help="Date to analyze AcivityWatch events in format 'YYYY-mm-dd'. By-default is today. "
-        "If omit here but set 'back days' argument then date is calculated as today - back_days.",
+        help="Date to analyze AcivityWatch events in format 'YYYY-mm-dd'. By-default is today."
+        f" Note that day border is {config.DAY_BORDER}."
+        " If don't set here then date is calculated as today-'back days'.",
     )
     parser.add_argument(
         "-b",
@@ -211,8 +212,9 @@ def main():
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
         events_date = events_date - datetime.timedelta(days=args.back_days)
+    events_datetime = events_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone()
     convert_aw_events_to_activities(
-        events_date=events_date,
+        events_datetime=events_datetime,
         bi_finder_name=args.bi_finder_name,
         ignore_substrings=list(args.ignore_substrings),
         is_only_good_strategies_for_description=args.is_only_good_strategies_for_description,

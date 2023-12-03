@@ -3,42 +3,48 @@ import argparse
 import datetime
 import difflib
 import logging
+from re import search
 from typing import List, Set, Tuple
 
 import jira
 
-from activity_merger.config.config import (EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
-                                           JIRA_BUCKET_ID, JIRA_ISSUES_MAX,
-                                           JIRA_LOGIN_API_TOKEN,
-                                           JIRA_LOGIN_EMAIL, JIRA_PROJECTS,
-                                           JIRA_SCRAPER_NAME, JIRA_URL, LOG)
+from activity_merger.config.config import (
+    DAY_BORDER,
+    EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+    JIRA_BUCKET_ID,
+    JIRA_ISSUES_MAX,
+    JIRA_LOGIN_API_TOKEN,
+    JIRA_LOGIN_EMAIL,
+    JIRA_PROJECTS,
+    JIRA_SCRAPER_NAME,
+    JIRA_URL,
+    LOG,
+)
 from activity_merger.domain.input_entities import Event
 from activity_merger.helpers.event_helpers import event_to_str, upload_events
-from activity_merger.helpers.helpers import (datetime_to_time_str,
-                                             ensure_datetime, setup_logging,
-                                             valid_date)
+from activity_merger.helpers.helpers import datetime_to_time_str, ensure_datetime, setup_logging, valid_date
 
 JIRA_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%f%z"
 JIRA_TICKET_FIELDS_VARIABLE_UPDATE_COMPLEXITY = {"description", "summary", "labels", "Component"}
 
 
 def _get_jira_issues(
-    server_url: str, email: str, api_token: str, projects: List[str], search_date: datetime
+    server_url: str, email: str, api_token: str, projects: List[str], search_datetime: datetime
 ) -> List[jira.Issue]:
     assert server_url, "Jira server URL is not specified."
     assert email, "Jira login email is not specified."
     assert api_token, "Jira login API token is not specified."
     assert projects, "Jira projects to consider are not specified."
-    assert search_date, "Date to search is not specified."
+    assert search_datetime, "Date to search is not specified."
     connection = jira.JIRA(server=server_url, basic_auth=(email, api_token))
-    # end_date = search_date.date() + datetime.timedelta(days=1)
-    LOG.info("Searching %s issues updated during or after %s and touched by %s.", projects, search_date.date(), email)
+    LOG.info("Searching %s issues updated after %s and touched by %s.", projects, search_datetime, email)
     jql = (
-        f"project IN ({','.join(projects)}) AND updated >= '{search_date.date()}' AND ("
-        "reporter was currentUser()"
+        f"project IN ({','.join(projects)}) AND updated >= '{search_datetime}' AND "
+        "(reporter was currentUser()"
         " OR commentedBy = currentUser()"
         " OR assignee was currentUser()"
-        " OR status changed BY currentUser())"
+        " OR status changed BY currentUser()"
+        ")"
     )
     return connection.search_issues(jql, expand="changelog", maxResults=JIRA_ISSUES_MAX)
 
@@ -127,17 +133,19 @@ def _format_jira_event_for_log(event: Event) -> str:
     return f"{{{datetime_to_time_str(event.timestamp)} {data['jira_id']} {change_desc}}}"
 
 
-def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_date: datetime.datetime) -> List[Event]:
+def get_one_day_events_from_jira(issues: List[jira.Issue], author_email: str, start_datetime: datetime.datetime)\
+    -> List[Event]:
     """
-    Filters all issues by specific date and specified author. Collects events from them.
+    Filters all issues by one day and specified author. Collects events from them.
     :param issues: Jira issues to inspect in chronological order.
     :param author_email: Account email to filter activities by.
+    :param start_datetime: Date and time to start day to filter from.
     :return: List of events based on Jira issues activites performed by specific account.
     """
     # First generate as much events as possible and without right duration.
     events: List[Event] = []
     unsupported_fields = set()
-    change_date = ensure_datetime(change_date).date()
+    end_datetime = start_datetime + datetime.timedelta(days=1)
     for issue in issues:
         jira_id = issue.key
         title = issue.fields.summary if hasattr(issue.fields, "summary") else "<cannot parse>"
@@ -147,9 +155,9 @@ def get_events_from_jira(issues: List[jira.Issue], author_email: str, change_dat
             # Skip changes by other people or by not signed actors.
             if not hasattr(story.author, "emailAddress") or story.author.emailAddress != author_email:
                 continue
-            # Skip changes made other date.
+            # Skip changes made outside of specified interval.
             created = datetime.datetime.strptime(story.created, JIRA_DATETIME_FORMAT)
-            if created.date() != change_date:
+            if start_datetime > created > end_datetime:
                 continue
             story_events, story_unsupported_fields = _parse_events_from_story_without_duration(
                 story, jira_id, title, created
@@ -237,7 +245,9 @@ def main():
         nargs="?",
         type=valid_date,
         default=datetime.datetime.now().astimezone(),
-        help="Date to look for Jira events in format 'YYYY-mm-dd'. By default is today.",
+        help="Date to look for Jira events in format 'YYYY-mm-dd'. By default is today."
+        f" Note that day border is {DAY_BORDER}."
+        " If don't set here then date is calculated as today-'back days'.",
     )
     parser.add_argument(
         "-b",
@@ -290,12 +300,13 @@ def main():
     search_date = args.search_date
     if args.back_days:
         assert args.back_days >= 0, f"'back_days' value ({args.back_days}) should be positive or 0."
-        search_date = datetime.datetime.today().astimezone() - datetime.timedelta(days=args.back_days)
+        search_date = datetime.datetime.today().date().astimezone() - datetime.timedelta(days=args.back_days)
+    search_datetime = ensure_datetime(search_date).replace(hour=0, minute=0, second=0, microsecond=0) + DAY_BORDER
     projects = [str(x).strip() for x in args.projects.split(",")]  # Clean up input from extra spaces.
     # Get "touched" Jira issues list.
-    issues = _get_jira_issues(args.server, args.email, args.api_token, projects, search_date)
+    issues = _get_jira_issues(args.server, args.email, args.api_token, projects, search_datetime)
     LOG.info("Received %d issues from Jira [%s] projects.", len(issues), args.projects)
-    events = get_events_from_jira(issues, args.email, search_date)
+    events = get_one_day_events_from_jira(issues, args.email, search_datetime)
     LOG.info("Ready to upload %d events:\n  %s", len(events), "\n  ".join(event_to_str(x) for x in events))
     if not events:
         LOG.warning(

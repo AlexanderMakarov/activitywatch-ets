@@ -179,13 +179,13 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
       For Firefox titles it is possible to parse Jira ID or some webapp name.
       I.e. add ability to separate into "activity" not only by the whole "title" but by fraction.
 - [x] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
+- [x] Shift "day border" to 5AM and make it configurable.
 - [ ] Implement BIFinder to search Jira ID-s in Jira, Windows, IDEA, VSCode, Browser activities.
 - [ ] Implement BIFinder to search "activities edges".
 - [ ] Find a way to mark some events as "source of description" and other as "source of interval".
       Git/Jira events are good for description, Window/IDEA - for interval, Browser/Outlook - both.
 - [ ] Add more features into FromCandidatesByLogisticRegressionBIFinder.
-- [ ] Shift "day border" to 6AM and make it configurable.
-- [ ] Try to aggregate "result" activities with help of ChatGPT.
+- [ ] Try to aggregate "result" activities with help of LLM.
 - [ ] Add Google Calendar importer. See https://github.com/ActivityWatch/aw-import-ical (which is on poetry :( )).
 - [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in "config.py".
 - [ ] Prepare script to run all event importers and get_activities.py for the specific date.

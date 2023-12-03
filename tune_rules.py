@@ -9,8 +9,7 @@ import dill  # For pickle-ing lambdas need to use 'dill' package.
 import intervaltree
 from aw_client import ActivityWatchClient
 
-from activity_merger.domain.basic_interval_finder import (FromCandidatesByLogisticRegressionBIFinder,
-                                                          IntervalFeatures)
+from activity_merger.domain.basic_interval_finder import FromCandidatesByLogisticRegressionBIFinder, IntervalFeatures
 from activity_merger.domain.strategies import ActivityByStrategy
 from activity_merger.helpers.event_helpers import activity_by_strategy_to_str, upload_events
 
@@ -31,18 +30,20 @@ from pick import pick
 
 import activity_merger.config.config as config
 from activity_merger.domain.analyzer import (
-    RA_DEBUG_BUCKET_NAME, AnalyzerStep, ChopActivitiesByResultTreeStep,
-    DebugBucketsHandler, MakeCandidatesTreeStep,
+    RA_DEBUG_BUCKET_NAME,
+    AnalyzerStep,
+    ChopActivitiesByResultTreeStep,
+    DebugBucketsHandler,
+    MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
     MergeCandidatesTreeIntoResultTreeWithBIFinderStep,
-    find_next_uncovered_intervals, aggregate_strategies_results_to_activities)
+    find_next_uncovered_intervals,
+    aggregate_strategies_results_to_activities,
+)
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
-from activity_merger.helpers.helpers import (datetime_to_time_str,
-                                             setup_logging, valid_date)
-from get_activities import (
-    clean_debug_buckets_and_apply_strategies_on_one_day_events,
-    reload_debug_buckets)
+from activity_merger.helpers.helpers import datetime_to_time_str, setup_logging, valid_date
+from get_activities import clean_debug_buckets_and_apply_strategies_on_one_day_events, reload_debug_buckets
 
 
 LOG = setup_logging()
@@ -409,12 +410,12 @@ class UploadDebugBucketsAndResetStep(AnalyzerStep):
         reload_debug_buckets(debug_buckets_handler.events, self.client)
 
 
-def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
+def tune_rules(events_datetime: datetime.datetime, is_use_saved_context: bool):
     """
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
     analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
     prints them into output.
-    :param events_date: Date to work with events on.
+    :param events_datetime: Date and time to get events on.
     :param is_use_saved_context: Flag to read data saved from previous run.
     :return: 'AnalyzerResult' object or 'None' if no intervals to analyze were found.
     """
@@ -424,7 +425,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
     else:
         context = Context()
     # Build ActivitiesByStrategy list by provided events date.
-    strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_date, client)
+    strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_datetime, client)
     metrics_strings = list(metrics.to_strings())
     # Don't print resulting activity-by-strategies - better to see them in ActivityWatch UI.
     LOG.info("Analyzed all buckets separately, common metrics:\n%s", "\n".join(metrics_strings))
@@ -432,7 +433,7 @@ def tune_rules(events_date: datetime.datetime, is_use_saved_context: bool):
         "\n".join(x.strategy.name + " metrics:\n" + "\n".join(x.metrics.to_strings()) for x in strategy_apply_result)
     )
     if not strategy_apply_result:
-        LOG.warning("Can't build activity-by-strategies by events/intervals for %s. Doing nothing.", events_date.date())
+        LOG.warning("Can't build activity-by-strategies for one day starting from %s. Stopping.", events_datetime)
         return None
 
     # Start to decide activities with last step involving user interactions.
@@ -496,7 +497,8 @@ def main():
         nargs="?",
         type=valid_date,
         help="Date to analyze AcivityWatch events in format 'YYYY-mm-dd'. By-default is today. "
-        "If omit here but set 'back days' argument then date is calculated as today - back_days.",
+        f" Note that day border is {config.DAY_BORDER}."
+        " If don't set here then date is calculated as today-'back days'.",
     )
     parser.add_argument(
         "-b",
@@ -515,7 +517,8 @@ def main():
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
         events_date = events_date - datetime.timedelta(days=args.back_days)
-    tune_rules(events_date, args.is_use_saved)
+    events_datetime = events_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone()
+    tune_rules(events_datetime, args.is_use_saved)
 
 
 if __name__ == "__main__":

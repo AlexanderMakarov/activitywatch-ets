@@ -14,9 +14,14 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from activity_merger.config.config import (FIREFOX_PROFILE_PATH, LOG,
-                                           OWA_BUCKET_ID, OWA_MAX_SCROLL_BACK,
-                                           OWA_SCRAPER_NAME, OWA_URL)
+from activity_merger.config.config import (
+    FIREFOX_PROFILE_PATH,
+    LOG,
+    OWA_BUCKET_ID,
+    OWA_MAX_SCROLL_BACK,
+    OWA_SCRAPER_NAME,
+    OWA_URL,
+)
 from activity_merger.domain.input_entities import Event
 from activity_merger.helpers.event_helpers import upload_events
 from activity_merger.helpers.helpers import setup_logging, valid_date
@@ -407,7 +412,9 @@ def main():
         nargs="?",
         type=valid_date,
         default=datetime.datetime.now().astimezone(),
-        help="Date to set for OWA365/Web Outlook Calendar events in format 'YYYY-mm-dd'." " By default is today.",
+        help="Date to set for OWA365/Web Outlook Calendar events in format 'YYYY-mm-dd'."
+        " By default is today."
+        " Note that 'day border' setting in configuration is not supported.",
     )
     parser.add_argument(
         "-b",

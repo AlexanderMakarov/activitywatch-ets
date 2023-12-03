@@ -56,7 +56,6 @@ BIFINDER_LOGISTIC_REGRESSION_COEF = [
 BIFINDER_LOGISTIC_REGRESSION_INTERCEPT = -7.45467602
 
 
-
 # ---------- COMMON SETTINGS ---------- Settings with values suitable for most people.
 def __window_activity_name_sentence_builder(groups_data: List[Dict[str, str]]) -> str:
     """
@@ -345,6 +344,8 @@ DEBUG_BUCKETS_IMPORTER_NAME = "activity_merger_debugger"
 DEBUG_BUCKET_PREFIX = "z"
 # Timezone to show dates.
 CURRENT_TIMEZONE = datetime.datetime.now(datetime.timezone.utc).astimezone().tzinfo  # Use system timezone.
+# Day time to use as "days" separator. Midnight may don't work well. Should be timedelta to add to midnight.
+DAY_BORDER = datetime.timedelta(hours=5)
 # Default logger. Used for cases when script is called as a library.
 LOG: logging.Logger = logging.getLogger(__name__)
 # ActivityWatch client name and screenshots prefix for OWA365/Web Outlook Calendar events.
