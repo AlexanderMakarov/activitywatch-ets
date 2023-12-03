@@ -226,8 +226,8 @@ class Context:
     SAVE_FILE_PATH = os.path.abspath("tune_rules-context.dill")
 
     def __init__(self, **kwargs) -> None:
-        self.coefs = config.BAFinder_LogisticRegression_coef
-        self.intercept = config.BAFinder_LogisticRegression_intercept
+        self.coefs = config.BIFINDER_LOGISTIC_REGRESSION_COEF
+        self.intercept = config.BIFINDER_LOGISTIC_REGRESSION_INTERCEPT
 
     def save(self):
         """

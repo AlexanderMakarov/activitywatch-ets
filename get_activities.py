@@ -30,6 +30,9 @@ LOG = setup_logging()
 
 
 def delete_debug_buckets(client: aw_client.ActivityWatchClient) -> List[str]:
+    """
+    Deletes all debug buckets, returns names of them.
+    """
     result = []
     try:
         buckets = client.get_buckets()
@@ -87,8 +90,17 @@ def reload_debug_buckets(debug_dict: Dict[str, List[Event]], client: aw_client.A
         LOG.info(upload_events(events, config.DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
 
 
+BI_FINDER_NAMES = {
+    "simple": FromCandidateActivitiesByScoreBIFinder(),
+    "logistic-regression": FromCandidatesByLogisticRegressionBIFinder().with_coefs(
+        config.BIFINDER_LOGISTIC_REGRESSION_COEF, config.BIFINDER_LOGISTIC_REGRESSION_INTERCEPT
+    ),
+}
+
+
 def convert_aw_events_to_activities(
     events_date: datetime.datetime,
+    bi_finder_name: str,
     ignore_substrings: List[str],
     is_only_good_strategies_for_description: bool,
     is_import_debug_buckets: bool,
@@ -98,7 +110,7 @@ def convert_aw_events_to_activities(
     analyzes intervals, converts them into combined activities by specified (and fine-tuned per person) rules,
     prints them into output.
     :param events_date: Date to get events on.
-    :param ignore_substrings: List of substrings to ignore metrics with them in logs.
+    :param ignore_substrings: List of substrings to ignore in logs (metrics substrings).
     :param is_use_all_strategies_for_description: Flag to use all strategies to build resulting activities description.
     :param is_import_debug_buckets: Flag to assemble and import into ActivityWatch debugging information as events for
     "debugging" buckets.
@@ -114,11 +126,7 @@ def convert_aw_events_to_activities(
         "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in strategy_apply_result),
     )
 
-    # TODO: provide a way to switch bi_finder-s easily.
-    # bi_finder = FromCandidatesByLogisticRegressionBIFinder().with_coefs(
-    #     config.BAFinder_LogisticRegression_coef, config.BAFinder_LogisticRegression_intercept
-    # )
-    bi_finder = FromCandidateActivitiesByScoreBIFinder()
+    bi_finder = BI_FINDER_NAMES[bi_finder_name]
     analyzer_result = aggregate_strategies_results_to_activities(
         strategy_apply_results=strategy_apply_result,
         steps=[
@@ -161,6 +169,14 @@ def main():
         help="How many days back search events on. I.e. '1' value means 'search for yesterday.",
     )
     parser.add_argument(
+        "-f",
+        "--bi-finder",
+        dest="bi_finder_name",
+        choices=BI_FINDER_NAMES.keys(),
+        help="Basic interval finder to use."
+        " Note that only 'simple' works with some predefined values, other need to tune.",
+    )
+    parser.add_argument(
         "-i",
         "--ignore-substrings",
         nargs="*",
@@ -197,6 +213,7 @@ def main():
         events_date = events_date - datetime.timedelta(days=args.back_days)
     convert_aw_events_to_activities(
         events_date=events_date,
+        bi_finder_name=args.bi_finder_name,
         ignore_substrings=list(args.ignore_substrings),
         is_only_good_strategies_for_description=args.is_only_good_strategies_for_description,
         is_import_debug_buckets=args.is_import_debug_buckets,

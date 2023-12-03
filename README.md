@@ -179,8 +179,8 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
       For Firefox titles it is possible to parse Jira ID or some webapp name.
       I.e. add ability to separate into "activity" not only by the whole "title" but by fraction.
 - [x] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
-- [ ] Find a way to aggregate "short" activity-by-strategy-es into bigger chunks 
-      Find a way to avoid gaps between "expected adjusted" intervals.
+- [ ] Implement BIFinder to search Jira ID-s in Jira, Windows, IDEA, VSCode, Browser activities.
+- [ ] Implement BIFinder to search "activities edges".
 - [ ] Find a way to mark some events as "source of description" and other as "source of interval".
       Git/Jira events are good for description, Window/IDEA - for interval, Browser/Outlook - both.
 - [ ] Add more features into FromCandidatesByLogisticRegressionBIFinder.
@@ -198,6 +198,9 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 
 ### Questionable:
 
+- [ ] Find a way to aggregate "short" activity-by-strategy-es into bigger chunks 
+      Find a way to avoid gaps between "expected adjusted" intervals.
+      (probably it is solved by BIFinder separated from "basic activity" finder)
 - [ ] 'in_group_by_keys' need to work both on "and" and "or" ways (example?).
 - [ ] Add ability to cut by AFK both events and activities (example?).
 - [ ] Extend "in_only_if_window_app" to take into account "title" - like for Jira in browser should be opened tab

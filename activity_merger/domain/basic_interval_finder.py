@@ -10,7 +10,14 @@ from activity_merger.domain.input_entities import IntervalBoundaries
 from activity_merger.domain.metrics import Metrics
 from activity_merger.helpers.event_helpers import activity_by_strategy_to_str
 
-from ..config.config import (LOG, MIN_ACTIVITY_DURATION_SEC)
+from ..config.config import (
+    BIFINDER_SIMPLE_DENSITY,
+    BIFINDER_SIMPLE_DURATION_BETWEEN_MIN_AND_MAX,
+    BIFINDER_SIMPLE_DURATION_ON_INTERSECTION_INTERVAL,
+    BIFINDER_SIMPLE_START_POINT_PROXIMITY,
+    LOG,
+    MIN_ACTIVITY_DURATION_SEC,
+)
 
 
 class BIFinder:
@@ -72,7 +79,7 @@ class FromCandidateActivitiesByScoreBIFinder(BIFinder):
             # NOTE: keep max score = 1 to translate into percentage.
             boundaries: IntervalBoundaries = candidate.data.strategy.in_trustable_boundaries
             # Reward start point proximity.
-            top = 0.5
+            top = BIFINDER_SIMPLE_START_POINT_PROXIMITY
             proximity_sec = abs(candidate.begin - start_point).seconds
             if proximity_sec < 10:
                 score += top
@@ -81,17 +88,17 @@ class FromCandidateActivitiesByScoreBIFinder(BIFinder):
             elif proximity_sec < MIN_ACTIVITY_DURATION_SEC:
                 score += top * 0.5
             # Reward density.
-            top = 0.1
+            top = BIFINDER_SIMPLE_DENSITY
             score += candidate.data.density * top
             # Reward duration on the intersected interval. Only if overlap is big enough.
-            top = 0.2
+            top = BIFINDER_SIMPLE_DURATION_ON_INTERSECTION_INTERVAL
             overlap_sec = candidate.overlap_size(start_point, end_point).total_seconds()
             if overlap_sec > MIN_ACTIVITY_DURATION_SEC:
                 overlap_ratio = 1.0 - abs(perfect_duration_sec - overlap_sec) / perfect_duration_sec
                 if overlap_ratio > 0:
                     score += top * overlap_ratio
             # Reward being in the [MIN_ACTIVITY_DURATION_SEC..max_duration_seconds].
-            top = 0.2
+            top = BIFINDER_SIMPLE_DURATION_BETWEEN_MIN_AND_MAX
             if MIN_ACTIVITY_DURATION_SEC <= overlap_sec <= max_duration_seconds and boundaries not in [
                 IntervalBoundaries.START,
                 IntervalBoundaries.END,
@@ -267,6 +274,7 @@ class FromCandidatesByLogisticRegressionBIFinder(BIFinder):
         start_point: datetime.datetime,
         end_point: datetime.datetime,
         max_duration_seconds: float,
+        metrics: Metrics,
     ) -> Tuple[intervaltree.Interval, float, float]:
         # Calculate features for all intersecting intervals.
         features = self.calculate_features(candidates, start_point, end_point, max_duration_seconds)

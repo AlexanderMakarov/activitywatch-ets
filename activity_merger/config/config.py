@@ -32,7 +32,13 @@ JIRA_PROJECTS: str = "OTD,EDIF"
 # Number of folders to scan for git repos starting from any in `GIT_FOLDERS_WITH_REPOS`.
 # If GIT_FOLDERS_WITH_REPOS=code then value 2 here enables to check "code/repo/subrepo" but not "code/one/two/repo".
 GIT_DEPTH_IN_FOLDER = 2
-BAFinder_LogisticRegression_coef = [
+# 4 values for "simple" basic interval finder. Sum of them should be equal to 1.
+BIFINDER_SIMPLE_START_POINT_PROXIMITY = 0.5
+BIFINDER_SIMPLE_DENSITY = 0.1
+BIFINDER_SIMPLE_DURATION_ON_INTERSECTION_INTERVAL = 0.2
+BIFINDER_SIMPLE_DURATION_BETWEEN_MIN_AND_MAX = 0.2
+# 2 values for "LogisticRegression" basic interval finder. Better to setup with 'tune_rules.py'.
+BIFINDER_LOGISTIC_REGRESSION_COEF = [
     5.89142423e-01,
     5.27761326e00,
     8.11248910e-01,
@@ -47,7 +53,8 @@ BAFinder_LogisticRegression_coef = [
     -7.44458994e-01,
     -7.44916947e-01,
 ]
-BAFinder_LogisticRegression_intercept = -7.45467602
+BIFINDER_LOGISTIC_REGRESSION_INTERCEPT = -7.45467602
+
 
 
 # ---------- COMMON SETTINGS ---------- Settings with values suitable for most people.
@@ -164,16 +171,6 @@ def __ide_activity_name_sentence_builder(ide_name: str, groups_data: List[Dict[s
         sentence = f"{sentence} with '{file_list}' {'file' if len(file_descriptions) == 1 else 'files'}"
     return sentence + "."
 
-
-# TODO answers 2023-01-20 2: 47, 49, 112, 122, 144, 98, 164, 396, 161, 421,
-# TODO answers 2023-01-20 3: 47, 49, 87, 91, 128, 123, 71, 57, 143, 151, 333, 140, 168, 192, 343, 337, 171, 200, 206, 207, 208, 338, 334?, 339, 175, 335, 266,
-#                            374, 106, 150, 108, 241, 270, 148, 109, 243, 237, 387, 133, 155, 285, 336, 201, 185, 202, 301, 149, 340, 217, 316, 306, 317, 318,
-#                            61, 356, 36, 300, 275, 325, 276, 323?, 271, 163, 181, (there were no pre-story time!), 341, 165, 183
-# Training results: coef_=[[ 5.89142423e-01  5.27761326e+00  8.11248910e-01 -2.53023071e+00
-#    2.91461678e+00  1.76025011e-01  4.93918463e-01  7.49051148e-01
-#   -4.57952598e-04  0.00000000e+00  7.44482549e-01 -7.44458994e-01
-#   -7.44916947e-01]], intercept_=[-7.45467602]
-
 # Strategies to aggregate each watcher/exporter events into activities.
 # Order of strategies means order of handling and fulfillment of inter-strategies dependencies.
 # Therefore first should be AFK, next OS Windows Manager.
@@ -201,7 +198,7 @@ STRATEGIES = [
         bucket_prefix="aw-watcher-window",
         in_trustable_boundaries="strict",
         in_events_density_matters=True,
-        in_only_key_regexp={"title": "Slack - (.+?) - Huddle"},
+        in_only_key_regexp={"title": "^Slack - (.+?) - Huddle"},
         in_group_by_keys=[("title",)],
         out_self_sufficient=False,
         out_produces_good_activity_name=True,
@@ -212,7 +209,7 @@ STRATEGIES = [
         bucket_prefix="aw-watcher-window",
         in_trustable_boundaries="strict",
         in_events_density_matters=True,
-        in_only_key_regexp={"app": "zoom", "title": "Zoom Meeting|Meeting Chat|zoom|Zoom"},
+        in_only_key_regexp={"app": "^zoom$", "title": "Zoom Meeting|Meeting Chat|zoom|Zoom"},
         in_group_by_keys=[
             (
                 "app",
@@ -229,10 +226,10 @@ STRATEGIES = [
         in_trustable_boundaries="strict",
         in_events_density_matters=True,
         in_activities_may_overlap=True,
-        # "unknown" events are useless.
+        # "unknown" (linux) and "loginwindow" (MAC OS) events are useless.
         # "Slack - (.+?) - Huddle" is used by strategy above.
         # "Zoom Meeting|Meeting Chat|zoom|Zoom" is used by strategy above.
-        in_skip_key_regexp={"app": "unknown", "title": "Slack - (.+?) - Huddle|Zoom Meeting|Meeting Chat|zoom|Zoom"},
+        in_skip_key_regexp={"app": "unknown|loginwindow", "title": "Slack - (.+?) - Huddle|Zoom Meeting|Meeting Chat|zoom|Zoom"},
         in_only_not_afk=True,
         # Title may change very often, but better to keep track of apps as well.
         in_group_by_keys=[
@@ -284,7 +281,7 @@ STRATEGIES = [
     Strategy(
         name="WebBrowser",
         bucket_prefix="aw-watcher-web",
-        in_trustable_boundaries="start",
+        in_trustable_boundaries="dim",  # Events are created by browser watcher even when user AFK yet.
         in_events_density_matters=True,
         in_activities_may_overlap=True,
         in_only_not_afk=True,
@@ -327,7 +324,7 @@ STRATEGIES = [
         in_only_not_afk=True,
         in_group_by_keys=[("repo",)],
         out_produces_good_activity_name=True,
-        out_activity_name_sentence_builder=lambda l: f"Committed into {', '.join(a.grouping_data.get_data()['repo'] for a in l)} repository(ies).",
+        out_activity_name_sentence_builder=lambda l: f"Committed into {', '.join(a['repo'] for a in l)} repository(ies).",
     ),
 ]
 
