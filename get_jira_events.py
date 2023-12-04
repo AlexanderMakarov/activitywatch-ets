@@ -29,7 +29,7 @@ JIRA_TICKET_FIELDS_VARIABLE_UPDATE_COMPLEXITY = {"description", "summary", "labe
 
 
 def _get_jira_issues(
-    server_url: str, email: str, api_token: str, projects: List[str], search_datetime: datetime
+    server_url: str, email: str, api_token: str, projects: List[str], search_datetime: datetime.datetime
 ) -> List[jira.Issue]:
     assert server_url, "Jira server URL is not specified."
     assert email, "Jira login email is not specified."
@@ -39,7 +39,7 @@ def _get_jira_issues(
     connection = jira.JIRA(server=server_url, basic_auth=(email, api_token))
     LOG.info("Searching %s issues updated after %s and touched by %s.", projects, search_datetime, email)
     jql = (
-        f"project IN ({','.join(projects)}) AND updated >= '{search_datetime}' AND "
+        f"project IN ({','.join(projects)}) AND updated >= '{search_datetime.strftime('%Y-%m-%d %H:%M')}' AND "
         "(reporter was currentUser()"
         " OR commentedBy = currentUser()"
         " OR assignee was currentUser()"
@@ -300,7 +300,7 @@ def main():
     search_date = args.search_date
     if args.back_days:
         assert args.back_days >= 0, f"'back_days' value ({args.back_days}) should be positive or 0."
-        search_date = datetime.datetime.today().date().astimezone() - datetime.timedelta(days=args.back_days)
+        search_date = datetime.datetime.today().astimezone() - datetime.timedelta(days=args.back_days)
     search_datetime = ensure_datetime(search_date).replace(hour=0, minute=0, second=0, microsecond=0) + DAY_BORDER
     projects = [str(x).strip() for x in args.projects.split(",")]  # Clean up input from extra spaces.
     # Get "touched" Jira issues list.
@@ -311,7 +311,7 @@ def main():
     if not events:
         LOG.warning(
             "Can't find Jira activity on %s for %s account in [%s] projects.",
-            args.search_date,
+            search_datetime,
             args.email,
             args.projects,
         )
