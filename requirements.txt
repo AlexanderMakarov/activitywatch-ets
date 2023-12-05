@@ -1,8 +1,14 @@
 aw-client
-parameterized  # For unit tests only.
-selenium  # For get_outlook_events.py only.
-jira  # For get_jira_events.py only.
-dill  # For tune_rules.py only. Pickle wrapper working with lambdas.
-pick
 intervaltree
 scikit-learn
+# For get_outlook_events.py.
+selenium
+# For get_jira_events.py.
+jira
+# For get_google_calendar_events.py.
+google-api-python-client
+# For tune_rules.py.
+dill
+pick
+# For unit tests.
+parameterized

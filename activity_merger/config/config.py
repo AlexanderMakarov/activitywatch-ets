@@ -32,6 +32,9 @@ JIRA_PROJECTS: str = "OTD,EDIF"
 # Number of folders to scan for git repos starting from any in `GIT_FOLDERS_WITH_REPOS`.
 # If GIT_FOLDERS_WITH_REPOS=code then value 2 here enables to check "code/repo/subrepo" but not "code/one/two/repo".
 GIT_DEPTH_IN_FOLDER = 2
+# Google Calendar ID to get events from. Often equal to email address or user name.
+# Go to Calendar settings and scroll to "Integrate calendar" section, here would be "Calendar ID" field.
+GOOGLE_CALENDAR_ID = 'email@gmail.com'
 # 4 values for "simple" basic interval finder. Sum of them should be equal to 1.
 BIFINDER_SIMPLE_START_POINT_PROXIMITY = 0.5
 BIFINDER_SIMPLE_DENSITY = 0.1
@@ -364,3 +367,9 @@ JIRA_ISSUES_MAX = 100
 GIT_SCRAPER_NAME = "git_aw_events_scraper"
 # ActivityWatch bucket ID for GIT-based events.
 GIT_BUCKET_ID = f"{GIT_SCRAPER_NAME}_{socket.gethostname()}"
+# Google Service Account keys file path.
+GOOGLE_SERVICE_ACCOUNT_KEY_PATH = "google_api_service_account_key.json"
+# ActivityWatch client name for Google Calendar events.
+GOOGLE_CALENDAR_SCRAPER_NAME = "gcalendar_aw_scraper"
+# ActivityWatch bucket ID for Google Calendar based events.
+GOOGLE_CALENDAR_BUCKET_ID = f"{GOOGLE_CALENDAR_SCRAPER_NAME}_{socket.gethostname()}"
