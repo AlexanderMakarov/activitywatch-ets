@@ -100,7 +100,9 @@ def main():
         "--service-account-file",
         type=str,
         default=GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
-        help="Path to service account file for which is shared Google Calendar." " TODO",
+        help="Path to service account with shared access to Google Calendar keys file."
+        " Service account have to be created in project with Google Calendar API enabled."
+        "For details see README.md in repository.",
     )
     parser.add_argument(
         "-r",

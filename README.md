@@ -136,6 +136,36 @@ the midnight and ends at the time of commit, second commit starts from the first
 But in contrast to Jira (and relevant projects) it handles all repositories separately,
 i.e. time of commit from A repo is not used for B repo events.
 
+### Google Calendar Events
+
+To import Google Calendar events into local (listening on localhost:5600) ActivityWatch server:
+- (one time action) Set in [config.py](/activity_merger/config/config.py) at least `GOOGLE_CALENDAR_ID`.
+  Probably it would be necessary to correct `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` as well.
+- (one time action) Need to provide Google Service Account key(s) file for the script.
+  Service Account is kinda user with its own email address. Access to Google Calendar may be provided
+  by sharing this calendar with Service Account. The whole process may be described as:
+  - Go to [Google Cloud Console](https://console.cloud.google.com/).
+  - Create a new project or select an existing one (dropdown list at top left).
+  - Search for "Google Calendar API" and open it.
+  - Screen should have "ENABLE" (API) button (or "MANAGE" if already enabled). Press/enable it.
+  - Next go back, search for "Credentials" with list of "API keys", "Service Accounts".
+  - Press "+ CREATE CREDENTIALS" button at top left of page, select "Service account" in dropdown list.
+  - In "Service account details" section type any name, press "Create and continue" button.
+  - In "Grant this service account access to project" select role "Viewer" and press "DONE" button at bottom.
+  - In "Service Accounts" list should appear new Service Account. Press on it.
+  - Proceed to "KEYS" tab and create/download key(s) file as "google_api_service_account_key.json" in
+    folder root (or other path in `GOOGLE_SERVICE_ACCOUNT_KEY_PATH`).
+  - Open Service Account key(s) file and copy email from it. This email may be found in Cloud Console as well.
+  - Next open Google Calendar app/page and on your target calendar press "3-dots" button at right.
+    Press "Settings and sharing". In "Share with specific people or groups" add Service Account email.
+- Run [get_google_calendar_events.py](/get_google_calendar_events.py) script with target date
+  (run with `--help` for details).
+Script will get Google Calendar events and upload them to ActivityWatch.
+
+If you are getting 403 error with `Details: "[{'domain': 'global', 'reason': 'notFound', 'message': 'Not Found'}]`
+then most probably ID of the shared calendar (`GOOGLE_CALENDAR_ID`) is wrong. Unfortunately there is no way to
+list all available calendars without adding extra access to a service account.
+
 ## Configure get_activities.py
 
 Everything is configured in [config.py](/activity_merger/config/config.py).
@@ -180,13 +210,13 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
       I.e. add ability to separate into "activity" not only by the whole "title" but by fraction.
 - [x] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
 - [x] Shift "day border" to 5AM and make it configurable.
+- [x] Add Google Calendar importer.
 - [ ] Implement BIFinder to search Jira ID-s in Jira, Windows, IDEA, VSCode, Browser activities.
 - [ ] Implement BIFinder to search "activities edges".
 - [ ] Find a way to mark some events as "source of description" and other as "source of interval".
       Git/Jira events are good for description, Window/IDEA - for interval, Browser/Outlook - both.
 - [ ] Add more features into FromCandidatesByLogisticRegressionBIFinder.
 - [ ] Try to aggregate "result" activities with help of LLM.
-- [ ] Add Google Calendar importer. See https://github.com/ActivityWatch/aw-import-ical (which is on poetry :( )).
 - [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in "config.py".
 - [ ] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust "config.py and code if needed.
