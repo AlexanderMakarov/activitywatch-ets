@@ -31,7 +31,6 @@ from pick import pick
 import activity_merger.config.config as config
 from activity_merger.domain.analyzer import (
     RA_DEBUG_BUCKET_NAME,
-    AnalyzerStep,
     ChopActivitiesByResultTreeStep,
     DebugBucketsHandler,
     MakeCandidatesTreeStep,
@@ -43,7 +42,7 @@ from activity_merger.domain.analyzer import (
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.helpers.helpers import datetime_to_time_str, setup_logging, valid_date
-from get_activities import clean_debug_buckets_and_apply_strategies_on_one_day_events, reload_debug_buckets
+from get_activities import UploadDebugBucketsAndResetStep, clean_debug_buckets_and_apply_strategies_on_one_day_events
 
 
 LOG = setup_logging()
@@ -394,22 +393,6 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithBIFinderStep):
         )
 
 
-class UploadDebugBucketsAndResetStep(AnalyzerStep):
-    def __init__(self, client: ActivityWatchClient):
-        super(UploadDebugBucketsAndResetStep, self).__init__()
-        self.client = client
-
-    def get_description(self) -> str:
-        return "Uploading 'debug' buckets."
-
-    def check_context(self, context: Dict[str, any]) -> None:
-        assert "debug_buckets_handler" in context, "Need in 'debug_buckets_handler' property"
-
-    def run(self, context: Dict[str, any], metrics: Metrics):
-        debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
-        reload_debug_buckets(debug_buckets_handler.events, self.client)
-
-
 def tune_rules(events_datetime: datetime.datetime, is_use_saved_context: bool):
     """
     Gets all ActivityWatch events for the specified date, builds linked list of intervals from them,
@@ -445,7 +428,7 @@ def tune_rules(events_datetime: datetime.datetime, is_use_saved_context: bool):
             MakeResultTreeFromSelfSufficientActivitiesStep(True),
             ChopActivitiesByResultTreeStep(True, True),
             MakeCandidatesTreeStep(True),
-            UploadDebugBucketsAndResetStep(client),
+            UploadDebugBucketsAndResetStep(client, True),
             trainer_step,
         ],
     )

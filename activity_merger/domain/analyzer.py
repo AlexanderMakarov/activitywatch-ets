@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import intervaltree
 
 from activity_merger.domain.basic_interval_finder import BIFinder
-from activity_merger.helpers.event_helpers import activity_by_strategy_to_str
+from activity_merger.helpers.event_helpers import activity_by_strategy_to_str, event_data_to_str
 from activity_merger.helpers.helpers import from_start_to_end_to_str
 
 from ..config.config import DEBUG_BUCKET_PREFIX, LIMIT_OF_RESULTING_ACTIVITIES, LOG, MAX_ACTIVITY_DURATION_SEC
@@ -446,6 +446,12 @@ def find_next_uncovered_intervals(
     return (start_point, end_point)
 
 
+def _extend_events_from_activitybs(events: List, activitybs: ActivityByStrategy, interval: intervaltree.Interval):
+    for event in activitybs.events:
+        if interval.overlaps(event.timestamp, event.timestamp + event.duration):
+            events.append(event)
+
+
 def build_result_activity(
     ba_interval: intervaltree.Interval,
     candidates_tree: intervaltree.IntervalTree,
@@ -454,7 +460,7 @@ def build_result_activity(
 ) -> Activity:
     """
     Builds "result" activity.
-    :param ba_interval: "Basict" activity interval.
+    :param ba_interval: "Base" activity interval.
     :param candidates_tree: Tree of candidates to add parts of overlapped activity-by-strategy-es into
     "result" activity.
     :param is_only_good_strategies_for_description: Flat to use for "result" activity description
@@ -465,19 +471,16 @@ def build_result_activity(
     # Find all overlapping activities, even including those which was used for "basic interval".
     overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)
     LOG.info("Basic interval is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
-    ra_events = ba_interval.data.events
-    overlapping_activities: List[ActivityByStrategy] = [ba_interval.data]
+    ra_duration = ba_interval.length().total_seconds()
+    ra_events = []
+    overlapping_activities: List[ActivityByStrategy] = []
     for interval in overlapping_intervals:
-        if interval == ba_interval:
-            candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
-            continue
         activitybs: ActivityByStrategy = interval.data
         boundaries = activitybs.strategy.in_trustable_boundaries
         # 1. If BA overlaps activity completely then just concatenate data from it into BA.
         if ba_interval.contains_interval(interval):
-            ra_events.extend(activitybs.events)
+            ra_events.extend(activitybs.events)  # All events in interval for sure.
             overlapping_activities.append(activitybs)
-            candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
             metrics.incr("activities placed completely inside basic interval", interval.length().total_seconds())
             continue
         elif boundaries == IntervalBoundaries.STRICT:
@@ -496,14 +499,13 @@ def build_result_activity(
         if ba_interval.contains_point(interval.begin):
             if boundaries == IntervalBoundaries.START:
                 # If activity is `in_trustable_boundaries=start` then concatenate data from it into BA.
-                ra_events.extend(activitybs.events)
+                _extend_events_from_activitybs(ra_events, activitybs, ba_interval)
                 overlapping_activities.append(activitybs)
-                candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
                 metrics.incr("activities absorbed by basic interval at the start", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
                 # Split activity and concatenate last part with BA. First part is not needed anyway.
                 split_activity = _cut_activity_end(activitybs, ba_interval.end)
-                ra_events.extend(split_activity.events)
+                ra_events.extend(split_activity.events)  # All events in interval for sure.
                 overlapping_activities.append(split_activity)
                 metrics.incr("activities enhancing basic interval by the start", split_activity.duration())
             else:
@@ -516,15 +518,14 @@ def build_result_activity(
         if ba_interval.contains_point(interval.end):
             if boundaries == IntervalBoundaries.END:
                 # If activity is `in_trustable_boundaries=end` then concatenate data from it into BA.
-                ra_events.extend(activitybs.events)
+                _extend_events_from_activitybs(ra_events, activitybs, ba_interval)
                 overlapping_activities.append(activitybs)
-                candidates_tree.remove(interval)  # Make sure it won't appear on other "result" activity.
                 metrics.incr("activities absorbed by basic interval at the end", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
                 # If activity is `in_trustable_boundaries=whole` then split activity,
                 # and concatenate first part with BA.
                 split_activity = _cut_activity_start(activitybs, ba_interval.begin)
-                ra_events.extend(split_activity.events)
+                ra_events.extend(split_activity.events)  # All events in interval for sure.
                 overlapping_activities.append(split_activity)
                 metrics.incr("activities enhancing basic interval by the end", split_activity.duration())
             else:
@@ -537,19 +538,16 @@ def build_result_activity(
         if boundaries == IntervalBoundaries.DIM:
             tmp = _cut_activity_start(activitybs, ba_interval.begin)
             tmp = _cut_activity_end(tmp, ba_interval.end)
-            ra_events.extend(tmp.events)
+            ra_events.extend(tmp.events)  # All events in interval for sure.
             overlapping_activities.append(tmp)
-            metrics.incr("activities enhancing basic interval by the middle", ba_interval.length().total_seconds())
+            metrics.incr("activities enhancing basic interval by the middle", ra_duration)
             continue
         else:
             # Otherwise BA is in the middle of activity with START or END boundaries.
             continue
 
     # Build raw RA, i.e. with "not sure end". Fill it with all the events from the "enhancing" activities.
-    ra_duration = ba_interval.length().seconds
-    name = _build_activity_name(
-        overlapping_activities, metrics, ra_duration, not is_only_good_strategies_for_description
-    )
+    name = _build_activity_name(overlapping_activities, metrics, ra_duration, is_only_good_strategies_for_description)
     metrics.incr("result activities", ra_duration)
     return Activity(
         ba_interval.begin,
@@ -560,7 +558,10 @@ def build_result_activity(
 
 
 def _build_activity_name(
-    activitiesbs: List[ActivityByStrategy], metrics: Metrics, duration_sec: float, is_use_all_strategies: bool
+    activitiesbs: List[ActivityByStrategy],
+    metrics: Metrics,
+    duration_sec: float,
+    is_only_good_strategies_for_description: bool,
 ) -> str:
     """
     Builds name of the resulting activity from list of `ActivityByStrategy`-s.
@@ -572,7 +573,7 @@ def _build_activity_name(
     :param activitiesbs: List of `ActivityByStrategy` making resulting activity.
     :param metrics: Metrics object to report details into.
     :param duration_sec: Duration of the resulting activity.
-    :param is_use_all_strategies: Flag to build activity description from all strategies, not only from "good" ones.
+    :param is_only_good_strategies_for_description: Flag to build activity description only from "good" ones.
     :return: Resulting activity description.
     """
     # Group activities by Strategy. Keep map of strategies to name. Name is a key in both dictionaries.
@@ -598,9 +599,6 @@ def _build_activity_name(
         for x in sorted_strategies
     ]
 
-    # Determine whether need to include all strategies in the result.
-    include_all = is_use_all_strategies or not sorted_strategies[0].out_produces_good_activity_name
-
     # Process each group of activities to build sentence.
     resulting_names: List[str] = []
     for grouped_activity_list in sorted_grouped_activities:
@@ -609,20 +607,20 @@ def _build_activity_name(
         # grouped here then resulting dictionary would look like {app=[Slack, Code], title=[Meeting, MyProject]}.
         # Use the strategy's out_activity_name_builder to get the name, or use a default logic.
         strategy = strategy_to_name[grouped_activity_list[0].strategy.name]
+        if strategy.out_produces_good_activity_name:
+            metrics.incr("result activities with good name", duration_sec)
+        elif is_only_good_strategies_for_description:
+            # If strategy doesn't produce good activity name but it is required then skip.
+            break
         name_builder = (
             strategy.out_activity_name_sentence_builder
             if strategy.out_activity_name_sentence_builder
             else lambda x: ", ".join([f"{k}={v}" for k, v in x.items()])
         )
-
-        # Append to resulting names if the strategy produces a good activity name.
         groups_data = [x.grouping_data.get_data() for x in grouped_activity_list]
         generated_name = name_builder(groups_data)
         if generated_name:
             resulting_names.append(generated_name)
-        if not include_all and not strategy.out_produces_good_activity_name:
-            metrics.incr("result activities with good name", duration_sec)
-            break
     metrics.incr(f"result activities with name combined from {len(sorted_grouped_activities)} strategies", duration_sec)
     return " ".join(resulting_names)
 
@@ -721,7 +719,7 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
                         + ", ".join(x.data for x in overlap)
                     )
                 duration = activity.duration()
-                name = _build_activity_name([activity], metrics, duration, True)
+                name = _build_activity_name([activity], metrics, duration, False)
                 metrics.incr("result activities", duration)
                 ra = Activity(
                     activity.suggested_start_time,
@@ -873,11 +871,16 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
         metrics.incr(
             f"base intervals with {bi_score_description} score", (bi_interval.end - bi_interval.begin).total_seconds()
         )
+        if isinstance(bi_interval.data, ActivityByStrategy):
+            data = (activity_by_strategy_to_str(bi_interval.data),)
+        else:
+            data = str(bi_interval.data)
         LOG.info(
-            "Found 'base interval' with %.2f '%s' score: %s",
+            "Found 'base interval' with %.2f '%s' score on %s with data: %s",
             bi_score,
             bi_score_description,
-            activity_by_strategy_to_str(bi_interval.data),
+            from_start_to_end_to_str(bi_interval.begin, bi_interval.end),
+            data,
         )
         # Provide metric about "how distinguishable basic interval was".
         if closest_candidate_score is not None:

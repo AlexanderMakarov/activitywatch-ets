@@ -35,6 +35,8 @@ GIT_DEPTH_IN_FOLDER = 2
 # Google Calendar ID to get events from. Often equal to email address or user name.
 # Go to Calendar settings and scroll to "Integrate calendar" section, here would be "Calendar ID" field.
 GOOGLE_CALENDAR_ID = 'email@gmail.com'
+# Default BIFinder to use.
+DEFAULT_BIFINDER = "proximity-duration"
 # 4 values for "simple" basic interval finder. Sum of them should be equal to 1.
 BIFINDER_SIMPLE_START_POINT_PROXIMITY = 0.5
 BIFINDER_SIMPLE_DENSITY = 0.1

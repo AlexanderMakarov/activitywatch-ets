@@ -1,14 +1,16 @@
 import datetime
 from collections import namedtuple
+import re
 from typing import List, Optional, Set, Tuple
 
 import intervaltree
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 
-from activity_merger.domain.input_entities import IntervalBoundaries
+from activity_merger.domain.input_entities import ActivityByStrategy, IntervalBoundaries, Strategy
 from activity_merger.domain.metrics import Metrics
 from activity_merger.helpers.event_helpers import activity_by_strategy_to_str
+from activity_merger.helpers.helpers import datetime_to_time_str, from_start_to_end_to_str
 
 from ..config.config import (
     BIFINDER_SIMPLE_DENSITY,
@@ -35,11 +37,17 @@ class BIFinder:
         metrics: Metrics,
     ) -> Tuple[intervaltree.Interval, float, float]:
         """
-        Finds 2 top candidates of "basic interval" and returns in order: top candidate, score of it, score of 2nd candidate.
+        Finds 2 top candidates of "basic interval" and returns in order: top candidate, score of it,
+        score of 2nd candidate.
         Assumes that len of candidates and features are equal and more than one.
-        :param candidates: List of candidates.
-        :param features: List of features ordered in the same way as candidates.
+        :param candidates: List of candidates where "data" property contains `ActivityByStrategy`.
+        :param start_point: Time need to start search from.
+        :param end_point: Time where activity should stop because next either other activity/interval is already found
+        or no more data.
+        :param max_duration_seconds: Maximum duration for interval.
+        :param metrics: `Metrics` instance to accumulate metrics.
         :return: Tuple of (top_candidate, top_candidate_score, pre_top_candidate_score).
+        'top_candidate' is never `None`.
         """
         raise NotImplementedError("Not implemented")
 
@@ -115,9 +123,7 @@ class FromCandidateActivitiesByScoreBIFinder(BIFinder):
         score = sorted_results[0][0]
         # Provide metric and log about new basic interval found.
         score_description = self.score_to_desc(score)
-        metrics.incr(
-            f"basic intervals with {score_description} score", (ba_interval.end - ba_interval.begin).total_seconds()
-        )
+        metrics.incr(f"basic intervals with {score_description} score", ba_interval.data.duration())
         LOG.info(
             "Found 'basic interval' with %.0f '%s' score: %s",
             score,
@@ -129,15 +135,186 @@ class FromCandidateActivitiesByScoreBIFinder(BIFinder):
             closest_candidate_score = sorted_results[1][0]
             distance_desc = self.score_to_desc(score - closest_candidate_score)
             metrics.incr(
-                f"basic intervals with {distance_desc} distance from other candidates",
-                (ba_interval.end - ba_interval.begin).total_seconds(),
+                f"basic intervals with {distance_desc} distance from other candidates", ba_interval.data.duration()
             )
         else:
-            metrics.incr(
-                "basic intervals without other candidates on interval",
-                (ba_interval.end - ba_interval.begin).total_seconds(),
-            )
+            metrics.incr("basic intervals without other candidates on interval", ba_interval.data.duration())
         return (ba_interval, score, closest_candidate_score)
+
+
+class FromCandidatesByProximityAndDurationBIFinder(BIFinder):
+    """
+    Tries to find base interval by "closest to start_point and longest" properties of candidates.
+    """
+
+    max_rewarded_start_point_proximity_sec = 120  # TODO make this configurable
+
+    def _check_interval_starts_too_far(self, candidate_start_point, start_point: datetime.datetime):
+        start_point_proximity = (candidate_start_point - start_point).total_seconds()
+        return start_point_proximity > self.max_rewarded_start_point_proximity_sec
+
+    @staticmethod
+    def _calculate_score(
+        interval: intervaltree.Interval,
+        start_point: datetime.datetime,
+        end_point: datetime.datetime,
+    ) -> float:
+        if not interval:
+            return 0.0
+        # Proximity score calculation
+        proximity_score = 0.0
+        if interval.begin <= start_point:
+            proximity_score = 0.5
+        else:
+            seconds_after_start = (interval.begin - start_point).total_seconds()
+            if seconds_after_start <= 120:  # Decrease score for up to 120 seconds
+                proximity_score = 0.5 - 0.1 * (seconds_after_start // 60)
+        # Overlap score calculation
+        overlap_start = max(interval.begin, start_point)
+        overlap_end = min(interval.end, end_point)
+        overlap_duration = (overlap_end - overlap_start).total_seconds()
+        total_duration = (end_point - start_point).total_seconds()
+        overlap_score = 0.5 * (overlap_duration / total_duration) if total_duration > 0 else 0.0
+        # Total score is sum.
+        return proximity_score + overlap_score
+
+    def _find_2_longest_candidates(
+        self, candidates: List[ActivityByStrategy], start_point: datetime.datetime, max_duration_seconds: float
+    ):
+        top = pre_top = None
+        top_duration = pre_top_duration = 0
+        for candidate in candidates:
+            if self._check_interval_starts_too_far(candidate.begin, start_point):
+                break
+            duration = (candidate.end - candidate.begin).total_seconds()
+            if duration > max_duration_seconds:
+                # Skip too long candidates because they usually means "too broad traits to group by".
+                continue
+            elif duration > top_duration:
+                # Update second-longest candidate
+                pre_top, pre_top_duration = top, top_duration
+                # Update longest candidate
+                top, top_duration = candidate, duration
+            elif duration > pre_top_duration:
+                # Update second-longest candidate
+                pre_top, pre_top_duration = candidate, duration
+        return top, pre_top
+
+    def _find_2_longest_candidates_flexible(
+        self, candidates: List[ActivityByStrategy], start_point: datetime.datetime, max_duration_seconds: float
+    ):
+        top, pre_top = self._find_2_longest_candidates(candidates, start_point, max_duration_seconds)
+        if top is None:
+            # If no suitable longest candidate found then probably there is AFK interval and only very long
+            # (aka too broad) intervals makes jump over it. So adjust start_point and make one more pass.
+            new_start_point = None
+            # Find where remained "not too broad" candidates start.
+            for candidate in candidates:
+                duration = (candidate.end - candidate.begin).total_seconds()
+                if duration <= max_duration_seconds:
+                    new_start_point = candidate.begin
+                    break
+            top, pre_top = self._find_2_longest_candidates(candidates, new_start_point, max_duration_seconds)
+        return top, pre_top
+
+    def find_top(
+        self,
+        candidates: List[intervaltree.Interval],
+        start_point: datetime.datetime,
+        end_point: datetime.datetime,
+        max_duration_seconds: float,
+        metrics: Metrics,
+    ) -> Tuple[intervaltree.Interval, float, float]:
+        candidates = sorted(candidates, key=lambda x: x.begin)
+        corrected_end_point = min(end_point, start_point + datetime.timedelta(max_duration_seconds))
+        top_candidate = second_candidate = None
+        top_candidate_score = second_candidate_score = 0.0
+        top_candidate, second_candidate = self._find_2_longest_candidates_flexible(
+            candidates, start_point, max_duration_seconds
+        )
+        if not top_candidate:
+            candidates_intervals = [from_start_to_end_to_str(x.begin, x.end) for x in candidates]
+            raise AssertionError(
+                f"Top candidate was not found with start_point={datetime_to_time_str(start_point)}, "
+                f"max_rewarded_start_point_proximity_sec={self.max_rewarded_start_point_proximity_sec}, "
+                f" {len(candidates_intervals)} candidates=" + ", ".join(candidates_intervals)
+            )
+        top_candidate_score = self._calculate_score(top_candidate, start_point, corrected_end_point)
+        second_candidate_score = self._calculate_score(second_candidate, start_point, corrected_end_point)
+        return top_candidate, top_candidate_score, second_candidate_score
+
+
+class JiraIdBIFinder(FromCandidatesByProximityAndDurationBIFinder):
+    """
+    Finds basic interval in 'candidates_tree' by looking for Jira ID in activity-by-strategy-es and trying
+    to make consequent intervals by same Jira ID.
+    Rollbacks to simple "closes to start_point and longest" strategy if there are no "Jira IDs" near start_point.
+    """
+
+    jira_id_pattern = r"\b[A-Z]+-[0-9]+\b"  # Regular expression for Jira ID
+
+    def find_top(
+        self,
+        candidates: List[intervaltree.Interval],
+        start_point: datetime.datetime,
+        end_point: datetime.datetime,
+        max_duration_seconds: float,
+        metrics: Metrics,
+    ) -> Tuple[intervaltree.Interval, float, float]:
+        candidates = sorted(candidates, key=lambda x: x.begin)
+        # Search Jira ID-s in candidates.
+        jira_intervals = dict()  # Data is Jira ID.
+        last_end_time = start_point + datetime.timedelta(seconds=self.max_rewarded_start_point_proximity_sec)
+        for candidate in candidates:
+            activitybs: ActivityByStrategy = candidate.data
+            # 1. Search Jira ID in "grouping_data".
+            found_jira_ids = re.findall(self.jira_id_pattern, str(activitybs.grouping_data.get_data()))
+            # 2. Search Jira ID in the whole body.
+            # TODO found_jira_ids = re.findall(self.jira_id_pattern, str(activitybs.events)))
+            if found_jira_ids:
+                metrics.incr("candidates with Jira ID", activitybs.duration())
+                for jira_id in found_jira_ids:
+                    new_interval = intervaltree.Interval(candidate.begin, candidate.end, jira_id)
+                    # Merge new interval into jira_intervals if Jira ID matches.
+                    same_jira_id_interval = jira_intervals.get(jira_id, None)
+                    if same_jira_id_interval:
+                        # Check we may merge new interval with existing (if adjacent or overlap).
+                        if new_interval.begin <= same_jira_id_interval.end:
+                            new_interval = intervaltree.Interval(
+                                new_interval.begin, max(new_interval.end, same_jira_id_interval.end), jira_id
+                            )
+                            metrics.incr(
+                                "adjacent candidates with same Jira ID",
+                                (new_interval.end - new_interval.begin).total_seconds(),
+                            )
+                            jira_intervals[jira_id] = new_interval
+                    elif self._check_interval_starts_too_far(candidate.begin, start_point):
+                        # Candidate is very far from start_point, so we won't find good candidates anymore, stop.
+                        break
+                    else:
+                        # Add new candidate with Jira ID.
+                        jira_intervals[jira_id] = new_interval
+                        last_end_time = max(last_end_time, new_interval.end)
+                    # Shift last_end_time.
+                    last_end_time = max(last_end_time, new_interval.end)
+            elif candidate.begin > last_end_time:
+                # New candidates event with Jira ID won't expand existing candidates, stop.
+                break
+
+        # If Jira ID-s were found then choose top candidates from them.
+        if jira_intervals:
+            # Search 2 top scored candidates.
+            top_candidate = None
+            top_score = pre_top_score = 0
+            for candidate in jira_intervals:
+                score = self._calculate_score(candidate, start_point, end_point)
+                if score > top_score:
+                    pre_top_score = top_score
+                    top_candidate, top_score = candidate, score
+            return top_candidate, top_score, pre_top_score
+
+        # If Jira ID-s weren't found then rollback to "super" implementation.
+        return super().find_top(candidates, start_point, end_point, max_duration_seconds, metrics)
 
 
 IntervalFeatures = namedtuple(

@@ -8,7 +8,9 @@ import aw_client
 
 import activity_merger.config.config as config
 from activity_merger.domain.analyzer import (
+    AnalyzerStep,
     ChopActivitiesByResultTreeStep,
+    DebugBucketsHandler,
     MakeCandidatesTreeStep,
     MakeResultTreeFromSelfSufficientActivitiesStep,
     MergeCandidatesTreeIntoResultTreeWithBIFinderStep,
@@ -17,6 +19,8 @@ from activity_merger.domain.analyzer import (
 from activity_merger.domain.basic_interval_finder import (
     FromCandidateActivitiesByScoreBIFinder,
     FromCandidatesByLogisticRegressionBIFinder,
+    FromCandidatesByProximityAndDurationBIFinder,
+    JiraIdBIFinder,
 )
 from activity_merger.domain.input_entities import Event
 from activity_merger.domain.merger import apply_strategies_on_events
@@ -90,11 +94,36 @@ def reload_debug_buckets(debug_dict: Dict[str, List[Event]], client: aw_client.A
         LOG.info(upload_events(events, config.DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
 
 
-BI_FINDER_NAMES = {
-    "simple": FromCandidateActivitiesByScoreBIFinder(),
+class UploadDebugBucketsAndResetStep(AnalyzerStep):
+    """
+    Step to upload debug buckets and clear them from `AnalyzerStep` context.
+    """
+
+    def __init__(self, client: aw_client.ActivityWatchClient, is_import_debug_buckets: bool):
+        super(UploadDebugBucketsAndResetStep, self).__init__()
+        self.client = client
+        self.is_import_debug_buckets = is_import_debug_buckets
+
+    def get_description(self) -> str:
+        return "Uploading 'debug' buckets if need."
+
+    def check_context(self, context: Dict[str, any]) -> None:
+        if self.is_import_debug_buckets:
+            assert "debug_buckets_handler" in context, "Need in 'debug_buckets_handler' property"
+
+    def run(self, context: Dict[str, any], metrics: Metrics):
+        if self.is_import_debug_buckets:
+            debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
+            reload_debug_buckets(debug_buckets_handler.events, self.client)
+
+
+BI_FINDERS = {
+    "manual-score": FromCandidateActivitiesByScoreBIFinder(),
     "logistic-regression": FromCandidatesByLogisticRegressionBIFinder().with_coefs(
         config.BIFINDER_LOGISTIC_REGRESSION_COEF, config.BIFINDER_LOGISTIC_REGRESSION_INTERCEPT
     ),
+    "proximity-duration": FromCandidatesByProximityAndDurationBIFinder(),
+    "jira-id": JiraIdBIFinder(),
 }
 
 
@@ -117,6 +146,8 @@ def convert_aw_events_to_activities(
     :return: `AnalyzerResult` object or `None` if no intervals to analyze were found.
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
+    bi_finder = BI_FINDERS[bi_finder_name]  # Fail on wrong bi_finder_name as soon as possible.
+
     LOG.info("Starting to build activities per strategy...")
     strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_datetime, client)
     metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
@@ -126,13 +157,14 @@ def convert_aw_events_to_activities(
         "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in strategy_apply_result),
     )
 
-    bi_finder = BI_FINDER_NAMES[bi_finder_name]
     analyzer_result = aggregate_strategies_results_to_activities(
         strategy_apply_results=strategy_apply_result,
         steps=[
             MakeResultTreeFromSelfSufficientActivitiesStep(is_add_debug_buckets=True),
             ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),
             MakeCandidatesTreeStep(is_add_debug_buckets=is_import_debug_buckets),
+            # Upload debug buckets before last most complext step - it may fail.
+            UploadDebugBucketsAndResetStep(client=client, is_import_debug_buckets=is_import_debug_buckets),
             MergeCandidatesTreeIntoResultTreeWithBIFinderStep(
                 bi_finder=bi_finder,
                 is_add_debug_buckets=is_import_debug_buckets,
@@ -173,7 +205,8 @@ def main():
         "-f",
         "--bi-finder",
         dest="bi_finder_name",
-        choices=BI_FINDER_NAMES.keys(),
+        default=config.DEFAULT_BIFINDER,
+        choices=BI_FINDERS.keys(),
         help="Basic interval finder to use."
         " Note that only 'simple' works with some predefined values, other need to tune.",
     )
