@@ -206,7 +206,7 @@ STRATEGIES = [
         in_group_by_keys=[("title",)],
         out_self_sufficient=False,
         out_produces_good_activity_name=True,
-        out_activity_name_sentence_builder=lambda l: f"On Slack Huddle with {', '.join(a.grouping_data.get_data()['title'] for a in l)}.",
+        out_activity_name_sentence_builder=lambda x: f"On Slack Huddle with {', '.join(d['title'] for d in x)}.",
     ),
     Strategy(
         name="WindowsManager->Zoom meeting",
@@ -253,7 +253,7 @@ STRATEGIES = [
         in_may_be_offline=True,
         out_self_sufficient=True,
         out_produces_good_activity_name=True,
-        out_activity_name_sentence_builder=lambda x: x[0].grouping_data.get_data()["data"],  # The only event and key.
+        out_activity_name_sentence_builder=lambda x: x[0]["data"],  # The only event and key.
     ),
     Strategy(
         name="Outlook",
@@ -328,7 +328,7 @@ STRATEGIES = [
         in_only_not_afk=True,
         in_group_by_keys=[("repo",)],
         out_produces_good_activity_name=True,
-        out_activity_name_sentence_builder=lambda l: f"Committed into {', '.join(a['repo'] for a in l)} repository(ies).",
+        out_activity_name_sentence_builder=lambda x: f"Committed into {', '.join(d['repo'] for d in x)} repository(ies).",
     ),
 ]
 
