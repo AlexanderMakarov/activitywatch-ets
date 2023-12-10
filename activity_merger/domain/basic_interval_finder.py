@@ -248,10 +248,22 @@ class JiraIdBIFinder(FromCandidatesByProximityAndDurationBIFinder):
     """
     Finds basic interval in 'candidates_tree' by looking for Jira ID in activity-by-strategy-es and trying
     to make consequent intervals by same Jira ID.
-    Rollbacks to simple "closes to start_point and longest" strategy if there are no "Jira IDs" near start_point.
+    Rollbacks to `FromCandidatesByProximityAndDurationBIFinder` behavior if no Jira ID-s found.
     """
 
-    jira_id_pattern = r"\b[A-Z]+-[0-9]+\b"  # Regular expression for Jira ID
+    jira_id_pattern = r"\b[A-Z]+-[0-9]+\b"  # Regular expression for Jira ID.
+
+    def _find_jira_id(self, activitybs: ActivityByStrategy) -> Set[str]:
+        grouping_data_jira_ids = re.findall(self.jira_id_pattern, str(activitybs.grouping_data.get_data()))
+        if grouping_data_jira_ids:
+            # If there are Jira IDs in the "grouping_data" then they 100% categorise the whole inteval.
+            return grouping_data_jira_ids
+        # Otherwise search Jira IDs in event's data. It won't cover the whole inteval but may be relevant.
+        event_jira_ids = []
+        for event in activitybs.events:
+            jira_ids = re.findall(self.jira_id_pattern, str(event.data))
+            event_jira_ids.extend(jira_ids)
+        return event_jira_ids
 
     def find_top(
         self,
@@ -267,13 +279,10 @@ class JiraIdBIFinder(FromCandidatesByProximityAndDurationBIFinder):
         last_end_time = start_point + datetime.timedelta(seconds=self.max_rewarded_start_point_proximity_sec)
         for candidate in candidates:
             activitybs: ActivityByStrategy = candidate.data
-            # 1. Search Jira ID in "grouping_data".
-            found_jira_ids = re.findall(self.jira_id_pattern, str(activitybs.grouping_data.get_data()))
-            # 2. Search Jira ID in the whole body.
-            # TODO found_jira_ids = re.findall(self.jira_id_pattern, str(activitybs.events)))
-            if found_jira_ids:
+            jira_ids = self._find_jira_id(activitybs)
+            if jira_ids:
                 metrics.incr("candidates with Jira ID", activitybs.duration())
-                for jira_id in found_jira_ids:
+                for jira_id in jira_ids:
                     new_interval = intervaltree.Interval(candidate.begin, candidate.end, jira_id)
                     # Merge new interval into jira_intervals if Jira ID matches.
                     same_jira_id_interval = jira_intervals.get(jira_id, None)
@@ -306,7 +315,7 @@ class JiraIdBIFinder(FromCandidatesByProximityAndDurationBIFinder):
             # Search 2 top scored candidates.
             top_candidate = None
             top_score = pre_top_score = 0
-            for candidate in jira_intervals:
+            for jira_id, candidate in jira_intervals.items():
                 score = self._calculate_score(candidate, start_point, end_point)
                 if score > top_score:
                     pre_top_score = top_score

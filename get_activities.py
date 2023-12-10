@@ -82,6 +82,16 @@ def clean_debug_buckets_and_apply_strategies_on_one_day_events(
     )
 
 
+def load_debug_buckets(debug_dict: Dict[str, List[Event]], client: aw_client.ActivityWatchClient):
+    """
+    Uploads events representing analyzer debug information into ActivityWatch "debug" buckets.
+    :param analyzer_result: Result to get data from.
+    :param client: ActivityWatch client to use.
+    """
+    for bucket_id, events in debug_dict.items():
+        LOG.info(upload_events(events, config.DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
+
+
 def reload_debug_buckets(debug_dict: Dict[str, List[Event]], client: aw_client.ActivityWatchClient):
     """
     Uploads events representing analyzer debug information into ActivityWatch "debug" buckets. Removes these
@@ -90,17 +100,15 @@ def reload_debug_buckets(debug_dict: Dict[str, List[Event]], client: aw_client.A
     :param client: ActivityWatch client to use.
     """
     delete_debug_buckets(client)
-    for bucket_id, events in debug_dict.items():
-        LOG.info(upload_events(events, config.DEBUG_BUCKETS_IMPORTER_NAME, bucket_id, client=client))
+    load_debug_buckets(debug_dict, client)
 
-
-class UploadDebugBucketsAndResetStep(AnalyzerStep):
+class UploadDebugBucketsStep(AnalyzerStep):
     """
-    Step to upload debug buckets and clear them from `AnalyzerStep` context.
+    Step to upload debug buckets and clear them from `AnalyzerStep` context to don't re-upload later.
     """
 
     def __init__(self, client: aw_client.ActivityWatchClient, is_import_debug_buckets: bool):
-        super(UploadDebugBucketsAndResetStep, self).__init__()
+        super(UploadDebugBucketsStep, self).__init__()
         self.client = client
         self.is_import_debug_buckets = is_import_debug_buckets
 
@@ -114,7 +122,8 @@ class UploadDebugBucketsAndResetStep(AnalyzerStep):
     def run(self, context: Dict[str, any], metrics: Metrics):
         if self.is_import_debug_buckets:
             debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
-            reload_debug_buckets(debug_buckets_handler.events, self.client)
+            load_debug_buckets(debug_buckets_handler.events, self.client)
+            del context["debug_buckets_handler"]
 
 
 BI_FINDERS = {
@@ -164,7 +173,7 @@ def convert_aw_events_to_activities(
             ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),
             MakeCandidatesTreeStep(is_add_debug_buckets=is_import_debug_buckets),
             # Upload debug buckets before last most complext step - it may fail.
-            UploadDebugBucketsAndResetStep(client=client, is_import_debug_buckets=is_import_debug_buckets),
+            UploadDebugBucketsStep(client=client, is_import_debug_buckets=is_import_debug_buckets),
             MergeCandidatesTreeIntoResultTreeWithBIFinderStep(
                 bi_finder=bi_finder,
                 is_add_debug_buckets=is_import_debug_buckets,
@@ -175,7 +184,7 @@ def convert_aw_events_to_activities(
     )
     LOG.info(analyzer_result.to_str(ignore_metrics_by_substrings=ignore_substrings))
     if is_import_debug_buckets:
-        reload_debug_buckets(analyzer_result.debug_dict, client)
+        load_debug_buckets(analyzer_result.debug_dict, client)
     return analyzer_result
 
 

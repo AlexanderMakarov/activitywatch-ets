@@ -42,7 +42,7 @@ from activity_merger.domain.analyzer import (
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.helpers.helpers import datetime_to_time_str, setup_logging, valid_date
-from get_activities import UploadDebugBucketsAndResetStep, clean_debug_buckets_and_apply_strategies_on_one_day_events
+from get_activities import UploadDebugBucketsStep, clean_debug_buckets_and_apply_strategies_on_one_day_events
 
 
 LOG = setup_logging()
@@ -428,7 +428,7 @@ def tune_rules(events_datetime: datetime.datetime, is_use_saved_context: bool):
             MakeResultTreeFromSelfSufficientActivitiesStep(True),
             ChopActivitiesByResultTreeStep(True, True),
             MakeCandidatesTreeStep(True),
-            UploadDebugBucketsAndResetStep(client, True),
+            UploadDebugBucketsStep(client, True),
             trainer_step,
         ],
     )
