@@ -211,8 +211,15 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Find default coeffs and intersects to BAFinder based on LogisticRegression. Prepare way to retrain it.
 - [x] Shift "day border" to 5AM and make it configurable.
 - [x] Add Google Calendar importer.
-- [ ] Implement BIFinder to search Jira ID-s in Jira, Windows, IDEA, VSCode, Browser activities.
+- [x] Implement BIFinder to search Jira ID-s in Jira, Windows, IDEA, VSCode, Browser activities.
+- [ ] Make (JiraId)BIFinder to correct description for resulting activity.
+- [ ] JiraIdBIFinder respect max duration.
+- [ ] Fix Google Calendar importer authentication to work under Enterprise Workspace.
+- [ ] Add into get_activities.py flag/logic to deploy only resulting "debug bucket".
+- [ ] Add into get_activities.py ability to append result to Google Spreadsheet.
+- [ ] Add into get_activities.py flag to print only result.
 - [ ] Implement BIFinder to search "activities edges".
+- [ ] Try to summarise result activity description with help of LLM.
 - [ ] Find a way to mark some events as "source of description" and other as "source of interval".
       Git/Jira events are good for description, Window/IDEA - for interval, Browser/Outlook - both.
 - [ ] Add more features into FromCandidatesByLogisticRegressionBIFinder.

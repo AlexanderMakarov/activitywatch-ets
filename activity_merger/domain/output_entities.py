@@ -80,10 +80,10 @@ class AnalyzerResult:
         # Print resulting activities as is. Order is important here.
         activities_string = "\n  ".join(str(x) for x in self.activities)
         total_duration = sum((x.duration for x in self.activities), start=datetime.timedelta()).total_seconds()
-        desc += "Assembled %d activities on %s:\n  %s" % (
+        desc += "Assembled activities:\n  %s\n---- Total %d activities on %s. ----" % (
+            activities_string,
             len(self.activities),
             seconds_to_timedelta(total_duration),
-            activities_string,
         )
         return desc
 

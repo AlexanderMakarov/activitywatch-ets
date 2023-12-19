@@ -453,14 +453,14 @@ def _extend_events_from_activitybs(events: List, activitybs: ActivityByStrategy,
 
 
 def build_result_activity(
-    ba_interval: intervaltree.Interval,
+    basic_interval: intervaltree.Interval,
     candidates_tree: intervaltree.IntervalTree,
     is_only_good_strategies_for_description: bool,
     metrics: Metrics,
 ) -> Activity:
     """
     Builds "result" activity.
-    :param ba_interval: "Base" activity interval.
+    :param basic_interval: "Base" interval to build activity on.
     :param candidates_tree: Tree of candidates to add parts of overlapped activity-by-strategy-es into
     "result" activity.
     :param is_only_good_strategies_for_description: Flat to use for "result" activity description
@@ -469,16 +469,16 @@ def build_result_activity(
     :return: "Result" activity.
     """
     # Find all overlapping activities, even including those which was used for "basic interval".
-    overlapping_intervals = candidates_tree.overlap(ba_interval.begin, ba_interval.end)
+    overlapping_intervals = candidates_tree.overlap(basic_interval.begin, basic_interval.end)
     LOG.info("Basic interval is overlapped by %d 'candidate' activities.", len(overlapping_intervals))
-    ra_duration = ba_interval.length().total_seconds()
+    ra_duration = basic_interval.length().total_seconds()
     ra_events = []
     overlapping_activities: List[ActivityByStrategy] = []
     for interval in overlapping_intervals:
         activitybs: ActivityByStrategy = interval.data
         boundaries = activitybs.strategy.in_trustable_boundaries
         # 1. If BA overlaps activity completely then just concatenate data from it into BA.
-        if ba_interval.contains_interval(interval):
+        if basic_interval.contains_interval(interval):
             ra_events.extend(activitybs.events)  # All events in interval for sure.
             overlapping_activities.append(activitybs)
             metrics.incr("activities placed completely inside basic interval", interval.length().total_seconds())
@@ -496,15 +496,15 @@ def build_result_activity(
             )
             continue
         # 2. Handle case when BA overlaps the start of the activity.
-        if ba_interval.contains_point(interval.begin):
+        if basic_interval.contains_point(interval.begin):
             if boundaries == IntervalBoundaries.START:
                 # If activity is `in_trustable_boundaries=start` then concatenate data from it into BA.
-                _extend_events_from_activitybs(ra_events, activitybs, ba_interval)
+                _extend_events_from_activitybs(ra_events, activitybs, basic_interval)
                 overlapping_activities.append(activitybs)
                 metrics.incr("activities absorbed by basic interval at the start", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
                 # Split activity and concatenate last part with BA. First part is not needed anyway.
-                split_activity = _cut_activity_end(activitybs, ba_interval.end)
+                split_activity = _cut_activity_end(activitybs, basic_interval.end)
                 ra_events.extend(split_activity.events)  # All events in interval for sure.
                 overlapping_activities.append(split_activity)
                 metrics.incr("activities enhancing basic interval by the start", split_activity.duration())
@@ -515,16 +515,16 @@ def build_result_activity(
                 )
             continue
         # 3. Handle case when BA overlaps the end of activity.
-        if ba_interval.contains_point(interval.end):
+        if basic_interval.contains_point(interval.end):
             if boundaries == IntervalBoundaries.END:
                 # If activity is `in_trustable_boundaries=end` then concatenate data from it into BA.
-                _extend_events_from_activitybs(ra_events, activitybs, ba_interval)
+                _extend_events_from_activitybs(ra_events, activitybs, basic_interval)
                 overlapping_activities.append(activitybs)
                 metrics.incr("activities absorbed by basic interval at the end", interval.length().total_seconds())
             elif boundaries == IntervalBoundaries.DIM:
                 # If activity is `in_trustable_boundaries=whole` then split activity,
                 # and concatenate first part with BA.
-                split_activity = _cut_activity_start(activitybs, ba_interval.begin)
+                split_activity = _cut_activity_start(activitybs, basic_interval.begin)
                 ra_events.extend(split_activity.events)  # All events in interval for sure.
                 overlapping_activities.append(split_activity)
                 metrics.incr("activities enhancing basic interval by the end", split_activity.duration())
@@ -536,8 +536,8 @@ def build_result_activity(
             continue
         # 4 Handle case when BA itself is placed inside actvity.
         if boundaries == IntervalBoundaries.DIM:
-            tmp = _cut_activity_start(activitybs, ba_interval.begin)
-            tmp = _cut_activity_end(tmp, ba_interval.end)
+            tmp = _cut_activity_start(activitybs, basic_interval.begin)
+            tmp = _cut_activity_end(tmp, basic_interval.end)
             ra_events.extend(tmp.events)  # All events in interval for sure.
             overlapping_activities.append(tmp)
             metrics.incr("activities enhancing basic interval by the middle", ra_duration)
@@ -550,8 +550,8 @@ def build_result_activity(
     name = _build_activity_name(overlapping_activities, metrics, ra_duration, is_only_good_strategies_for_description)
     metrics.incr("result activities", ra_duration)
     return Activity(
-        ba_interval.begin,
-        ba_interval.end,
+        basic_interval.begin,
+        basic_interval.end,
         ra_events,
         name,
     )
@@ -894,22 +894,21 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
                 "base intervals without other candidates on interval",
                 (bi_interval.end - bi_interval.begin).total_seconds(),
             )
-        # Find all overlapping activities and make new `result` activity (RA).
-        ra = build_result_activity(bi_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics)
         # Check RA doesn't overlaps with existing result activities at the end.
-        result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(ra.end_time)
-        # If we had interval in `result_tree` when added RA then we need to search next gap.
-        # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
-        for existing_interval in result_tree_overlapped_with_ra_end:
-            if existing_interval.begin < ra.end_time:
-                # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
-                ra.end_time = existing_interval.begin
-                ra.events = [x for x in ra.events if x.timestamp < ra.end_time]
-                metrics.incr(
-                    "result activities shrinked because it overlaps by end with alredy existing",
-                    (ra.end_time - existing_interval.begin).total_seconds(),
-                )
-        # Add RA into the result tree.
+        result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(bi_interval.end)
+        if result_tree_overlapped_with_ra_end:
+            # If we had interval in `result_tree` when added RA then we need to search next gap.
+            # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
+            for existing_interval in result_tree_overlapped_with_ra_end:
+                if existing_interval.begin < bi_interval.end:
+                    # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
+                    bi_interval.end = existing_interval.begin
+                    metrics.incr(
+                        "base intervals shrinked because overlap by end with result activities",
+                        (bi_interval.end - existing_interval.begin).total_seconds(),
+                    )
+        # Make new `result` activity (RA) and add into the result tree.
+        ra = build_result_activity(bi_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics)
         add_activity_to_result_tree(
             ra=ra,
             result_tree=result_tree,
