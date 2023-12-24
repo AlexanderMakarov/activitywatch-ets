@@ -36,7 +36,12 @@ def _get_jira_issues(
     assert api_token, "Jira login API token is not specified."
     assert projects, "Jira projects to consider are not specified."
     assert search_datetime, "Date to search is not specified."
-    connection = jira.JIRA(server=server_url, basic_auth=(email, api_token))
+    connection = jira.JIRA(
+        server=server_url,
+        basic_auth=(email, api_token),
+        # See https://github.com/pycontribs/jira/issues/1775 for patch below.
+        options={"headers": {"Accept": "application/json;q=1.0, */*;q=0.9"}},
+    )
     LOG.info("Searching %s issues updated after %s and touched by %s.", projects, search_datetime, email)
     jql = (
         f"project IN ({','.join(projects)}) AND updated >= '{search_datetime.strftime('%Y-%m-%d %H:%M')}' AND "
@@ -133,8 +138,9 @@ def _format_jira_event_for_log(event: Event) -> str:
     return f"{{{datetime_to_time_str(event.timestamp)} {data['jira_id']} {change_desc}}}"
 
 
-def get_one_day_events_from_jira(issues: List[jira.Issue], author_email: str, start_datetime: datetime.datetime)\
-    -> List[Event]:
+def get_one_day_events_from_jira(
+    issues: List[jira.Issue], author_email: str, start_datetime: datetime.datetime
+) -> List[Event]:
     """
     Filters all issues by one day and specified author. Collects events from them.
     :param issues: Jira issues to inspect in chronological order.
