@@ -4,7 +4,9 @@ import dataclasses
 import datetime
 import os
 import subprocess
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
+
+from sympy import N
 
 from activity_merger.config.config import (
     DAY_BORDER,
@@ -29,6 +31,8 @@ class Commit:
     """Commit message."""
     total_lines_changed: int
     """Total absolute number of changed lines."""
+    refs: List[str]
+    """List of branches and tags where commit was."""
 
 
 def commits_to_events(commits: Dict[str, List[Commit]], search_datetime: datetime.datetime) -> List[Event]:
@@ -50,8 +54,9 @@ def commits_to_events(commits: Dict[str, List[Commit]], search_datetime: datetim
                 (commit.date - start_time),
                 {
                     "message": commit.message,
-                    "repo": repo,
                     "lines_changed": str(commit.total_lines_changed),
+                    "refs": commit.refs,
+                    "repo": repo,
                     "files": commit.files,
                 },
             )
@@ -70,23 +75,30 @@ def _run_git_command(directory: str, command_suffix: str) -> Union[str, None]:
             .strip()
         )
     except subprocess.CalledProcessError as err:
-        LOG.info("Failed git command: %s\n%s", err, err.stdout)
+        LOG.error("Failed git command: %s\n%s", err, err.stdout)
         return None
 
 
-def _parse_commit_info(directory: str, commit_hash: str) -> Commit:
-    commit_output = _run_git_command(directory, f'show --pretty="format:Date:   %ci%n%B" --stat {commit_hash}')
-    lines = commit_output.split("\n")
+def _parse_commit_info(directory: str, commit_hash: str) -> Optional[Commit]:
+    git_show_output = _run_git_command(directory, f'show --pretty="format:Date:   %ci%n%B" --stat {commit_hash}')
+    branch_contains = _run_git_command(directory, f'branch --contains {commit_hash}')
+    if git_show_output and branch_contains:
+        show_lines = git_show_output.split("\n")
+        refs = [x.replace('*', '').strip() for x in branch_contains.split('\n') if x.strip()]
+    else:
+        LOG.error("Can't parse %s commit data from '%s' repository!", commit_hash, directory)
+        return None
 
     # Find empty line index to know where 'stat' part of message starts.
-    empty_line_index = lines.index("") if "" in lines else len(lines)
+    empty_line_index = show_lines.index("") if "" in show_lines else len(show_lines)
     stat_start_index = empty_line_index + 1
 
     return Commit(
-        date=datetime.datetime.strptime(lines[0].replace("Date:   ", "").strip(), "%Y-%m-%d %H:%M:%S %z"),
-        files=[line.strip().split("|")[0].strip() for line in lines[stat_start_index:-1] if line.strip()],
-        message="\n".join(lines[1:empty_line_index]),
-        total_lines_changed=sum(int(word) for word in lines[-1].split() if word.isdigit()),
+        date=datetime.datetime.strptime(show_lines[0].replace("Date:   ", "").strip(), "%Y-%m-%d %H:%M:%S %z"),
+        files=[line.strip().split("|")[0].strip() for line in show_lines[stat_start_index:-1] if line.strip()],
+        message="\n".join(show_lines[1:empty_line_index]),
+        total_lines_changed=sum(int(word) for word in show_lines[-1].split() if word.isdigit()),
+        refs=refs,
     )
 
 
@@ -132,8 +144,9 @@ def commits_for_one_day(start_datetime: datetime.datetime, folders: List[str], d
                 for commit_hash in commit_hashes.split("\n"):
                     if commit_hash:  # ignore empty lines
                         commit = _parse_commit_info(dirpath, commit_hash)
-                        LOG.info("%s: %s", user_name, commit)
-                        commit_list.append(commit)
+                        if commit:
+                            LOG.info("%s: %s", user_name, commit)
+                            commit_list.append(commit)
                 result[dirpath] = commit_list
     return result
 
