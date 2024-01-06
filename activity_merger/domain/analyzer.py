@@ -1,5 +1,6 @@
 import collections
 import datetime
+from operator import attrgetter
 from typing import Dict, List, Optional, Set, Tuple
 
 import intervaltree
@@ -13,6 +14,7 @@ from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
 from .strategies import BUCKET_AFK_PREFIX, ActivityByStrategy, StrategyApplyResult, calculate_interval_density
+from activity_merger.domain import strategies
 
 RA_DEBUG_BUCKET_NAME = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
 
@@ -455,6 +457,7 @@ def _extend_events_from_activitybs(events: List, activitybs: ActivityByStrategy,
 def build_result_activity(
     basic_interval: intervaltree.Interval,
     candidates_tree: intervaltree.IntervalTree,
+    bi_description: Optional[str],
     is_only_good_strategies_for_description: bool,
     metrics: Metrics,
 ) -> Activity:
@@ -463,6 +466,7 @@ def build_result_activity(
     :param basic_interval: "Base" interval to build activity on.
     :param candidates_tree: Tree of candidates to add parts of overlapped activity-by-strategy-es into
     "result" activity.
+    :param bi_description: First entry for activity description.
     :param is_only_good_strategies_for_description: Flat to use for "result" activity description
     only activity-by-strategy-es created by strategies marked as producing good description.
     :param metrics: Metrics instance.
@@ -547,7 +551,9 @@ def build_result_activity(
             continue
 
     # Build raw RA, i.e. with "not sure end". Fill it with all the events from the "enhancing" activities.
-    name = _build_activity_name(overlapping_activities, metrics, ra_duration, is_only_good_strategies_for_description)
+    name = _build_activity_name(
+        bi_description, overlapping_activities, metrics, ra_duration, is_only_good_strategies_for_description
+    )
     metrics.incr("result activities", ra_duration)
     return Activity(
         basic_interval.begin,
@@ -558,6 +564,7 @@ def build_result_activity(
 
 
 def _build_activity_name(
+    description_first_entry: Optional[str],
     activitiesbs: List[ActivityByStrategy],
     metrics: Metrics,
     duration_sec: float,
@@ -570,6 +577,7 @@ def _build_activity_name(
     "out_activity_name_sentence_builder" with key-value pairs received from related `GroupingDescriptor`-s.
     Handles "out_activity_name_sentence_builder" absence with default key-value pairs stringifier and
     with adding nothing if "out_activity_name_sentence_builder" returns empty value.
+    :param description_first_entry: Optional first entry in the description.
     :param activitiesbs: List of `ActivityByStrategy` making resulting activity.
     :param metrics: Metrics object to report details into.
     :param duration_sec: Duration of the resulting activity.
@@ -601,6 +609,8 @@ def _build_activity_name(
 
     # Process each group of activities to build sentence.
     resulting_names: List[str] = []
+    if description_first_entry:
+        resulting_names.append(description_first_entry)
     for grouped_activity_list in sorted_grouped_activities:
         # Note that mixing all of the a-b-s 'get_data' results into the one dictionary would cause data loosing.
         # For example if 2 Windows activities with {app=Slack, title=Meeting} and {app=Code, title=MyProject} are
@@ -684,11 +694,17 @@ class AnalyzerStep:
 class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
     """
     Makes "result_tree" `IntervalTree` from "out_self_sufficient" activities.
+    Handles multiple strategies at once.
     """
 
-    def __init__(self, is_add_debug_buckets: bool = False):
+    def __init__(
+        self,
+        is_add_debug_buckets: bool = False,
+        is_only_good_strategies_for_description: bool = True,
+    ):
         super(MakeResultTreeFromSelfSufficientActivitiesStep, self).__init__()
         self.is_add_debug_buckets = is_add_debug_buckets
+        self.is_only_good_strategies_for_description = is_only_good_strategies_for_description
 
     def get_description(self) -> str:
         return "Making 'result_tree' from self sufficient activities."
@@ -699,41 +715,68 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
             if "debug_buckets_handler" not in context:
                 context["debug_buckets_handler"] = DebugBucketsHandler()
 
+    def _make_ra(self, group: List, metrics: Metrics) -> Activity:
+        # Find activity with top priority strategy.
+        top_item = max(group, key=lambda x: x.data['strategy'].out_self_sufficient_interval_rank)
+        top_activity = top_item.data["activity"]
+        top_interval = intervaltree.Interval(
+            top_activity.suggested_start_time, top_activity.suggested_end_time, top_activity
+        )
+        # Combine events from all activities.
+        all_activities = [x.data["activity"] for x in group]
+        all_events: List[Event] = []
+        for activitybs in all_activities:
+            _extend_events_from_activitybs(all_events, activitybs, top_interval)
+        all_events = sorted(all_events, key=lambda x: x.timestamp)
+        # Build name of the activity.
+        # Don't make priority for "out_self_sufficient_interval_rank" because it is only about interval!
+        duration = top_activity.duration()
+        name = _build_activity_name(
+            None, all_activities, metrics, duration, self.is_only_good_strategies_for_description
+        )
+        metrics.incr("result activities", duration)
+        ra = Activity(
+            top_interval.begin,
+            top_interval.end,
+            all_events,
+            name,
+        )
+        return ra
+
     def run(self, context: Dict[str, any], metrics: Metrics) -> bool:
         debug_buckets_handler: DebugBucketsHandler = context.get("debug_buckets_handler")
-        result_tree = intervaltree.IntervalTree()
-        strategy_result: StrategyApplyResult
-        for strategy_result in context["strategy_apply_result"]:
-            if not strategy_result.strategy.out_self_sufficient:
-                continue
-            metrics.incr("self sufficient strategies")
-            activity: ActivityByStrategy
+        data: List[StrategyApplyResult] = context["strategy_apply_result"]
+        # Filter only self-sufficient strategies.
+        data = [x for x in data if x.strategy.out_self_sufficient]
+        # Prepare candidates tree. We would change activities right inside it.
+        candidates_tree = intervaltree.IntervalTree()
+
+        # Add all activities to the candidates_tree with their strategy.
+        for strategy_result in data:
             for activity in strategy_result.activities:
-                overlap: List[intervaltree.Interval] = result_tree.overlap(
-                    activity.suggested_start_time, activity.suggested_end_time
-                )
-                if overlap:
-                    raise ValueError(
-                        f"Overlapping activities from {strategy_result.strategy}: "
-                        f"{activity_by_strategy_to_str(activity)} is overlapping with "
-                        + ", ".join(x.data for x in overlap)
-                    )
-                duration = activity.duration()
-                name = _build_activity_name([activity], metrics, duration, False)
-                metrics.incr("result activities", duration)
-                ra = Activity(
-                    activity.suggested_start_time,
-                    activity.suggested_end_time,
-                    activity.events,
-                    name,
-                )
-                add_activity_to_result_tree(
-                    ra=ra,
-                    result_tree=result_tree,
-                    is_add_debug_buckets=self.is_add_debug_buckets,
-                    debug_buckets_handler=debug_buckets_handler,
-                )
-                metrics.incr("self sufficient activities", duration)
+                start = activity.suggested_start_time.timestamp()
+                end = activity.suggested_end_time.timestamp()
+                candidates_tree[start:end] = {"strategy": strategy_result.strategy, "activity": activity}
+
+        # Group overlapping activities.
+        overlapping_groups = []
+        for interval in candidates_tree:
+            current_group = candidates_tree[interval.begin : interval.end]
+            if current_group not in overlapping_groups:
+                overlapping_groups.append(current_group)
+
+        # Process each group of overlapping activities.
+        result_tree = intervaltree.IntervalTree()
+        for group in overlapping_groups:
+            metrics.incr(f"intervals with {len(group)} overlapping self sufficient activities")
+            ra = self._make_ra(group, metrics)
+            add_activity_to_result_tree(
+                ra=ra,
+                result_tree=result_tree,
+                is_add_debug_buckets=self.is_add_debug_buckets,
+                debug_buckets_handler=debug_buckets_handler,
+            )
+            metrics.incr("self sufficient activities", ra.duration.total_seconds())
         context["result_tree"] = result_tree
 
 
@@ -777,7 +820,8 @@ class ChopActivitiesByResultTreeStep(AnalyzerStep):
 
 class MakeCandidatesTreeStep(AnalyzerStep):
     """
-    Makes "candidates_tree" `IntervalTree`.
+    Makes "candidates_tree" `IntervalTree` with provided filters to get many overlappling intervals from many
+    strategies in one tree.
     :param is_add_debug_buckets: Flag to build events into "debug" buckets.
     :param is_add_afk: Flag to add AFK activities into "result_tree".
     :param is_add_self_sufficient: Flag to add activities from "self sufficient" strategies into "result_tree".
@@ -856,6 +900,7 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
         self,
         bi_interval: intervaltree.Interval,
         bi_score: float,
+        bi_description: Optional[str],
         closest_candidate_score: float,
         candidates_tree: intervaltree.IntervalTree,
         result_tree: intervaltree.IntervalTree,
@@ -908,7 +953,9 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
                         (bi_interval.end - existing_interval.begin).total_seconds(),
                     )
         # Make new `result` activity (RA) and add into the result tree.
-        ra = build_result_activity(bi_interval, candidates_tree, self.is_only_good_strategies_for_description, metrics)
+        ra = build_result_activity(
+            bi_interval, candidates_tree, bi_description, self.is_only_good_strategies_for_description, metrics
+        )
         add_activity_to_result_tree(
             ra=ra,
             result_tree=result_tree,
@@ -944,12 +991,13 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
             # Check if more than 1 candidate is available (most common case).
             if len(candidates) > 1:
                 # Find "base interval" to base "result activity" on.
-                bi_interval, bi_score, closest_candidate_score = self.bi_finder.find_top(
+                bi_interval, bi_score, closest_candidate_score, bi_description = self.bi_finder.find_top(
                     candidates, current_start_point, current_end_point, MAX_ACTIVITY_DURATION_SEC, metrics
                 )
             ra = self.convert_basic_interval_to_ra(
                 bi_interval=bi_interval,
                 bi_score=bi_score,
+                bi_description=bi_description,
                 closest_candidate_score=closest_candidate_score,
                 candidates_tree=candidates_tree,
                 result_tree=result_tree,

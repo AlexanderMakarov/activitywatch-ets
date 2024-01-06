@@ -42,6 +42,8 @@ BIFINDER_SIMPLE_START_POINT_PROXIMITY = 0.5
 BIFINDER_SIMPLE_DENSITY = 0.1
 BIFINDER_SIMPLE_DURATION_ON_INTERSECTION_INTERVAL = 0.2
 BIFINDER_SIMPLE_DURATION_BETWEEN_MIN_AND_MAX = 0.2
+# 1 valut for "proximity-duration" basic interval finder.
+BIFINDER_PROXIMITY_DURATION_MAX_REWARDED_START_POINT_PROXIMITY_SEC = 120
 # 2 values for "LogisticRegression" basic interval finder. Better to setup with 'tune_rules.py'.
 BIFINDER_LOGISTIC_REGRESSION_COEF = [
     5.89142423e-01,
@@ -194,6 +196,7 @@ STRATEGIES = [
         in_only_if_window_app=None,
         in_group_by_keys=None,
         out_self_sufficient=False,
+        out_self_sufficient_interval_rank=0,
         out_produces_good_activity_name=False,
         out_activity_name_sentence_builder=lambda _: None,  # Don't contribute to activity name.
     ),
@@ -204,7 +207,8 @@ STRATEGIES = [
         in_events_density_matters=True,
         in_only_key_regexp={"title": "^Slack - (.+?) - Huddle"},
         in_group_by_keys=[("title",)],
-        out_self_sufficient=False,
+        out_self_sufficient=True,
+        out_self_sufficient_interval_rank=20,
         out_produces_good_activity_name=True,
         out_activity_name_sentence_builder=lambda x: f"On Slack Huddle with {', '.join(d['title'] for d in x)}.",
     ),
@@ -220,7 +224,8 @@ STRATEGIES = [
                 "title",
             )
         ],
-        out_self_sufficient=False,
+        out_self_sufficient=True,
+        out_self_sufficient_interval_rank=30,
         out_produces_good_activity_name=True,
         out_activity_name_sentence_builder=lambda _: "On Zoom Meeting.",
     ),
@@ -252,6 +257,7 @@ STRATEGIES = [
         in_trustable_boundaries="strict",
         in_may_be_offline=True,
         out_self_sufficient=True,
+        out_self_sufficient_interval_rank=50,
         out_produces_good_activity_name=True,
         out_activity_name_sentence_builder=lambda x: x[0]["data"],  # The only event and key.
     ),
@@ -261,6 +267,7 @@ STRATEGIES = [
         in_each_event_is_activity=True,
         in_trustable_boundaries="dim",  # Sometimes it may start later or finish earlier. Plus preparation before.
         out_self_sufficient=True,
+        out_self_sufficient_interval_rank=10,
         out_produces_good_activity_name=True,
         out_activity_name_sentence_builder=__outlook_activity_name_sentence_builder,
     ),
@@ -270,8 +277,8 @@ STRATEGIES = [
         in_trustable_boundaries="end",
         in_events_density_matters=True,
         in_activities_may_overlap=True,
-        in_only_not_afk=True,
-        in_only_if_window_app=None,  # Jira activity may happen everywhere, not only in browser.
+        in_only_not_afk=False,  # Don't cut activity-by-strategy-es by afk gaps.
+        in_only_if_window_app=None,  # Jira activity may happen everywhere, not only in browser for example.
         in_group_by_keys=[
             (
                 "jira_id",

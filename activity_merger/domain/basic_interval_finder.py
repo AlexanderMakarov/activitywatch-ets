@@ -1,7 +1,7 @@
 import datetime
 from collections import namedtuple
 import re
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import intervaltree
 import numpy as np
@@ -13,6 +13,7 @@ from activity_merger.helpers.event_helpers import activity_by_strategy_to_str
 from activity_merger.helpers.helpers import datetime_to_time_str, from_start_to_end_to_str
 
 from ..config.config import (
+    BIFINDER_PROXIMITY_DURATION_MAX_REWARDED_START_POINT_PROXIMITY_SEC,
     BIFINDER_SIMPLE_DENSITY,
     BIFINDER_SIMPLE_DURATION_BETWEEN_MIN_AND_MAX,
     BIFINDER_SIMPLE_DURATION_ON_INTERSECTION_INTERVAL,
@@ -35,7 +36,7 @@ class BIFinder:
         end_point: datetime.datetime,
         max_duration_seconds: float,
         metrics: Metrics,
-    ) -> Tuple[intervaltree.Interval, float, float]:
+    ) -> Tuple[intervaltree.Interval, float, float, Optional[str]]:
         """
         Finds 2 top candidates of "basic interval" and returns in order: top candidate, score of it,
         score of 2nd candidate.
@@ -46,8 +47,11 @@ class BIFinder:
         or no more data.
         :param max_duration_seconds: Maximum duration for interval.
         :param metrics: `Metrics` instance to accumulate metrics.
-        :return: Tuple of (top_candidate, top_candidate_score, pre_top_candidate_score).
-        'top_candidate' is never `None`.
+        :return: Tuple of (top_candidate, top_candidate_score, pre_top_candidate_score, description) where:
+        'top_candidate' - `intervaltree.Interval` and should never be `None`;
+        'top_candidate_score' - score of the top candidate in [0..1];
+        'pre_top_candidate_score' - score of the closest to top candidate in [0..1], optional;
+        'descriptor' - if provided then the firs entry in resulting activity description, if `None` then specific description is not required
         """
         raise NotImplementedError("Not implemented")
 
@@ -79,7 +83,7 @@ class FromCandidateActivitiesByScoreBIFinder(BIFinder):
         end_point: datetime.datetime,
         max_duration_seconds: float,
         metrics: Metrics,
-    ) -> Tuple[intervaltree.Interval, float, float]:
+    ) -> Tuple[intervaltree.Interval, float, float, Optional[str]]:
         perfect_duration_sec = min(max_duration_seconds, (end_point - start_point).total_seconds())
         candidate_scores: List[Tuple[int, intervaltree.Interval]] = []
         for candidate in candidates:
@@ -139,7 +143,7 @@ class FromCandidateActivitiesByScoreBIFinder(BIFinder):
             )
         else:
             metrics.incr("basic intervals without other candidates on interval", ba_interval.data.duration())
-        return (ba_interval, score, closest_candidate_score)
+        return (ba_interval, score, closest_candidate_score, None)
 
 
 class FromCandidatesByProximityAndDurationBIFinder(BIFinder):
@@ -147,14 +151,14 @@ class FromCandidatesByProximityAndDurationBIFinder(BIFinder):
     Tries to find base interval by "closest to start_point and longest" properties of candidates.
     """
 
-    max_rewarded_start_point_proximity_sec = 120  # TODO make this configurable
+    max_rewarded_start_point_proximity_sec = BIFINDER_PROXIMITY_DURATION_MAX_REWARDED_START_POINT_PROXIMITY_SEC
 
     def _check_interval_starts_too_far(self, candidate_start_point, start_point: datetime.datetime):
         start_point_proximity = (candidate_start_point - start_point).total_seconds()
         return start_point_proximity > self.max_rewarded_start_point_proximity_sec
 
-    @staticmethod
     def _calculate_score(
+        self,
         interval: intervaltree.Interval,
         start_point: datetime.datetime,
         end_point: datetime.datetime,
@@ -167,8 +171,9 @@ class FromCandidatesByProximityAndDurationBIFinder(BIFinder):
             proximity_score = 0.5
         else:
             seconds_after_start = (interval.begin - start_point).total_seconds()
-            if seconds_after_start <= 120:  # Decrease score for up to 120 seconds
-                proximity_score = 0.5 - 0.1 * (seconds_after_start // 60)
+            # Decrease score for up to max_rewarded_start_point_proximity_sec.
+            if seconds_after_start <= self.max_rewarded_start_point_proximity_sec:
+                proximity_score = (1 - seconds_after_start / self.max_rewarded_start_point_proximity_sec) * 0.5
         # Overlap score calculation
         overlap_start = max(interval.begin, start_point)
         overlap_end = min(interval.end, end_point)
@@ -224,7 +229,7 @@ class FromCandidatesByProximityAndDurationBIFinder(BIFinder):
         end_point: datetime.datetime,
         max_duration_seconds: float,
         metrics: Metrics,
-    ) -> Tuple[intervaltree.Interval, float, float]:
+    ) -> Tuple[intervaltree.Interval, float, float, Optional[str]]:
         candidates = sorted(candidates, key=lambda x: x.begin)
         corrected_end_point = min(end_point, start_point + datetime.timedelta(max_duration_seconds))
         top_candidate = second_candidate = None
@@ -241,7 +246,7 @@ class FromCandidatesByProximityAndDurationBIFinder(BIFinder):
             )
         top_candidate_score = self._calculate_score(top_candidate, start_point, corrected_end_point)
         second_candidate_score = self._calculate_score(second_candidate, start_point, corrected_end_point)
-        return top_candidate, top_candidate_score, second_candidate_score
+        return top_candidate, top_candidate_score, second_candidate_score, None
 
 
 class JiraIdBIFinder(FromCandidatesByProximityAndDurationBIFinder):
@@ -272,10 +277,10 @@ class JiraIdBIFinder(FromCandidatesByProximityAndDurationBIFinder):
         end_point: datetime.datetime,
         max_duration_seconds: float,
         metrics: Metrics,
-    ) -> Tuple[intervaltree.Interval, float, float]:
+    ) -> Tuple[intervaltree.Interval, float, float, Optional[str]]:
         candidates = sorted(candidates, key=lambda x: x.begin)
         # Search Jira ID-s in candidates.
-        jira_intervals = dict()  # Data is Jira ID.
+        jira_intervals: Dict[str, intervaltree.Interval] = dict()  # Data is Jira ID.
         last_end_time = start_point + datetime.timedelta(seconds=self.max_rewarded_start_point_proximity_sec)
         for candidate in candidates:
             activitybs: ActivityByStrategy = candidate.data
@@ -313,14 +318,14 @@ class JiraIdBIFinder(FromCandidatesByProximityAndDurationBIFinder):
         # If Jira ID-s were found then choose top candidates from them.
         if jira_intervals:
             # Search 2 top scored candidates.
-            top_candidate = None
+            top_candidate: intervaltree.Interval = None
             top_score = pre_top_score = 0
             for jira_id, candidate in jira_intervals.items():
                 score = self._calculate_score(candidate, start_point, end_point)
                 if score > top_score:
                     pre_top_score = top_score
                     top_candidate, top_score = candidate, score
-            return top_candidate, top_score, pre_top_score
+            return top_candidate, top_score, pre_top_score, f"{candidate.data}:"
 
         # If Jira ID-s weren't found then rollback to "super" implementation.
         return super().find_top(candidates, start_point, end_point, max_duration_seconds, metrics)
@@ -461,7 +466,7 @@ class FromCandidatesByLogisticRegressionBIFinder(BIFinder):
         end_point: datetime.datetime,
         max_duration_seconds: float,
         metrics: Metrics,
-    ) -> Tuple[intervaltree.Interval, float, float]:
+    ) -> Tuple[intervaltree.Interval, float, float, Optional[str]]:
         # Calculate features for all intersecting intervals.
         features = self.calculate_features(candidates, start_point, end_point, max_duration_seconds)
 
@@ -475,4 +480,5 @@ class FromCandidatesByLogisticRegressionBIFinder(BIFinder):
             candidates[top_two_indices[0]],
             positive_class_probs[top_two_indices[0]],
             positive_class_probs[top_two_indices[1]],
+            None,
         )

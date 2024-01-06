@@ -204,7 +204,16 @@ class Strategy:
 
     out_self_sufficient: bool = False
     """
-    True means activity from this bucket may overlaps others. Any conflicts leads to errors.
+    True means that this strategy is "self-sufficient", i.e. is handled first and may dictate interval and description
+    without using external data. Make sense for "100% sure" events like watchdog events, meetings and so on.
+    If there are multiple strategies for the same time interval then "out_self_sufficient_time_rank" value is used
+    to determine time interval but descriptions are always merged.
+    """
+
+    out_self_sufficient_interval_rank: int = 0
+    """
+    Rank for "self sufficient" activities when they intersect by time intervals. Higher value - more certanty that
+    this strategy activities has right time intervals. Few strategies with the same rank will cause error.
     """
 
     out_produces_good_activity_name: bool = False
@@ -241,6 +250,7 @@ class Strategy:
         "in_only_if_window_app",
         "in_group_by_keys",
         "out_self_sufficient",
+        "out_self_sufficient_interval_rank",
         "out_produces_good_activity_name",
         "out_activity_name_sentence_builder",
     ]

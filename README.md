@@ -212,6 +212,7 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Shift "day border" to 5AM and make it configurable.
 - [x] Add Google Calendar importer.
 - [x] Implement BIFinder to search Jira ID-s in Jira, Windows, IDEA, VSCode, Browser activities.
+- [x] Handle overlapping "self-sufficient=true" strategies with ranking.
 - [ ] Make (JiraId)BIFinder to correct description for resulting activity.
 - [ ] JiraIdBIFinder respect max duration.
 - [ ] Fix Google Calendar importer authentication to work under Enterprise Workspace.

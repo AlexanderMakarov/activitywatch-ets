@@ -102,6 +102,7 @@ def reload_debug_buckets(debug_dict: Dict[str, List[Event]], client: aw_client.A
     delete_debug_buckets(client)
     load_debug_buckets(debug_dict, client)
 
+
 class UploadDebugBucketsStep(AnalyzerStep):
     """
     Step to upload debug buckets and clear them from `AnalyzerStep` context to don't re-upload later.
@@ -156,8 +157,8 @@ def convert_aw_events_to_activities(
     """
     client = aw_client.ActivityWatchClient(os.path.basename(__file__))
     bi_finder = BI_FINDERS[bi_finder_name]  # Fail on wrong bi_finder_name as soon as possible.
-
-    LOG.info("Starting to build activities per strategy...")
+    # First load events for the day and print metrics.
+    LOG.info("Starting to build activities per strategy for events starting on %s...", events_datetime)
     strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_datetime, client)
     metrics_strings = list(metrics.to_strings(ignore_with_substrings=ignore_substrings))
     LOG.info("Analyzed all buckets separately, metrics:\n  %s", "\n  ".join(metrics_strings))
@@ -165,11 +166,14 @@ def convert_aw_events_to_activities(
         "Got following activities-per-strategy:\n%s",
         "\n".join(x.to_string(ignore_metrics_by_substrings=ignore_substrings) for x in strategy_apply_result),
     )
-
+    # Next analyze strategy_apply_result with multiple steps and print results as well.
     analyzer_result = aggregate_strategies_results_to_activities(
         strategy_apply_results=strategy_apply_result,
         steps=[
-            MakeResultTreeFromSelfSufficientActivitiesStep(is_add_debug_buckets=True),
+            MakeResultTreeFromSelfSufficientActivitiesStep(
+                is_add_debug_buckets=True,
+                is_only_good_strategies_for_description=is_only_good_strategies_for_description,
+            ),
             ChopActivitiesByResultTreeStep(is_skip_afk=True, is_skip_self_sufficient_strategies=True),
             MakeCandidatesTreeStep(is_add_debug_buckets=is_import_debug_buckets),
             # Upload debug buckets before last most complext step - it may fail.
@@ -183,6 +187,7 @@ def convert_aw_events_to_activities(
         ignore_substrings=ignore_substrings,
     )
     LOG.info(analyzer_result.to_str(ignore_metrics_by_substrings=ignore_substrings))
+    # Import results back into ActivityWatch if need.
     if is_import_debug_buckets:
         load_debug_buckets(analyzer_result.debug_dict, client)
     return analyzer_result
@@ -254,7 +259,7 @@ def main():
     events_date = args.date if args.date else datetime.datetime.today().astimezone()
     if args.back_days and args.back_days > 0:
         events_date = events_date - datetime.timedelta(days=args.back_days)
-    events_datetime = events_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone()
+    events_datetime = events_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone() + config.DAY_BORDER
     convert_aw_events_to_activities(
         events_datetime=events_datetime,
         bi_finder_name=args.bi_finder_name,
