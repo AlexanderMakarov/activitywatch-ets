@@ -14,7 +14,7 @@ from .input_entities import Event, IntervalBoundaries, Strategy
 from .metrics import Metrics
 from .output_entities import Activity, AnalyzerResult
 from .strategies import BUCKET_AFK_PREFIX, ActivityByStrategy, StrategyApplyResult, calculate_interval_density
-from activity_merger.domain import strategies
+
 
 RA_DEBUG_BUCKET_NAME = f"{DEBUG_BUCKET_PREFIX}999_activities"  # 999 - to place it last in UI.
 
@@ -757,6 +757,12 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
                 start = activity.suggested_start_time.timestamp()
                 end = activity.suggested_end_time.timestamp()
                 candidates_tree[start:end] = {"strategy": strategy_result.strategy, "activity": activity}
+            if self.is_add_debug_buckets:
+                debug_buckets_handler.add_debug_events_to_not_overlap(
+                    activites=strategy_result.activities,
+                    bucket_suffix=strategy_result.strategy.name.replace(" ", "-") + "_candidate",
+                    metrics=metrics,
+                )
 
         # Group overlapping activities.
         overlapping_groups = []
