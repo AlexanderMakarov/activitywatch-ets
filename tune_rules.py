@@ -364,15 +364,18 @@ class BAFinderTrainerStep(MergeCandidatesTreeIntoResultTreeWithBIFinderStep):
                     prev_choice, candidates, current_start_point, current_end_point
                 )
             if answer == "chosen":
-                ra = self.convert_basic_interval_to_ra(
-                    bi_interval=basic_interval,
+                ra = self.try_convert_basic_interval_to_ra(
+                    interval=basic_interval,
                     bi_score=bi_score,
+                    bi_description=None,
                     closest_candidate_score=closest_candidate_score,
                     candidates_tree=candidates_tree,
                     result_tree=result_tree,
                     metrics=metrics,
                     debug_buckets_handler=debug_buckets_handler,
                 )
+                if ra is None:
+                    continue
                 prev_choice = f"{basic_interval.data.id}: {ra}"
                 # Configure next iteration.
                 current_start_point, current_end_point = find_next_uncovered_intervals(

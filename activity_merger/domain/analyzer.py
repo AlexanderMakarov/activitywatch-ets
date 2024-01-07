@@ -454,6 +454,37 @@ def _extend_events_from_activitybs(events: List, activitybs: ActivityByStrategy,
             events.append(event)
 
 
+def fit_interval_to_tree_to_dont_overlap(
+    tree: intervaltree.IntervalTree, interval: intervaltree.Interval
+) -> Optional[intervaltree.Interval]:
+    """
+    Cuts or removes given interval if it overlaps with the given tree.
+    :param tree: Tree with intervals to don't overlap with.
+    :param interval: Interval to fit.
+    :returns: Interval with chopped edges or `None` if it overlaps completely.
+    """
+    overlapping_intervals = tree.overlap(interval.begin, interval.end)
+    sorted_overlapping_intervals = sorted(overlapping_intervals, key=lambda x: x.end)
+
+    new_begin = interval.begin
+    new_end = interval.end
+
+    for existing_interval in sorted_overlapping_intervals:
+        # If the new interval starts before the existing interval, check if there's enough space
+        # before the existing interval starts.
+        if new_begin < existing_interval.begin:
+            new_end = min(new_end, existing_interval.begin)
+            break
+        # Adjust the new interval's start to be after the existing interval's end.
+        new_begin = max(new_begin, existing_interval.end)
+
+    # Check if the new interval is valid.
+    if new_begin < new_end:
+        return intervaltree.Interval(new_begin, new_end, interval.data)
+    else:
+        return None
+
+
 def build_result_activity(
     basic_interval: intervaltree.Interval,
     candidates_tree: intervaltree.IntervalTree,
@@ -495,7 +526,7 @@ def build_result_activity(
                 activity_by_strategy_to_str(activitybs),
             )
             metrics.incr(
-                f"activities with {IntervalBoundaries.STRICT} boundaries skipped completely from basic intervals",
+                f"activities with {IntervalBoundaries.STRICT} boundaries skipped completely from base intervals",
                 interval.length().total_seconds(),
             )
             continue
@@ -642,12 +673,17 @@ def add_activity_to_result_tree(
     debug_buckets_handler: Optional[DebugBucketsHandler],
 ):
     """
-    Adds into "result_tree" activity and performs supportive actons.
+    Verifies that given activity doesn't overlap with existing intervals in "result_tree",
+    adds it into "result_tree" and debug buckets if need.
     :param ra: Activity to add.
     :param result_tree: Interval tree to add activity into.
     :is_add_debug_buckets: Flag to add debug event based on activity.
     :param debug_buckets_handler: Debug buckets handler.
     """
+    overlaps = result_tree.overlap(ra.start_time, ra.end_time)
+    if overlaps:
+        overlaps_str = "".join("\n- " + str(x.data) for x in overlaps)
+        raise ValueError(f"Wrong interval for result activity {ra}\nIt overlaps with:{overlaps_str}")
     result_tree.addi(ra.start_time, ra.end_time, ra)
     LOG.info("Added into 'result tree' activity: %s", ra)
     # Add RA to debug bucket if need.
@@ -717,7 +753,7 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
 
     def _make_ra(self, group: List, metrics: Metrics) -> Activity:
         # Find activity with top priority strategy.
-        top_item = max(group, key=lambda x: x.data['strategy'].out_self_sufficient_interval_rank)
+        top_item = max(group, key=lambda x: x.data["strategy"].out_self_sufficient_interval_rank)
         top_activity = top_item.data["activity"]
         top_interval = intervaltree.Interval(
             top_activity.suggested_start_time, top_activity.suggested_end_time, top_activity
@@ -774,6 +810,8 @@ class MakeResultTreeFromSelfSufficientActivitiesStep(AnalyzerStep):
         # Process each group of overlapping activities.
         result_tree = intervaltree.IntervalTree()
         for group in overlapping_groups:
+            # TODO if 2 Zoom meetings happens during Outlook meeting need measure interval only for meeting
+            # overlapping start of Outlook meeting. Add this logic by strategy boundaries.
             metrics.incr(f"intervals with {len(group)} overlapping self sufficient activities")
             ra = self._make_ra(group, metrics)
             add_activity_to_result_tree(
@@ -902,9 +940,9 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
             if "debug_buckets_handler" not in context:
                 context["debug_buckets_handler"] = DebugBucketsHandler()
 
-    def convert_basic_interval_to_ra(
+    def try_convert_basic_interval_to_ra(
         self,
-        bi_interval: intervaltree.Interval,
+        interval: intervaltree.Interval,
         bi_score: float,
         bi_description: Optional[str],
         closest_candidate_score: float,
@@ -912,55 +950,48 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
         result_tree: intervaltree.IntervalTree,
         metrics: Metrics,
         debug_buckets_handler: DebugBucketsHandler,
-    ) -> Activity:
+    ) -> Optional[Activity]:
         """
-        Constructs a new Activity in the provided interval from the provided 'candidates_tree' and
-        embeds it into 'result_tree'.
+        Tries to build a new `Activity` based on the provided interval with provided data (description and overlapping
+        items in 'candidates_tree'), adds it into 'result_tree' and debug buckets (if need).
         """
         # Provide metric and log about new base interval found.
         bi_score_description = self.bi_finder.score_to_desc(bi_score)
         metrics.incr(
-            f"base intervals with {bi_score_description} score", (bi_interval.end - bi_interval.begin).total_seconds()
+            f"base intervals with {bi_score_description} score", (interval.end - interval.begin).total_seconds()
         )
-        if isinstance(bi_interval.data, ActivityByStrategy):
-            data = (activity_by_strategy_to_str(bi_interval.data),)
-        else:
-            data = str(bi_interval.data)
+        actvity = (
+            activity_by_strategy_to_str(interval.data)
+            if isinstance(interval.data, ActivityByStrategy)
+            else str(interval.data)
+        )
         LOG.info(
             "Found 'base interval' with %.2f '%s' score on %s with data: %s",
             bi_score,
             bi_score_description,
-            from_start_to_end_to_str(bi_interval.begin, bi_interval.end),
-            data,
+            from_start_to_end_to_str(interval.begin, interval.end),
+            actvity,
         )
         # Provide metric about "how distinguishable basic interval was".
+        interval_duration = (interval.end - interval.begin).total_seconds()
         if closest_candidate_score is not None:
             distance_desc = self.bi_finder.score_to_desc(bi_score - closest_candidate_score)
-            metrics.incr(
-                f"base intervals with {distance_desc} distance from other candidates",
-                (bi_interval.end - bi_interval.begin).total_seconds(),
-            )
+            metrics.incr(f"base intervals with {distance_desc} distance from other candidates", interval_duration)
         else:
+            metrics.incr("base intervals with single activity-by-strategy on interval", interval_duration)
+        # Check RA doesn't overlaps with existing result activities.
+        fit_interval = fit_interval_to_tree_to_dont_overlap(result_tree, interval)
+        if fit_interval is None:
+            metrics.incr("base intervals which completely overlap with existing result activities", interval_duration)
+            return None
+        diff_with_fit = interval_duration - (fit_interval.end - fit_interval.begin).total_seconds()
+        if diff_with_fit > 0:
             metrics.incr(
-                "base intervals without other candidates on interval",
-                (bi_interval.end - bi_interval.begin).total_seconds(),
+                "base intervals which were cut due to partially overlap with existing result activities", diff_with_fit
             )
-        # Check RA doesn't overlaps with existing result activities at the end.
-        result_tree_overlapped_with_ra_end: Set[intervaltree.Interval] = result_tree.at(bi_interval.end)
-        if result_tree_overlapped_with_ra_end:
-            # If we had interval in `result_tree` when added RA then we need to search next gap.
-            # Note that `result_tree_overlapped_with_ra_end` may contain few intervals not in order.
-            for existing_interval in result_tree_overlapped_with_ra_end:
-                if existing_interval.begin < bi_interval.end:
-                    # Chop end of resulting activity if it overlaps with already existing iterval in `result_tree`.
-                    bi_interval.end = existing_interval.begin
-                    metrics.incr(
-                        "base intervals shrinked because overlap by end with result activities",
-                        (bi_interval.end - existing_interval.begin).total_seconds(),
-                    )
         # Make new `result` activity (RA) and add into the result tree.
         ra = build_result_activity(
-            bi_interval, candidates_tree, bi_description, self.is_only_good_strategies_for_description, metrics
+            fit_interval, candidates_tree, bi_description, self.is_only_good_strategies_for_description, metrics
         )
         add_activity_to_result_tree(
             ra=ra,
@@ -991,17 +1022,20 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
             if not candidates:
                 # If no more activities are possible the stop loop.
                 break
-            bi_interval = candidates[0]
+            bi = candidates[0]
             bi_score = 1.0
             closest_candidate_score = None
             # Check if more than 1 candidate is available (most common case).
             if len(candidates) > 1:
                 # Find "base interval" to base "result activity" on.
-                bi_interval, bi_score, closest_candidate_score, bi_description = self.bi_finder.find_top(
+                bi, bi_score, closest_candidate_score, bi_description = self.bi_finder.find_top(
                     candidates, current_start_point, current_end_point, MAX_ACTIVITY_DURATION_SEC, metrics
                 )
-            ra = self.convert_basic_interval_to_ra(
-                bi_interval=bi_interval,
+            # Save basic interval end before trying to build result activity - it may be shrunk or even disappear
+            # but we need to start next iteration from the place where current iteration is over.
+            bi_end = bi.end
+            self.try_convert_basic_interval_to_ra(
+                interval=bi,
                 bi_score=bi_score,
                 bi_description=bi_description,
                 closest_candidate_score=closest_candidate_score,
@@ -1014,12 +1048,12 @@ class MergeCandidatesTreeIntoResultTreeWithBIFinderStep(AnalyzerStep):
             current_start_point, current_end_point = find_next_uncovered_intervals(
                 candidates_tree=candidates_tree,
                 result_tree=result_tree,
-                start_point=ra.end_time,
+                start_point=bi_end,
             )
         context["analyzer_result"] = AnalyzerResult(
             sorted([x.data for x in result_tree], key=lambda x: x.start_time),
             None,
-            metrics,
+            None,  # Don't put metrics here to avoid double printing of them.
             debug_buckets_handler.events if debug_buckets_handler else None,
         )
 

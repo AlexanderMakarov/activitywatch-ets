@@ -59,11 +59,12 @@ class AnalyzerResult:
         :return: String with metrics, 'equal' activities if configured, activities.
         """
         desc = ""
-        sorted_metrics_strings = list(self.metrics.to_strings(ignore_with_substrings=ignore_metrics_by_substrings))
-        desc += "Metrics from intervals analysis (total %s):\n  %s\n" % (
-            len(sorted_metrics_strings),
-            "\n  ".join(sorted_metrics_strings),
-        )
+        if self.metrics:
+            sorted_metrics_strings = list(self.metrics.to_strings(ignore_with_substrings=ignore_metrics_by_substrings))
+            desc += "Metrics from intervals analysis (total %s):\n  %s\n" % (
+                len(sorted_metrics_strings),
+                "\n  ".join(sorted_metrics_strings),
+            )
         # Print "less than MIN_DURATION_SEC" values from 'activity_counter'.
         if append_equal_intervals_longer_that > 0.0:
             dumb_activities = [

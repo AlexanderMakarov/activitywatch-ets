@@ -325,6 +325,7 @@ class JiraIdBIFinder(FromCandidatesByProximityAndDurationBIFinder):
                 if score > top_score:
                     pre_top_score = top_score
                     top_candidate, top_score = candidate, score
+            metrics.incr("base intervals by Jira ID", (top_candidate.end - top_candidate.begin).total_seconds())
             return top_candidate, top_score, pre_top_score, f"{candidate.data}:"
 
         # If Jira ID-s weren't found then rollback to "super" implementation.

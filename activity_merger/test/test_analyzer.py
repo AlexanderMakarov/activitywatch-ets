@@ -1,17 +1,14 @@
 import dataclasses
 import datetime
-import logging
 import unittest
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional
 
 import intervaltree
 from parameterized import parameterized
 
 from activity_merger.domain.analyzer import (
-    _exclude_tree_intervals,
-    _include_tree_intervals,
-    find_next_uncovered_intervals,
-)
+    _exclude_tree_intervals, _include_tree_intervals,
+    find_next_uncovered_intervals, fit_interval_to_tree_to_dont_overlap)
 
 from ..domain.input_entities import Event, IntervalBoundaries, Strategy
 from ..domain.metrics import Metric, Metrics
@@ -798,3 +795,54 @@ class TestAnalyzer(unittest.TestCase):
         # Assert
         self.assertEqual(expected_start_point, actual_start_point, "wrong start_point")
         self.assertEqual(expected_end_point, actual_end_point, "wrong end_point")
+
+    @parameterized.expand(
+        [
+            ("empty_tree", intervaltree.IntervalTree(), intervaltree.Interval(5, 9), intervaltree.Interval(5, 9)),
+            (
+                "no_overlap",
+                intervaltree.IntervalTree([intervaltree.Interval(1, 4)]),
+                intervaltree.Interval(5, 9),
+                intervaltree.Interval(5, 9),
+            ),
+            (
+                "partial_overlap_begin",
+                intervaltree.IntervalTree([intervaltree.Interval(1, 2), intervaltree.Interval(3, 6)]),
+                intervaltree.Interval(5, 9),
+                intervaltree.Interval(6, 9),
+            ),
+            (
+                "partial_overlap_end",
+                intervaltree.IntervalTree([intervaltree.Interval(6, 7), intervaltree.Interval(8, 9)]),
+                intervaltree.Interval(5, 9),
+                intervaltree.Interval(5, 6),
+            ),
+            (
+                "full_overlap_within",
+                intervaltree.IntervalTree([intervaltree.Interval(1, 9)]),
+                intervaltree.Interval(5, 8),
+                None,
+            ),
+        ]
+    )
+    def test_fit_interval_to_tree_to_dont_overlap(
+        self,
+        test_name,
+        tree: intervaltree.IntervalTree,
+        interval: intervaltree.Interval,
+        expected_result: Optional[intervaltree.Interval],
+    ):
+        # Act
+        result = fit_interval_to_tree_to_dont_overlap(tree, interval)
+
+        # Assert
+        if expected_result is None:
+            self.assertIsNone(result, f"Expected result is None, but got {result}")
+        else:
+            self.assertIsNotNone(result, f"Expected a [{expected_result.begin}, {expected_result.end}], but got None")
+            self.assertEqual(
+                result.begin, expected_result.begin, f"Expected begin: {expected_result.begin}, but got {result.begin}"
+            )
+            self.assertEqual(
+                result.end, expected_result.end, f"Expected end: {expected_result.end}, but got {result.end}"
+            )
