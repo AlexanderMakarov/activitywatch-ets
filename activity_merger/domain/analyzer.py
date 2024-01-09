@@ -512,73 +512,87 @@ def build_result_activity(
     for interval in overlapping_intervals:
         activitybs: ActivityByStrategy = interval.data
         boundaries = activitybs.strategy.in_trustable_boundaries
-        # 1. If BA overlaps activity completely then just concatenate data from it into BA.
+        # Check "absolute" cases first - completely add or completely skip.
         if basic_interval.contains_interval(interval):
+            # If base interal overlaps activity completely then just concatenate data from it into result.
             ra_events.extend(activitybs.events)  # All events in interval for sure.
             overlapping_activities.append(activitybs)
-            metrics.incr("activities placed completely inside basic interval", interval.length().total_seconds())
+            metrics.incr(
+                "activities added completely because fits into basic interval", interval.length().total_seconds()
+            )
             continue
         elif boundaries == IntervalBoundaries.STRICT:
-            # We can't use part of STRICT activity so just report attempt and skip.
-            LOG.warning(
-                "Activity with %s boundaries appeared in the border of resulting activity: %s",
-                IntervalBoundaries.STRICT,
+            # If activity declared with STRICT boundaries and border is overlapped then skip activity completely.
+            LOG.info(
+                "Excluding from results activity with %s boundaries because it overlaps border of 'base interval': %s",
+                boundaries,
                 activity_by_strategy_to_str(activitybs),
             )
             metrics.incr(
-                f"activities with {IntervalBoundaries.STRICT} boundaries skipped completely from base intervals",
+                f"activities with {boundaries} boundaries skipped completely from result",
                 interval.length().total_seconds(),
             )
             continue
-        # 2. Handle case when BA overlaps the start of the activity.
+        # 2. Handle case when base interal overlaps the start of the activity (not IntervalBoundaries.STRICT here).
         if basic_interval.contains_point(interval.begin):
             if boundaries == IntervalBoundaries.START:
-                # If activity is `in_trustable_boundaries=start` then concatenate data from it into BA.
+                # Add the whole activity to the result.
                 _extend_events_from_activitybs(ra_events, activitybs, basic_interval)
                 overlapping_activities.append(activitybs)
-                metrics.incr("activities absorbed by basic interval at the start", interval.length().total_seconds())
+                metrics.incr(
+                    f"activities with {boundaries} boundaries added completely into result",
+                    interval.length().total_seconds(),
+                )
             elif boundaries == IntervalBoundaries.DIM:
-                # Split activity and concatenate last part with BA. First part is not needed anyway.
+                # Add only start of the activity to the result.
                 split_activity = _cut_activity_end(activitybs, basic_interval.end)
                 ra_events.extend(split_activity.events)  # All events in interval for sure.
                 overlapping_activities.append(split_activity)
-                metrics.incr("activities enhancing basic interval by the start", split_activity.duration())
+                metrics.incr("activities with only start added into result", split_activity.duration())
             else:
-                # If activity is `in_trustable_boundaries=end` then skip it.
+                # Skip activity completely.
                 metrics.incr(
-                    "activities unable to enhance basic interval by the start", interval.length().total_seconds()
+                    f"activities with {boundaries} boundaries skipped completely from result",
+                    interval.length().total_seconds(),
                 )
             continue
-        # 3. Handle case when BA overlaps the end of activity.
+        # 3. Handle case when base interval overlaps the end of activity (not IntervalBoundaries.STRICT here).
         if basic_interval.contains_point(interval.end):
             if boundaries == IntervalBoundaries.END:
-                # If activity is `in_trustable_boundaries=end` then concatenate data from it into BA.
+                # Add the whole activity to the result.
                 _extend_events_from_activitybs(ra_events, activitybs, basic_interval)
                 overlapping_activities.append(activitybs)
-                metrics.incr("activities absorbed by basic interval at the end", interval.length().total_seconds())
+                metrics.incr(
+                    f"activities with {boundaries} boundaries added completely into result",
+                    interval.length().total_seconds(),
+                )
             elif boundaries == IntervalBoundaries.DIM:
-                # If activity is `in_trustable_boundaries=whole` then split activity,
-                # and concatenate first part with BA.
+                # Add only end of the activity to the result.
                 split_activity = _cut_activity_start(activitybs, basic_interval.begin)
                 ra_events.extend(split_activity.events)  # All events in interval for sure.
                 overlapping_activities.append(split_activity)
-                metrics.incr("activities enhancing basic interval by the end", split_activity.duration())
+                metrics.incr("activities with only end added into result", split_activity.duration())
             else:
-                # If activity is `in_trustable_boundaries=start` then skip it.
+                # Skip activity completely.
                 metrics.incr(
-                    "activities unable to enhance basic interval by the end", interval.length().total_seconds()
+                    f"activities with {boundaries} boundaries skipped completely from result",
+                    interval.length().total_seconds(),
                 )
             continue
-        # 4 Handle case when BA itself is placed inside actvity.
+        # 4 Handle case when base interval itself is placed inside actvity.
         if boundaries == IntervalBoundaries.DIM:
             tmp = _cut_activity_start(activitybs, basic_interval.begin)
             tmp = _cut_activity_end(tmp, basic_interval.end)
             ra_events.extend(tmp.events)  # All events in interval for sure.
             overlapping_activities.append(tmp)
-            metrics.incr("activities enhancing basic interval by the middle", ra_duration)
+            metrics.incr("activities with only middle added into result", ra_duration)
             continue
         else:
             # Otherwise BA is in the middle of activity with START or END boundaries.
+            metrics.incr(
+                f"activities with {boundaries} boundaries skipped completely from result",
+                interval.length().total_seconds(),
+            )
             continue
 
     # Build raw RA, i.e. with "not sure end". Fill it with all the events from the "enhancing" activities.
@@ -637,11 +651,12 @@ def _build_activity_name(
         sorted(grouped_activitiesbs[x.name], key=lambda x: x.duration() * x.density, reverse=True)
         for x in sorted_strategies
     ]
-
-    # Process each group of activities to build sentence.
+    # Build a list of descriptions.
     resulting_names: List[str] = []
     if description_first_entry:
         resulting_names.append(description_first_entry)
+    # Process each group of activities to build sentence.
+    is_contained_activity_with_good_name = False
     for grouped_activity_list in sorted_grouped_activities:
         # Note that mixing all of the a-b-s 'get_data' results into the one dictionary would cause data loosing.
         # For example if 2 Windows activities with {app=Slack, title=Meeting} and {app=Code, title=MyProject} are
@@ -649,7 +664,7 @@ def _build_activity_name(
         # Use the strategy's out_activity_name_builder to get the name, or use a default logic.
         strategy = strategy_to_name[grouped_activity_list[0].strategy.name]
         if strategy.out_produces_good_activity_name:
-            metrics.incr("result activities with good name", duration_sec)
+            is_contained_activity_with_good_name = True
         elif is_only_good_strategies_for_description:
             # If strategy doesn't produce good activity name but it is required then skip.
             break
@@ -662,6 +677,8 @@ def _build_activity_name(
         generated_name = name_builder(groups_data)
         if generated_name:
             resulting_names.append(generated_name)
+    if is_contained_activity_with_good_name:
+        metrics.incr("result activities with good name", duration_sec)
     metrics.incr(f"result activities with name combined from {len(sorted_grouped_activities)} strategies", duration_sec)
     return " ".join(resulting_names)
 

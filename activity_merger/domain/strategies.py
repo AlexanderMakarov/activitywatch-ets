@@ -53,7 +53,9 @@ class StrategyApplyResult:
         # Note that Metrics.to_strings append 2 spaces indent.
         metrics_strings = list(self.metrics.to_strings(ignore_with_substrings=ignore_metrics_by_substrings))
         metrics = "\n  ".join(metrics_strings)
-        activities = "\n    ".join(activity_by_strategy_to_str(x) for x in sorted(self.activities, key=lambda x: x.suggested_start_time))
+        activities = "\n    ".join(
+            activity_by_strategy_to_str(x) for x in sorted(self.activities, key=lambda x: x.suggested_start_time)
+        )
         return (
             f"{self.strategy}\n  Metrics ({len(metrics_strings)}):\n  {metrics}"
             f"\n  ActivityByStrategy-es ({len(self.activities)}):\n    {activities}"
@@ -490,7 +492,7 @@ class InStrategyPropertiesHandler:
                 # return self._aggregate_events_with_few_sliding_windows_by_recursive_gaps_comparison()
                 # Inconsistent between small and large windows.
                 # return self._aggregate_events_with_few_sliding_windows_by_optics()
-            else:  # No examples yet.
+            else:  # Slack/Zoom meetings.
                 return self._aggregate_events_with_one_sliding_window()
         else:
             if strategy.in_activities_may_overlap:  # No examples yet.
@@ -573,19 +575,76 @@ class InStrategyPropertiesHandler:
         self.current_metrics.incr("activity-by-strategy-es", activitybs.duration())
         return activitybs
 
+    def _make_activitybs_from_events_by_density_threshold(
+        self, events: List[Event], key: DictGroupingDescriptor
+    ) -> List[ActivityByStrategy]:
+        """
+        Separates list of events by density threshold into `ActivityByStrategy` objects.
+        Fills inner `Metrics` with relevant metrics.
+        :param events: List of events.
+        :param key: Key for all events in the list.
+        :return: List of resulting `ActivityByStrategy`.
+        """
+        result: List[ActivityByStrategy] = []
+        metrics = self.current_metrics
+        # If it is the only event then make activity-by-strategy from it right now.
+        if len(events) == 1:
+            activitybs = self._make_activitybs_between_events(events, key)
+            if activitybs is not None:
+                result.append(activitybs)
+            metrics.incr("1 separated by density activity-by-strategy-es with same data")
+            return result
+        # Prepare to iterate events to separate a-b-s-es.
+        cluster = []
+        len_events = len(events)
+
+        for i, event in enumerate(events):
+            cluster.append(event)
+            # Check next event is available.
+            if i < len_events - 1:
+                next_event = events[i + 1]
+                # Check gap to previous event is too large.
+                gap_duration = next_event.timestamp - (event.timestamp + event.duration)
+                # Decide that cluster is big enough if gap is bigger than min activity duration or density is low.
+                is_large_gap = gap_duration.seconds > MIN_ACTIVITY_DURATION_SEC
+                if not is_large_gap:
+                    # Calculate projected density of the current cluster i.e. like if the next event added.
+                    projected_duration = (
+                        sum(x.duration.total_seconds() for x in cluster) + next_event.duration.total_seconds()
+                    )
+                    projected_time_span = (
+                        (next_event.timestamp + next_event.duration) - cluster[0].timestamp
+                    ).total_seconds()
+                    projected_density = projected_duration / projected_time_span
+                    is_large_gap = projected_density < MIN_DENSITY_FOR_SPARCE_INTERVALS
+                # If gap with the next event is too big then convert cluster to a-b-s and start new cluster.
+                if is_large_gap:
+                    activitybs = self._make_activitybs_between_events(cluster, key)
+                    if activitybs is not None:
+                        result.append(activitybs)
+                    cluster = []
+        # Handle the last cluster.
+        if cluster:
+            activitybs = self._make_activitybs_between_events(cluster, key)
+            if activitybs is not None:
+                result.append(activitybs)
+        metrics.incr(f"{len(result)} separated by density activity-by-strategy-es with same data")
+        return result
+
     def _aggregate_events_with_one_sliding_window(self) -> StrategyApplyResult:
         """
         Runs one sliding window on events list and creates new activity-by-strategy each time as new set of
         key-value pairs is found.
         In result produces activity-by-strategy for all consequent events with the same data.
         """
-        activities: List[ActivityByStrategy] = []
-        window: List[Event] = []
+        activitiesbs: List[ActivityByStrategy] = []
         # Prepare variable to store keys in event's 'data' by which search similar events.
+        windows: Dict[DictGroupingDescriptor, List[Event]] = {}
+        window: List[Event] = []
         window_kv_pairs: Set[Tuple[str, str]] = set()
-        # Start iterate over events with collecting windows.
         strategy = self.current_strategy
         metrics = self.current_metrics
+        # Start iterate over events with collecting windows.
         for event in self.current_events:
             event = self._transform_event(event)
             if event is None:
@@ -615,31 +674,32 @@ class InStrategyPropertiesHandler:
                     )
                     for k in event_data
                 )
-            # If kv_pairs wasn't found then it is either warning about misconfiguration or warning about bad event data.
+            # If kv_pairs wasn't found then it is either misconfiguration or bad event data. Skip using event.
             if not kv_pairs:
                 metrics.incr("events without data containing any in_group_by_keys", event.duration.total_seconds())
                 continue
-            # If event has keys and corresponding values equal to window's then add event to the window.
+            # Check this event data is equal to window's data.
             if kv_pairs == window_kv_pairs:
+                # Just add event to the window.
                 window.append(event)
                 metrics.incr("consecutive events with same data", event.duration.seconds)
-                continue
-            # Otherwise if window exists then create Activity from it.
-            if window:
-                window_key = DictGroupingDescriptor(dict(window_kv_pairs))
-                activitybs = self._make_activitybs_between_events(window, window_key)
-                if activitybs is not None:
-                    activities.append(activitybs)
-                window = []
-            # Prepare next window.
-            window_kv_pairs = kv_pairs
-            window.append(event)
+            else:
+                # If window exists then save it and reset window.
+                if window:
+                    windows[DictGroupingDescriptor(dict(window_kv_pairs))] = window
+                    window = []
+                # Make new window from current event.
+                window_kv_pairs = kv_pairs
+                window.append(event)
         # Handle last window.
         if window:
-            activitybs = self._make_activitybs_between_events(window, DictGroupingDescriptor(dict(window_kv_pairs)))
-            if activitybs is not None:
-                activities.append(activitybs)
-        return StrategyApplyResult(self.current_strategy, activities, self.current_metrics, self.current_id)
+            windows[DictGroupingDescriptor(dict(window_kv_pairs))] = window
+
+        # Iterate resulting windows with separating events not only by data but by density as well.
+        for key, window_events in windows.items():
+            window_result = self._make_activitybs_from_events_by_density_threshold(window_events, key)
+            activitiesbs.extend(window_result)
+        return StrategyApplyResult(self.current_strategy, activitiesbs, self.current_metrics, self.current_id)
 
     def _add_event_to_window(
         self, event: Event, key: GroupingDescriptior, windows: Dict[GroupingDescriptior, List[Event]]
@@ -648,9 +708,10 @@ class InStrategyPropertiesHandler:
         self.current_metrics.incr(f"events with data {key}", event.duration.seconds)
         window.append(event)
 
-    def _separate_events_per_windows(self, events: List[Event]) -> Dict[GroupingDescriptior, List[Event]]:
+    def _separate_events_per_parallel_windows(self, events: List[Event]) -> Dict[GroupingDescriptior, List[Event]]:
         """
-        Separates list of events into windows basing on the data inside and 'group_by_keys'.
+        Separates list of events into windows basing on the data inside and 'group_by_keys' without considering
+        intervals of events.
         :param events: List of events to separate.
         :param group_by_keys: Set of keys in event's "data" field to use for making windows.
         :return: Resulting windows with keys equal to event's "data" field values chosen as window identifiers
@@ -739,7 +800,7 @@ class InStrategyPropertiesHandler:
 
     def _aggregate_events_with_few_sliding_windows(self) -> StrategyApplyResult:
         """Produces Activities covering all "same data" events."""
-        windows: Dict[GroupingDescriptior, List[Event]] = self._separate_events_per_windows(events)
+        windows: Dict[GroupingDescriptior, List[Event]] = self._separate_events_per_parallel_windows(events)
         # Make activities from the each window.
         activities = []
         for key, events in windows.items():
@@ -823,7 +884,7 @@ class InStrategyPropertiesHandler:
         and separate by cluster until left no more big enough gaps to separate events into clusters.
         """
         metrics = self.current_metrics
-        windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
+        windows: Dict[Tuple, List[Event]] = self._separate_events_per_parallel_windows(self.current_events)
         # Analyse gaps in each window.
         activitiesbs: List[ActivityByStrategy] = []
         for key, window_events in windows.items():
@@ -875,52 +936,11 @@ class InStrategyPropertiesHandler:
         the next event. If gap between events is bigger than 'MIN_ACTIVITY_DURATION_SEC' or resulting density is less
         than 'MIN_DENSITY_FOR_SPARCE_INTERVALS' then cuts new activity-by-strategy.
         """
-        metrics = self.current_metrics
-        windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
+        windows: Dict[Tuple, List[Event]] = self._separate_events_per_parallel_windows(self.current_events)
         activitiesbs: List[ActivityByStrategy] = []
         for key, window_events in windows.items():
-            # If it is the only event then make activity-by-strategy from it right now.
-            if len(window_events) == 1:
-                activitybs = self._make_activitybs_between_events(window_events, key)
-                if activitybs is not None:
-                    activitiesbs.append(activitybs)
-                metrics.incr("1 separated by density activity-by-strategy-es with same data")
-                continue
-            # Prepare to iterate events to separate a-b-s-es.
-            cluster = []
-            len_events = len(window_events)
-
-            for i, event in enumerate(window_events):
-                cluster.append(event)
-
-                # Calculate gap to next event, if there is a next event.
-                if i < len_events - 1:
-                    next_event = window_events[i + 1]
-                    gap_duration = next_event.timestamp - (event.timestamp + event.duration)
-                    # Decide that cluster is big enough if gap is bigger than min activity duration or density is low.
-                    is_large_gap = gap_duration.seconds > MIN_ACTIVITY_DURATION_SEC
-                    if not is_large_gap:
-                        # Calculate projected density of the current cluster i.e. like if the next event added.
-                        projected_duration = (
-                            sum(x.duration.total_seconds() for x in cluster) + next_event.duration.total_seconds()
-                        )
-                        projected_time_span = (
-                            (next_event.timestamp + next_event.duration) - cluster[0].timestamp
-                        ).total_seconds()
-                        projected_density = projected_duration / projected_time_span
-                        is_large_gap = projected_density < MIN_DENSITY_FOR_SPARCE_INTERVALS
-                    # If gap with the next event is too big then convert cluster to a-b-s and start new cluster.
-                    if is_large_gap:
-                        activitybs = self._make_activitybs_between_events(cluster, key)
-                        if activitybs is not None:
-                            activitiesbs.append(activitybs)
-                        cluster = []
-            # Add the last cluster if not empty.
-            if cluster:
-                activitybs = self._make_activitybs_between_events(cluster, key)
-                if activitybs is not None:
-                    activitiesbs.append(activitybs)
-            metrics.incr(f"{len(activitiesbs)} separated by density activity-by-strategy-es with same data")
+            window_result = self._make_activitybs_from_events_by_density_threshold(window_events, key)
+            activitiesbs.extend(window_result)
         return StrategyApplyResult(self.current_strategy, activitiesbs, self.current_metrics, self.current_id)
 
     def _aggregate_events_with_few_sliding_windows_by_optics(self) -> StrategyApplyResult:
@@ -932,7 +952,7 @@ class InStrategyPropertiesHandler:
         to find clusters. Note that it works quite bad because it looses
         """
         metrics = self.current_metrics
-        windows: Dict[Tuple, List[Event]] = self._separate_events_per_windows(self.current_events)
+        windows: Dict[Tuple, List[Event]] = self._separate_events_per_parallel_windows(self.current_events)
         # Analyse gaps in each window.
         activitiesbs: List[ActivityByStrategy] = []
         for key, window_events in windows.items():
