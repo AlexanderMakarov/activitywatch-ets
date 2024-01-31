@@ -6,8 +6,6 @@ import os
 import subprocess
 from typing import Dict, List, Optional, Union
 
-from sympy import N
-
 from activity_merger.config.config import (
     DAY_BORDER,
     GIT_BUCKET_ID,
