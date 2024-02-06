@@ -1,3 +1,4 @@
+import datetime
 from typing import List
 
 import aw_client
@@ -57,6 +58,27 @@ def delete_buckets(bucket_ids: List[str], client: aw_client.ActivityWatchClient)
     except Exception as err:
         return "Wasn't able connect to ActivityWatch client because: " + str(err)
     return "".join(result)
+
+
+def delete_bucket_events_for_interval(
+    client: aw_client.ActivityWatchClient, bucket_id: str, interval_start: datetime.date, interval_end: datetime.date
+):
+    """
+    Removes events on ActivityWatch server for given bucket and interval.
+    :param client: ActivityWatchClient instance.
+    :param bucket_id: Bucket to remove events from.
+    :param interval_start: Beginning of the interval.
+    :param interval_end: Ending of the interval.
+    :return: None.
+    """
+    events = client.get_events(bucket_id, start=interval_start, end=interval_end)
+    # TODO: boost with ThreadPoolExecutor (if ActivityWatch server may handle parallel requests)
+    print(f"Removing {len(events)} events from '{bucket_id}' bucket sequentially...")
+    for i, event in enumerate(events):
+        if i % 100 == 0:
+            print(f"  {i} removed...")
+        client.delete_event(bucket_id, event.id)
+    print(f"Total removed {len(events)} events.")
 
 
 def upload_events(
