@@ -42,10 +42,10 @@ CALENDAR_TODAY_URL_SUFFIX = "/#path=/calendar/view/Day"
 def start_firefox_under_existing_profile(profile: str, page: str, headless: bool = True) -> WebDriver:
     options = webdriver.FirefoxOptions()
     firefox_args = [  # moz:firefoxOptions
-        "--new-instance",  # --safe-mode is dangerous - it uninstalls all plugins from profile!
+        "--new-window",  # --safe-mode is dangerous - it uninstalls all plugins from profile!
         "--new-tab",
         page,
-        "--start-maximized",
+        "--start-maximized",  # Only on Mac OS it may lead to "NS_BIND_ERROR", remove then.
     ]
     options._arguments.extend(firefox_args)
     # Note that '--profile' inside options._arguments causes alert "window with such profile is already opened".
@@ -406,6 +406,8 @@ def main():
         " with given Office 365 Email/Calendar page (aka OWA365), scrolls to specified date in Calendar,"
         " parses all found events in it and loads them into ActivityWatch. Note that you need to have"
         " Firefox opened in another window and be logged in OWA in order to pass authentication."
+        " Requires geckodriver installed and available in PATH, see https://github.com/mozilla/geckodriver."
+        " On Mac OS X use `brew install geckodriver`."
     )
     parser.add_argument(
         "events_date",
@@ -444,7 +446,8 @@ def main():
         type=str,
         default=FIREFOX_PROFILE_PATH,
         help="Absolute path to Firefox profile folder. On Linux it looks like "
-        "'/home/{username}/.mozilla/firefox/{some_id}.default-release/'.",
+        "'/home/{username}/.mozilla/firefox/{some_id}.default-release/'. "
+        "Open 'about:profiles' in Firefox - 'Root Directory' value for section with 'Default Profile = yes'.",
     )
     parser.add_argument(
         "-u",
