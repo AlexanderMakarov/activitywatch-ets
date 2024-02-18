@@ -236,10 +236,10 @@ STRATEGIES = [
         in_trustable_boundaries="strict",
         in_events_density_matters=True,
         in_activities_may_overlap=True,
-        # "unknown" (linux) and "loginwindow" (MAC OS) events are useless.
+        # "unknown" events are useless.
         # "Slack - (.+?) - Huddle" is used by strategy above.
         # "Zoom Meeting|Meeting Chat|zoom|Zoom" is used by strategy above.
-        in_skip_key_regexp={"app": "unknown|loginwindow", "title": "Slack - (.+?) - Huddle|Zoom Meeting|Meeting Chat|zoom|Zoom"},
+        in_skip_key_regexp={"app": "unknown", "title": "Slack - (.+?) - Huddle|Zoom Meeting|Meeting Chat|zoom|Zoom"},
         in_only_not_afk=True,
         # Title may change very often, but better to keep track of apps as well.
         in_group_by_keys=[
@@ -297,16 +297,19 @@ STRATEGIES = [
         bucket_prefix="aw-watcher-web",
         in_trustable_boundaries="start",
         in_events_density_matters=True,
-        in_only_key_regexp={"url": "^https://(meet\.google\.com|youtube|www\.udemy\.com).*"},
+        # Include all pages where being AFK is an activity: on meet, watching videos/courses.
+        in_only_key_regexp={"url": "^https://(meet\.google|www\.youtube|www\.udemy).*"},
         in_only_if_window_app=["firefox", "safari", "chrome"],
         out_activity_name_sentence_builder=__web_browser_activity_name_sentence_builder,
     ),
     Strategy(
         name="WebBrowser->Other",
         bucket_prefix="aw-watcher-web",
-        in_trustable_boundaries="dim",
+        # Browser event may happen in background.
+        in_trustable_boundaries="start",
         in_events_density_matters=True,
-        in_skip_key_regexp={"url": "^https://(meet\.google\.com|youtube|www\.udemy\.com).*"},
+        # Skipped here events/pages are handled by the strategy above.
+        in_skip_key_regexp={"url": "^https://(meet\.google|www\.youtube|www\.udemy).*"},
         in_activities_may_overlap=True,
         in_only_not_afk=True,
         in_only_if_window_app=["firefox", "safari", "chrome"],
