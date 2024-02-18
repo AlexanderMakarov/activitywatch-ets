@@ -30,6 +30,15 @@ def from_start_to_end_to_str(start: datetime.datetime, end: datetime.datetime) -
     return f"{datetime_to_time_str(start)}..{datetime_to_time_str(end)}"
 
 
+def datetime_to_time_str_ms(date: datetime.datetime) -> str:
+    date = date if date.tzinfo == CURRENT_TIMEZONE else date.astimezone(CURRENT_TIMEZONE)
+    return f"{date:%H:%M:%S:%f}"
+
+
+def from_start_to_end_to_str_ms(start: datetime.datetime, end: datetime.datetime) -> str:
+    return f"{datetime_to_time_str_ms(start)}..{datetime_to_time_str_ms(end)}"
+
+
 def seconds_to_timedelta(seconds: float) -> datetime.timedelta:
     return datetime.timedelta(seconds=int(seconds))
 

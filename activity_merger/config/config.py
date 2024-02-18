@@ -16,7 +16,7 @@ MAX_ACTIVITY_DURATION_SEC = 2 * 60 * 60  # 2 hours
 GIT_FOLDERS_WITH_REPOS = "/home/user/code"
 # Absolute path to Firefox profile folder to grab OWA events under.
 # On Linux it looks like '/home/{username}/.mozilla/firefox/{some_id}.default-release/'.
-# May be found by opening 'about:profiles' in Firefox - "Root Directory" value.
+# Open 'about:profiles' in Firefox - "Root Directory" value for section with "Default Profile = yes".
 FIREFOX_PROFILE_PATH: str = "/home/user/snap/firefox/common/.mozilla/firefox/ooooooooooo.default-0000000000000"
 # URL to home page of Web (MS Office Web Apps) Outlook. May look like 'https://mail.company.com/owa'.
 OWA_URL: str = "https://mail.company.com/owa"
@@ -194,6 +194,7 @@ STRATEGIES = [
         in_may_be_offline=False,
         in_only_not_afk=False,
         in_only_if_window_app=None,
+        in_only_if_window_app_soft=False,
         in_group_by_keys=None,
         out_self_sufficient=False,
         out_self_sufficient_interval_rank=0,
@@ -277,8 +278,10 @@ STRATEGIES = [
         in_trustable_boundaries="end",
         in_events_density_matters=True,
         in_activities_may_overlap=True,
-        in_only_not_afk=False,  # Don't cut activity-by-strategy-es by afk gaps.
-        in_only_if_window_app=None,  # Jira activity may happen everywhere, not only in browser for example.
+        # Don't make Jira activites span afk gaps. JiraIdBIFinder should search Jira ID-s in window title and so on.
+        in_only_not_afk=True,
+        # Jira activity is not limited by browser or other places where Jira ID exists in window title.
+        in_only_if_window_app=None,
         in_group_by_keys=[
             (
                 "jira_id",
@@ -290,27 +293,53 @@ STRATEGIES = [
         out_activity_name_sentence_builder=__jira_activity_name_sentence_builder,
     ),
     Strategy(
-        name="WebBrowser",
+        name="WebBrowser->MayBeAFK",
         bucket_prefix="aw-watcher-web",
-        in_trustable_boundaries="dim",  # Events are created by browser watcher even when user AFK yet.
+        in_trustable_boundaries="start",
         in_events_density_matters=True,
-        in_activities_may_overlap=True,
-        in_only_not_afk=True,
-        in_only_if_window_app=["firefox"],
+        in_only_key_regexp={"url": "^https://(meet\.google\.com|youtube|www\.udemy\.com).*"},
+        in_only_if_window_app=["firefox", "safari", "chrome"],
         out_activity_name_sentence_builder=__web_browser_activity_name_sentence_builder,
     ),
     Strategy(
-        name="IDEA",
-        bucket_prefix="aw-watcher-idea",
-        # Boundaries are "start" actually, but IDEA watcher may produce events if app in the background
-        # so if keep "start" then "in_only_if_window_app" filter will loose interval completely.
+        name="WebBrowser->Other",
+        bucket_prefix="aw-watcher-web",
         in_trustable_boundaries="dim",
+        in_events_density_matters=True,
+        in_skip_key_regexp={"url": "^https://(meet\.google\.com|youtube|www\.udemy\.com).*"},
+        in_activities_may_overlap=True,
+        in_only_not_afk=True,
+        in_only_if_window_app=["firefox", "safari", "chrome"],
+        out_activity_name_sentence_builder=__web_browser_activity_name_sentence_builder,
+    ),
+    Strategy(
+        name="IDEA",  # Linux.
+        bucket_prefix="aw-watcher-idea",
+        in_trustable_boundaries="start",
         in_events_density_matters=True,
         in_activities_may_overlap=True,
         in_only_not_afk=True,
         in_only_if_window_app=["jetbrains-idea"],
+        # IDEA watcher may produce events if app is in the background.
+        in_only_if_window_app_soft=True,
         in_group_by_keys=[
             ("project",),
+            ("file",),
+        ],  # IDEA events may lack 'project' field. But 'file' contians full path.
+        out_activity_name_sentence_builder=partial(__ide_activity_name_sentence_builder, "IDEA"),
+    ),
+    Strategy(
+        name="IDEA",  # Mac OS X.
+        bucket_prefix="aw-watcher-intellij-idea",
+        in_trustable_boundaries="start",
+        in_events_density_matters=True,
+        in_activities_may_overlap=True,
+        in_only_not_afk=True,
+        in_only_if_window_app=["IntelliJ IDEA"],
+        # IDEA watcher may produce events if app is in the background.
+        in_only_if_window_app_soft=True,
+        in_group_by_keys=[
+            ("project", "file"),
             ("file",),
         ],  # IDEA events may lack 'project' field. But 'file' contians full path.
         out_activity_name_sentence_builder=partial(__ide_activity_name_sentence_builder, "IDEA"),
@@ -324,6 +353,8 @@ STRATEGIES = [
         in_only_not_afk=True,
         in_group_by_keys=[("project",), ("file",)],  # Events may lack 'project' field. But 'file' contians full path.
         in_only_if_window_app=["code", "vscodium"],
+        # VSCode watcher may produce events if app in the background (rarely and only on Mac).
+        in_only_if_window_app_soft=True,
         out_activity_name_sentence_builder=partial(__ide_activity_name_sentence_builder, "VSCode"),
     ),
     Strategy(

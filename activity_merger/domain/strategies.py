@@ -7,16 +7,11 @@ import intervaltree
 import numpy as np
 from sklearn.cluster import DBSCAN
 
-from activity_merger.helpers.event_helpers import activity_by_strategy_to_str
+from activity_merger.helpers.event_helpers import activity_by_strategy_to_str, event_to_str
 
-from ..config.config import (
-    EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
-    LOG,
-    MIN_ACTIVITY_DURATION_SEC,
-    MIN_DENSITY_FOR_SPARCE_INTERVALS,
-    TOO_SMALL_INTERVAL_SEC,
-)
-from ..helpers.helpers import from_start_to_end_to_str
+from ..config import config
+from ..config.config import LOG
+from ..helpers.helpers import from_start_to_end_to_str, from_start_to_end_to_str_ms
 from .input_entities import (
     ActivityByStrategy,
     DictGroupingDescriptor,
@@ -73,15 +68,16 @@ def cut_by_interval_tree(
     tree_name: str,
     metrics: Metrics,
     strategy_name: str = None,
+    tolerance: datetime.timedelta = None,
     is_fail_incompatible: bool = False,
 ) -> Tuple[bool, Optional[Tuple[datetime.datetime, datetime.datetime]]]:
     """
-    Calculates event boundaries to be on the intervals in the given tree taking into account boundaries.
+    Calculates event boundaries to be on intervals in the given tree taking into account boundaries.
     If boundaries and way of overlapping with tree are incompatible then either returns `None` or raises `ValueError`.
     List of incompatible cases:
-    - "strict" boundaries and there is no overlaps in the tree at least for one piece of event.
-    - "start" boundaries and there is no overlapping with event start.
-    - "end" boundaries and there is no overlapping with event end.
+    - "strict" boundaries and tree intervals don't cover event completely.
+    - "start" boundaries and tree intervals don't overlap event start.
+    - "end" boundaries and tree intervals don't overlap event end.
     Intervals in tree are expected to be not overlapping.
     May return 3 types of result:
     1. Event interval is OK as is - in this case first item in result is False.
@@ -91,8 +87,10 @@ def cut_by_interval_tree(
     initial_duration = event_end - event_start
     is_changed = False
 
-    # Get overlapping intervals
-    overlaps: List[intervaltree.Interval] = sorted(tree[event_start:event_end])
+    # Get overlapping intervals including tolerance at both ends.
+    event_start_tol = event_start - tolerance
+    event_end_tol = event_start + tolerance
+    overlaps: List[intervaltree.Interval] = sorted(tree[event_start_tol:event_end_tol])
     if not overlaps:
         return (False, None)
     metrics.incr(f"events overlapped by {len(overlaps)} {tree_name} events", initial_duration.total_seconds())
@@ -102,43 +100,72 @@ def cut_by_interval_tree(
 
     # Handle according to boundaries
     if boundaries == IntervalBoundaries.STRICT:
-        # Check that no one from tree's intervals ends inside event.
-        event_interval = intervaltree.Interval(event_start, event_end)
-        for overlap in overlaps:
-            if not overlap.contains_interval(event_interval):
-                if is_fail_incompatible:
-                    raise ValueError(
-                        f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
-                        f" intervals for event in [{from_start_to_end_to_str(event_start, event_end)}]"
-                    )
-                else:
-                    return (False, None)
-    elif boundaries == IntervalBoundaries.START:
-        # Check that first overlapping interval doesn't overlap event start.
-        if first_overlap.begin > event_start:
+        # Check that tree intervals cover event completely.
+        # First check that both ends are covered.
+        if overlaps[0].begin - event_start > tolerance:
             if is_fail_incompatible:
                 raise ValueError(
                     f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
-                    f" intervals for event in [{from_start_to_end_to_str(event_start, event_end)}]"
+                    f" intervals for event in [{from_start_to_end_to_str_ms(event_start, event_end)}] because"
+                    f" begin of '{strategy_name}' event is not covered with {tree_name}"
+                    f" even with {tolerance} tolerance."
+                )
+            else:
+                return (False, None)
+        if event_end - overlaps[-1].end > tolerance:
+            if is_fail_incompatible:
+                raise ValueError(
+                    f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
+                    f" intervals for event in [{from_start_to_end_to_str_ms(event_start, event_end)}] because"
+                    f" end of '{strategy_name}' event is not covered with {tree_name} even with {tolerance} tolerance."
+                )
+            else:
+                return (False, None)
+        # Next check that tree intervals are adjacent to each other.
+        previous = overlaps[0]
+        for overlap in overlaps[1:]:
+            if previous.end < overlap.begin:
+                if is_fail_incompatible:
+                    raise ValueError(
+                        f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
+                        f" intervals for event in [{from_start_to_end_to_str_ms(event_start, event_end)}] because"
+                        f" {tree_name} events {from_start_to_end_to_str_ms(previous.begin, previous.end)} and"
+                        f" {from_start_to_end_to_str_ms(overlap.begin, overlap.end)} aren't adjacent "
+                        f" inside the interval therefore don't cover it completely even with {tolerance} tolerance."
+                    )
+                else:
+                    return (False, None)
+            previous = overlap
+    elif boundaries == IntervalBoundaries.START:
+        # Filter out case when first overlapping interval doesn't overlap event start (i.e. start is not matched).
+        if first_overlap.begin - event_start > tolerance:
+            if is_fail_incompatible:
+                raise ValueError(
+                    f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
+                    f" intervals for event in [{from_start_to_end_to_str_ms(event_start, event_end)}] because"
+                    f" {tree_name} interval [{from_start_to_end_to_str_ms(first_overlap.begin, first_overlap.end)}]"
+                    f" doesn't cover it's start even with {tolerance} tolerance."
                 )
             else:
                 return (False, None)
         # If there is a gap in "tree overlapping" then need to cut event to the shortest interval from the start.
-        if first_overlap.end < event_end:
+        if first_overlap.end < event_end_tol:
             is_changed = True
             event_end = first_overlap.end
     elif boundaries == IntervalBoundaries.END:
-        # Check that last overlapping interval doesn't overlap event end.
-        if last_overlap.end < event_end:
+        # Filter out case when last overlapping interval doesn't overlap event end (i.e. end is not matched).
+        if event_end - last_overlap.end > tolerance:
             if is_fail_incompatible:
                 raise ValueError(
                     f"Strategy '{strategy_name}' boundaries '{boundaries}' are incompatible with {tree_name}"
-                    f" intervals for event in [{from_start_to_end_to_str(event_start, event_end)}]"
+                    f" intervals for event in [{from_start_to_end_to_str_ms(event_start, event_end)}] because"
+                    f" {tree_name} interval [{from_start_to_end_to_str_ms(last_overlap.begin, last_overlap.end)}]"
+                    f" doesn't cover it's end even with {tolerance} tolerance."
                 )
             else:
                 return (False, None)
         # If there is a gap in "tree overlapping" then need to cut event to the shortest interval from the end.
-        if last_overlap.begin > event_start:
+        if last_overlap.begin > event_start_tol:
             is_changed = True
             event_start = last_overlap.begin
     elif boundaries == IntervalBoundaries.DIM:
@@ -343,7 +370,7 @@ class InStrategyPropertiesHandler:
         # Cut event by windows watcher "app=" events if need.
         # Should be before AFK chopping because we don't want to get random piece of event.
         if strategy.in_only_if_window_app:
-            tree_name = f"'{strategy.in_only_if_window_app}' app(s) active"
+            tree_name = f"{strategy.in_only_if_window_app} app(s) active"
             # Cut event by to be only in "relevant app active" intervals.
             is_changed, new_interval = cut_by_interval_tree(
                 event_start,
@@ -353,10 +380,11 @@ class InStrategyPropertiesHandler:
                 tree_name,
                 metrics,
                 strategy.name,
-                True,
+                config.EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+                not strategy.in_only_if_window_app_soft,
             )
             if new_interval is None:
-                metrics.incr(f"events removed by {tree_name}", event_duration.total_seconds())
+                metrics.incr(f"events skipped because are out of {tree_name}", event_duration.total_seconds())
                 return None
             elif is_changed:
                 change_handler.add_change(
@@ -376,7 +404,15 @@ class InStrategyPropertiesHandler:
         if strategy.in_only_not_afk:
             # Cut event by to be only in "not-AFK" intervals.
             is_changed, new_interval = cut_by_interval_tree(
-                event_start, event_end, self.not_afk_tree, boundaries, "not-AFK", metrics, strategy.name, False
+                event_start,
+                event_end,
+                self.not_afk_tree,
+                boundaries,
+                "not-AFK",
+                metrics,
+                strategy.name,
+                config.EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+                False,
             )
             if new_interval is None:
                 metrics.incr("events cut out by 'not-AFK'", event_duration.total_seconds())
@@ -394,7 +430,15 @@ class InStrategyPropertiesHandler:
                 )
         elif not strategy.in_may_be_offline:
             is_changed, new_interval = cut_by_interval_tree(
-                event_start, event_end, self.any_afk_tree, boundaries, "any-AFK", metrics, strategy.name, False
+                event_start,
+                event_end,
+                self.any_afk_tree,
+                boundaries,
+                "any-AFK",
+                metrics,
+                strategy.name,
+                config.EVENTS_COMPARE_TOLERANCE_TIMEDELTA,
+                False,
             )
             if new_interval is None:
                 metrics.incr("events cut out by 'any-AFK'", event_duration.total_seconds())
@@ -421,9 +465,9 @@ class InStrategyPropertiesHandler:
 
     def _check_wrong_duration(self, duration: datetime.timedelta) -> bool:
         duration_sec = duration.total_seconds()
-        if duration_sec <= TOO_SMALL_INTERVAL_SEC:
+        if duration_sec <= config.TOO_SMALL_INTERVAL_SEC:
             self.current_metrics.incr(
-                f"activity-by-strategy-es not created because interval < {TOO_SMALL_INTERVAL_SEC} seconds",
+                f"activity-by-strategy-es not created because interval < {config.TOO_SMALL_INTERVAL_SEC} seconds",
                 duration_sec,
             )
             return True
@@ -606,7 +650,7 @@ class InStrategyPropertiesHandler:
                 # Check gap to previous event is too large.
                 gap_duration = next_event.timestamp - (event.timestamp + event.duration)
                 # Decide that cluster is big enough if gap is bigger than min activity duration or density is low.
-                is_large_gap = gap_duration.seconds > MIN_ACTIVITY_DURATION_SEC
+                is_large_gap = gap_duration.seconds > config.MIN_ACTIVITY_DURATION_SEC
                 if not is_large_gap:
                     # Calculate projected density of the current cluster i.e. like if the next event added.
                     projected_duration = (
@@ -616,7 +660,7 @@ class InStrategyPropertiesHandler:
                         (next_event.timestamp + next_event.duration) - cluster[0].timestamp
                     ).total_seconds()
                     projected_density = projected_duration / projected_time_span
-                    is_large_gap = projected_density < MIN_DENSITY_FOR_SPARCE_INTERVALS
+                    is_large_gap = projected_density < config.MIN_DENSITY_FOR_SPARCE_INTERVALS
                 # If gap with the next event is too big then convert cluster to a-b-s and start new cluster.
                 if is_large_gap:
                     activitybs = self._make_activitybs_between_events(cluster, key)
@@ -783,10 +827,11 @@ class InStrategyPropertiesHandler:
                 else:
                     LOG.warning(
                         "Wrong configuration for %s strategy: "
-                        + "got the same interval/events grouped by 'same length' %s and %s",
+                        + "grouped the same events by %s (used) and %s (skipped). 1st event is %s.",
                         self.current_strategy.name,
                         existing_descriptior,
                         descriptor,
+                        event_to_str(window_events[0]),
                     )
             else:
                 windows_with_interval[key] = descriptor
@@ -896,7 +941,7 @@ class InStrategyPropertiesHandler:
                 if prev_event:
                     gap_seconds = (event.timestamp - (prev_event.timestamp + prev_event.duration)).seconds
                     # Add only big enough gaps - for performance.
-                    if gap_seconds > EVENTS_COMPARE_TOLERANCE_TIMEDELTA.seconds:
+                    if gap_seconds > config.EVENTS_COMPARE_TOLERANCE_TIMEDELTA.seconds:
                         gaps.append((i, gap_seconds))
                 prev_event = event
             # If there are no gaps then just create one activity-by-strategy from all events.
@@ -920,7 +965,7 @@ class InStrategyPropertiesHandler:
                 key=key,
                 events=window_events,
                 gaps=gaps,
-                max_gap_sec=MIN_ACTIVITY_DURATION_SEC,
+                max_gap_sec=config.MIN_ACTIVITY_DURATION_SEC,
                 recursion_max_gap_divider=recursion_max_gap_divider,
                 events_indexes=(0, len(window_events)),
                 gaps_indexes=(0, len(gaps)),
@@ -975,7 +1020,9 @@ class InStrategyPropertiesHandler:
                     else:
                         dist_matrix[i][j] = (e1.timestamp - (e2.timestamp + e2.duration)).total_seconds()
             # FYI: with min_samples bigger we are getting bigger activities.
-            clustering = DBSCAN(min_samples=2, eps=MIN_ACTIVITY_DURATION_SEC, metric="precomputed").fit(dist_matrix)
+            clustering = DBSCAN(min_samples=2, eps=config.MIN_ACTIVITY_DURATION_SEC, metric="precomputed").fit(
+                dist_matrix
+            )
             event_clusters = {}
             for label, event in zip(clustering.labels_, window_events):
                 event_clusters.setdefault(label, []).append(event)

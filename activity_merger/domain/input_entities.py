@@ -155,15 +155,16 @@ class Strategy:
 
     in_skip_key_regexp: Optional[Dict[str, str]] = None
     """
-    Map of keys to regexp to skip (black list) events with such data and don't make activities from.
-    Useful to filter out "unknown" events (which are bad source of information and may be duplicated by more
+    Map of key-to-data_regexp to skip (black list) events with the given data and don't make activities from.
+    Useful to filter out "unknown"/"dummy" events (which are bad source of information and may be duplicated by more
     meaningful events/activities) and to filter out events handled by previous strategies with the same bucket prefix.
     """
 
     in_only_key_regexp: Optional[Dict[str, str]] = None
     """
-    Map of keys to regexp to use only (white list) events with such data and don't make activities from others.
-    Useful to create custom strategies on specific events in "common" buckets.
+    Map of key-to-data_regexp to exclusively use (white list) events with the given data and don't make activities from
+    other events.
+    Useful to create custom strategies only from specific events in "shared" between few strategies bucket.
     For example to handle Zoom/Google Meet/Slack-Huddle meetings differently than other "OS Windows" events.
     If regexp contains groups then first group value will be used as a "key value" for following aggregations.
     Is applied after `in_skip_key_regexp`.
@@ -171,8 +172,9 @@ class Strategy:
 
     in_may_be_offline: bool = False
     """
-    True means that event won't be filtered by any AFK events. In details AFK events are produced when computer
-    works, so disable filtering by these events make sense for offline activity.
+    True means that event won't be filtered by any AFK events (both "afk" and "not-afk").
+    Enabling it useful for manually entered or other high-quality activities.
+    See `in_only_not_afk` for other options.
     """
 
     in_only_not_afk: bool = False
@@ -190,12 +192,22 @@ class Strategy:
     and `in_skip_key_regexp`/`in_only_key_regexp` doesn't filter out required values.
     """
 
+    in_only_if_window_app_soft: bool = False
+    """
+    Flag to don't fail if overlapping of `in_trustable_boundaries` and `in_only_if_window_app` happens but skip event.
+    For example if `in_trustable_boundaries=START`, `in_only_if_window_app` is enabled for some application and
+    OS Windows Manager events doesn't cover start of this strategy/bucket event.
+    It means that OS Windows Manager doesn't support events of this strategy/bucket and it is either misconfiguration
+    or bad watcher behavior (it produces events without user activity in the window).
+    Default behavior (`False`) is to fail processing in such situations to make user re-check events and configuration.
+    """
+
     in_group_by_keys: Optional[List[Tuple]] = None
     """
     Specific keys to separate events into the windows/activities when related values are similar.
     By default events are grouped together if set of keys and values for all keys (i.e. whole data) are identical.
-    Keep in mind that some event producers may produce events with different set of keys.
-    This parameter allows group events only on specific keys or key sets (i.e. require them and ignore other).
+    Keep in mind that not all events may have filled all keys.
+    So this parameter allows group events only on specific keys or key sets (i.e. require them and ignore other).
     Note that order of key sets/tuples is matter for "only consecutive activities" case - if first set of keys was
     matched then all remained are ignored. For "parallel activities" case all "found" sets will be used.
     NOTE that `in_only_key_regexp` may contribute to this behavior by providing specific "value" for relevant key
@@ -248,6 +260,7 @@ class Strategy:
         "in_may_be_offline",
         "in_only_not_afk",
         "in_only_if_window_app",
+        "in_only_if_window_app_soft",
         "in_group_by_keys",
         "out_self_sufficient",
         "out_self_sufficient_interval_rank",
