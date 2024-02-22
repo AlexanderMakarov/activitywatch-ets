@@ -2,7 +2,7 @@
 import argparse
 import datetime
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import aw_client
 
@@ -193,7 +193,21 @@ def convert_aw_events_to_activities(
     return analyzer_result
 
 
-def main():
+def calculate_events_datetime(events_datetime: Optional[datetime.datetime], back_days: Optional[int]):
+    """
+    Basing on 2 optional arguments decides start of day to get/handle events from.
+    Handles timezone and `config.DAY_BORDER` setting.
+    :param date: Optional argument with date.
+    :param back_days: Optional argument with number of days back from today.
+    :return: Events datetime based on input parameter or just configured start of today.
+    """
+    events_date = events_datetime if events_datetime else datetime.datetime.today().astimezone()
+    if back_days and back_days > 0:
+        events_date = events_date - datetime.timedelta(days=back_days)
+    return events_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone() + config.DAY_BORDER
+
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Calls local ActivityWatch for all available events on specified date,"
         " analyzes all events to build list of activities per importer, merges them"
@@ -256,18 +270,11 @@ def main():
         "'produces good activity name' strategies. Descriptions would be shorter but less informative.",
     )
     args = parser.parse_args()
-    events_date = args.date if args.date else datetime.datetime.today().astimezone()
-    if args.back_days and args.back_days > 0:
-        events_date = events_date - datetime.timedelta(days=args.back_days)
-    events_datetime = events_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone() + config.DAY_BORDER
+    date = calculate_events_datetime(args.date, args.back_days)
     convert_aw_events_to_activities(
-        events_datetime=events_datetime,
+        events_datetime=date,
         bi_finder_name=args.bi_finder_name,
         ignore_substrings=list(args.ignore_substrings),
         is_only_good_strategies_for_description=args.is_only_good_strategies_for_description,
         is_import_debug_buckets=args.is_import_debug_buckets,
     )
-
-
-if __name__ == "__main__":
-    main()

@@ -62,6 +62,21 @@ BIFINDER_LOGISTIC_REGRESSION_COEF = [
 ]
 BIFINDER_LOGISTIC_REGRESSION_INTERCEPT = -7.45467602
 
+# Flag for 'run.py' to run importer of git events.
+RUN_GIT_EVENTS_IMPORTER: bool = True
+# Flag for 'run.py' to run importer of Google Calendar events.
+RUN_GOOGLE_CALENDAR_EVENTS_IMPORTER: bool = False
+# Flag for 'run.py' to run importer of Jira events.
+RUN_JIRA_EVENTS_IMPORTER: bool = False
+# Flag for 'run.py' to run importer of Outlook (OWA/Microsoft 365) Calendar events.
+RUN_OUTLOOK_EVENTS_IMPORTER: bool = False
+# Flag for 'run.py' to (re)import debug buckets into ActivityWatch for chosen date.
+RUN_WITH_IMPORTING_DEBUG_BUCKETS: bool = True
+# Flag for 'run.py' to use only "good" strategies to build activity descriptions.
+RUN_ONLY_GOOD_STRATEGIES_FOR_DESCRIPTIONS: bool = False
+# List of substrings for 'run.py' to ignore metrics or other logs with them.
+RUN_IGNORE_SUBSTRINGS: List[str] = ["events with data"]
+
 
 # ---------- COMMON SETTINGS ---------- Settings with values suitable for most people.
 def __window_activity_name_sentence_builder(groups_data: List[Dict[str, str]]) -> str:

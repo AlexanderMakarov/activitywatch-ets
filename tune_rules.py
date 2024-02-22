@@ -42,7 +42,7 @@ from activity_merger.domain.analyzer import (
 from activity_merger.domain.metrics import Metrics
 from activity_merger.domain.output_entities import AnalyzerResult
 from activity_merger.helpers.helpers import datetime_to_time_str, setup_logging, valid_date
-from get_activities import UploadDebugBucketsStep, clean_debug_buckets_and_apply_strategies_on_one_day_events
+import get_activities
 
 
 LOG = setup_logging()
@@ -411,7 +411,9 @@ def tune_rules(events_datetime: datetime.datetime, is_use_saved_context: bool):
     else:
         context = Context()
     # Build ActivitiesByStrategy list by provided events date.
-    strategy_apply_result, metrics = clean_debug_buckets_and_apply_strategies_on_one_day_events(events_datetime, client)
+    strategy_apply_result, metrics = get_activities.clean_debug_buckets_and_apply_strategies_on_one_day_events(
+        events_datetime, client
+    )
     metrics_strings = list(metrics.to_strings())
     # Don't print resulting activity-by-strategies - better to see them in ActivityWatch UI.
     LOG.info("Analyzed all buckets separately, common metrics:\n%s", "\n".join(metrics_strings))
@@ -431,7 +433,7 @@ def tune_rules(events_datetime: datetime.datetime, is_use_saved_context: bool):
             MakeResultTreeFromSelfSufficientActivitiesStep(True),
             ChopActivitiesByResultTreeStep(True, True),
             MakeCandidatesTreeStep(True),
-            UploadDebugBucketsStep(client, True),
+            get_activities.UploadDebugBucketsStep(client, True),
             trainer_step,
         ],
     )
@@ -464,7 +466,7 @@ def tune_rules(events_datetime: datetime.datetime, is_use_saved_context: bool):
     return analyzer_result
 
 
-def main():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Makes the same as 'get_activities' but together with providing result asks user about "
         "what they expect in order to tune inner 'find basic interval' model for user data.\n"
@@ -500,12 +502,5 @@ def main():
         help="Flag to load saved context from previous execution.",
     )
     args = parser.parse_args()
-    events_date = args.date if args.date else datetime.datetime.today().astimezone()
-    if args.back_days and args.back_days > 0:
-        events_date = events_date - datetime.timedelta(days=args.back_days)
-    events_datetime = events_date.replace(hour=0, minute=0, second=0, microsecond=0).astimezone()
-    tune_rules(events_datetime, args.is_use_saved)
-
-
-if __name__ == "__main__":
-    main()
+    date = get_activities.calculate_events_datetime(args.date, args.back_days)
+    tune_rules(date, args.is_use_saved)

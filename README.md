@@ -78,15 +78,16 @@ mentioned above in a way:
     Moreover - one bucket may provide different activities suggestions for the same interval.
 6. At least 3 new sources of data/events (Jira, Outlook calendar, Git) are added.
 
-## Setup
+## Setup and run
 
 - Install Python 3.6+.
-- Create venv with `python -m venv .venv` (be careful with version of Python).
+- Create venv with `python3 -m venv .venv` (be careful with version of Python - should be 3.7+).
     Activate it with something like `source .venv/bin/activate`.
 - Open root folder and run `pip3 install -r requirements.txt`.
 - (only for Outlook Calendar events scraping) Install [geckodriver](https://github.com/mozilla/geckodriver)
     from GitHub repo [Releases](https://github.com/mozilla/geckodriver/releases) page.
     For Linux it is just extracting binary into some place in $PATH.
+- To execute both importers and activities analyzer run `./run.py` (first with `-h` flag).
 
 ## ActivityWatch extra data.
 
@@ -213,7 +214,11 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [x] Add Google Calendar importer.
 - [x] Implement BIFinder to search Jira ID-s in Jira, Windows, IDEA, VSCode, Browser activities.
 - [x] Handle overlapping "self-sufficient=true" strategies with ranking.
-- [ ] Make (JiraId)BIFinder to correct description for resulting activity.
+- [x] Make (JiraId)BIFinder to correct description for resulting activity.
+- [x] Prepare script to run all event importers and get_activities.py for the specific date.
+- [ ] Make only big enough activities, on points where many activities have ended (i.e. excluding long ones).
+      We may miss with interval but not with content.
+      Also try to cover (i.e. don't skip because they can't be split) as much as possible "strict" activities.
 - [ ] JiraIdBIFinder respect max duration.
 - [ ] Fix Google Calendar importer authentication to work under Enterprise Workspace.
 - [ ] Add into get_activities.py flag/logic to deploy only resulting "debug bucket".
@@ -226,7 +231,6 @@ Everything is configured in [config.py](/activity_merger/config/config.py).
 - [ ] Add more features into FromCandidatesByLogisticRegressionBIFinder.
 - [ ] Try to aggregate "result" activities with help of LLM.
 - [ ] Rename "*_aw_events_scraper" -> "*_aw_scraper" in "config.py".
-- [ ] Prepare script to run all event importers and get_activities.py for the specific date.
 - [ ] Try it for myself. Adjust "config.py and code if needed.
 - [ ] Prepare for distribution (decide how it would look like).
 - [ ] Add CI with tests coverage.
